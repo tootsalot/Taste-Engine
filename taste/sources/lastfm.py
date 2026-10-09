@@ -1,7 +1,8 @@
 """Last.fm sync: scrobbles from user.getrecenttracks.
 
-KNOWN LIMITATION: my Last.fm only gets scrobbles from Tidal on my desktop, not my
-phone. Every play event is stored with capture_scope='desktop_only'.
+Last.fm only knows about plays from devices that scrobble to it, which varies by
+person. Every play event is stored with the profile's capture scope setting
+(desktop_only, mobile_only, all_devices, or unknown) as it was when synced.
 
 Why windows instead of "fetch everything newer than my latest scrobble"?
 Last.fm returns newest first. If a first full sync dies on page 5 of 40, only the
@@ -22,7 +23,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from taste import core
+from taste import core, local_time
+from taste import settings as profile_settings
 from taste.config import LastfmSettings
 from taste.db import transaction, unix_to_utc, utc_now
 from taste.http_client import RETRYABLE_HTTP_STATUSES, ApiError, HttpClient
@@ -33,10 +35,10 @@ SOURCE = "lastfm"
 API_URL = "https://ws.audioscrobbler.com/2.0/"
 METHOD = "user.getrecenttracks"
 PAGE_LIMIT = 200
-# Last.fm accepts scrobbles timestamped up to 14 days in the past, so each
-# incremental run re-checks that far back. Dedupe makes the overlap harmless.
-LOOKBACK_SECONDS = 14 * 24 * 60 * 60
-CAPTURE_SCOPE = "desktop_only"
+# Last.fm accepts scrobbles timestamped up to 14 days in the past, so by default
+# each incremental run re-checks that far back (the lastfm_lookback_days setting).
+# Dedupe makes the overlap harmless.
+DAY_SECONDS = 24 * 60 * 60
 KEY_SEPARATOR = "\x1f"  # joins names into identity keys; can't appear in a title
 
 # Last.fm error codes that mean "try again later".
@@ -88,15 +90,19 @@ def sync(
     out: Callable[[str], None] = print,
     *,
     now: Callable[[], int] = lambda: int(time.time()),
-    lookback_seconds: int = LOOKBACK_SECONDS,
+    lookback_seconds: int | None = None,
     page_limit: int = PAGE_LIMIT,
 ) -> SyncResult:
+    """Sync scrobbles. `lookback_seconds` overrides the profile setting (for tests)."""
     run = SyncRun(conn, SOURCE, "incremental")
     events_loaded = 0
+    scope = profile_settings.get(conn, "lastfm_capture_scope")
+    if lookback_seconds is None:
+        lookback_seconds = profile_settings.get(conn, "lastfm_lookback_days") * DAY_SECONDS
     try:
         # Catch up on anything a crashed run left in staging but not in core.
         with transaction(conn):
-            events_loaded += load_core(conn)
+            events_loaded += load_core(conn, scope)
 
         open_windows = conn.execute(
             "SELECT * FROM sync_lastfm_windows WHERE status = 'open' ORDER BY window_id"
@@ -128,12 +134,13 @@ def sync(
         _fetch_window(conn, client, settings, run, window, out, page_limit)
 
         with transaction(conn):
-            events_loaded += load_core(conn)
+            events_loaded += load_core(conn, scope)
+            local_time.refresh(conn)
         run.finish("success")
         status, error = "success", None
         out(
             f"Last.fm: {run.rows_fetched} scrobbles fetched, {run.rows_inserted} new "
-            "(desktop listening only)"
+            f"(capture scope: {profile_settings.CAPTURE_SCOPES[scope].lower()})"
         )
     except ApiError as exc:
         status, error = "failed", str(exc)
@@ -294,8 +301,11 @@ def event_key(played_at_unix: int, artist_name: str, track_name: str) -> str:
     return f"{played_at_unix}|{artist_name}|{track_name}"
 
 
-def load_core(conn: sqlite3.Connection) -> int:
-    """Load staging scrobbles that aren't in core yet. Returns how many events were added."""
+def load_core(conn: sqlite3.Connection, capture_scope: str) -> int:
+    """Load staging scrobbles that aren't in core yet. Returns how many events were added.
+
+    New events get `capture_scope`. Events already in core keep the scope they had.
+    """
     rows = conn.execute(
         "SELECT s.* FROM stg_lastfm_scrobbles s WHERE NOT EXISTS ("
         "  SELECT 1 FROM core_behavior_events e WHERE e.source = ? AND e.source_event_key = "
@@ -379,7 +389,7 @@ def load_core(conn: sqlite3.Connection) -> int:
             occurred_at_unix=row["played_at_unix"],
             time_precision="second",
             time_basis="source_timestamp",
-            capture_scope=CAPTURE_SCOPE,
+            capture_scope=capture_scope,
             source_event_key=event_key(
                 row["played_at_unix"], row["artist_name"], row["track_name"]
             ),

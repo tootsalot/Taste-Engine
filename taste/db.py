@@ -13,26 +13,32 @@ SQL_DIR = Path(__file__).resolve().parent / "sql"
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    """Open the database, creating the file, tables, and views if needed.
+def connect(path: str | Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
+    """Open a profile database, creating the file, tables, settings, and views if needed.
 
     The connection runs in autocommit mode. Use `transaction()` to group writes.
     """
     path = Path(path)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None)
+    conn = sqlite3.connect(path, isolation_level=None, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Lets the web app read while a sync thread writes.
+    conn.execute("PRAGMA busy_timeout = 5000")
     apply_schema(conn)
     return conn
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:
+    # Local imports: both modules import this one.
+    from taste import local_time, settings
+
     conn.executescript((SQL_DIR / "schema.sql").read_text(encoding="utf-8"))
-    views = SQL_DIR / "views.sql"
-    if views.exists():
-        conn.executescript(views.read_text(encoding="utf-8"))
+    settings.ensure_defaults(conn)
+    settings.apply_source_notes(conn)
+    conn.executescript((SQL_DIR / "views.sql").read_text(encoding="utf-8"))
+    local_time.refresh(conn)
 
 
 @contextmanager

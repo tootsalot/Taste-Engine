@@ -7,7 +7,8 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 data/dumps/
-reports/*.csv
+reports/*
+!reports/.gitkeep
 *.dump.json
 
 # Virtual environments
@@ -28,3 +29,7 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local app: profile databases and fallback key files live under data/ (already ignored above)
+data/profiles/
+data/.secret_key

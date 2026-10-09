@@ -20,6 +20,14 @@ class Report:
         return self.view.removeprefix("rpt_") + ".csv"
 
 
+SCOPE_PHRASES = {
+    "desktop_only": "desktop only",
+    "mobile_only": "phone only",
+    "all_devices": "all devices",
+    "unknown": "devices unknown",
+    "mixed": "mixed capture scopes",
+}
+
 REPORTS = [
     Report("rpt_mal_critic_summary", "shows_scored"),
     Report("rpt_mal_score_vs_community", "score_diff, title"),
@@ -102,7 +110,12 @@ def summary_lines(conn: sqlite3.Connection) -> list[str]:
     span = conn.execute(
         "SELECT MIN(occurred_at_local), MAX(occurred_at_local) FROM rpt_lastfm_plays_local"
     ).fetchone()
-    lines.append(f"  {total:,} desktop plays from {span[0][:10]} to {span[1][:10]} (Phoenix time).")
+    scope = conn.execute("SELECT capture_scopes FROM rpt_lastfm_scope").fetchone()[0]
+    tz_name = conn.execute("SELECT timezone FROM rpt_settings").fetchone()[0]
+    lines.append(
+        f"  {total:,} plays ({SCOPE_PHRASES.get(scope, scope)}) from {span[0][:10]} "
+        f"to {span[1][:10]}, times in {tz_name}."
+    )
     artists = conn.execute(
         "SELECT artist, plays FROM rpt_lastfm_top_artists_all_time ORDER BY play_rank LIMIT 5"
     ).fetchall()

@@ -2,7 +2,7 @@ import csv
 
 import pytest
 
-from taste import core, reports
+from taste import core, local_time, reports, settings
 from taste.config import LastfmSettings, MalSettings
 from taste.db import transaction, unix_to_utc
 from taste.sources import lastfm, mal
@@ -24,6 +24,7 @@ def seed_lastfm(conn, make_client):
         return FakeResponse(200, load_fixture(name))
 
     client, _ = make_client(handler)
+    settings.set_value(conn, "lastfm_capture_scope", "desktop_only")
     lastfm.sync(
         conn,
         client,
@@ -96,6 +97,7 @@ def add_play(conn, unix, artist="Artist", track="Track"):
             capture_scope="desktop_only",
             source_event_key=f"{unix}|{artist}|{track}",
         )
+        local_time.refresh(conn)
 
 
 def test_score_vs_community_and_summary(conn, make_client):
@@ -212,7 +214,7 @@ def test_summary_handles_empty_database(conn):
     lines = reports.summary_lines(conn)
     text = "\n".join(lines)
     assert "No scored anime yet" in text
-    assert "Desktop listening only" in text
+    assert "Capture scope not set" in text
     assert "No scrobbles yet" in text
 
 

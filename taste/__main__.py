@@ -5,51 +5,16 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
-from taste import db, reports
-from taste.config import (
-    DEFAULT_DB_PATH,
-    REPORTS_DIR,
-    ConfigError,
-    lastfm_settings,
-    load_env,
-    mal_settings,
-)
-from taste.http_client import HttpClient
-from taste.sources import lastfm, mal
+from taste import db, profiles, reports, runner
+from taste.config import load_env, reports_dir
+from taste.profiles import DEFAULT_PROFILE, ProfileError
 
 
-def _sync_mal(conn: sqlite3.Connection) -> bool:
-    settings = mal_settings()
-    client = HttpClient(secrets=[settings.client_id])
-    return mal.sync(conn, client, settings).status == "success"
-
-
-def _sync_lastfm(conn: sqlite3.Connection) -> bool:
-    settings = lastfm_settings()
-    client = HttpClient(secrets=[settings.api_key])
-    return lastfm.sync(conn, client, settings).status == "success"
-
-
-SYNCS: dict[str, Callable[[sqlite3.Connection], bool]] = {
-    "mal": _sync_mal,
-    "lastfm": _sync_lastfm,
-}
-
-
-def cmd_sync(conn: sqlite3.Connection, source: str) -> int:
-    targets = list(SYNCS) if source == "all" else [source]
-    ok = True
-    for name in targets:
-        try:
-            ok = SYNCS[name](conn) and ok
-        except ConfigError as exc:
-            # In `sync all`, a missing setting for one source shouldn't stop the other.
-            print(f"{name}: {exc}", file=sys.stderr)
-            ok = False
-    return 0 if ok else 1
+def cmd_sync(conn: sqlite3.Connection, profile_id: str, source: str) -> int:
+    results = runner.sync_sources(conn, profile_id, source)
+    return 0 if all(results.values()) else 1
 
 
 def cmd_report(conn: sqlite3.Connection, out_dir: Path) -> int:
@@ -110,10 +75,23 @@ def status_lines(conn: sqlite3.Connection) -> list[str]:
     return lines
 
 
-def cmd_status(conn: sqlite3.Connection, db_path: Path) -> int:
-    print(f"Database: {db_path}")
+def cmd_status(conn: sqlite3.Connection, label: str) -> int:
+    print(f"Profile database: {label}")
     for line in status_lines(conn):
         print(line)
+    return 0
+
+
+def cmd_profiles(args: argparse.Namespace) -> int:
+    if args.action == "create":
+        profile = profiles.create(args.profile_id, args.name or "")
+        print(f"Created profile {profile.profile_id!r} at {profile.path}")
+        return 0
+    found = profiles.list_profiles()
+    if not found:
+        print("No profiles yet. Create one with `python -m taste profiles create <id>`.")
+    for p in found:
+        print(f"  {p.profile_id:<20} {p.display_name}")
     return 0
 
 
@@ -122,15 +100,39 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m taste", description="Personal taste engine: sync, report, status."
     )
     parser.add_argument(
-        "--db", type=Path, default=DEFAULT_DB_PATH, help=f"SQLite file (default {DEFAULT_DB_PATH})"
+        "--profile",
+        default=DEFAULT_PROFILE,
+        help=f"which profile to use (default {DEFAULT_PROFILE!r})",
+    )
+    parser.add_argument(
+        "--db", type=Path, help="use this SQLite file instead of the profile's database"
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sync = sub.add_parser("sync", help="pull data from a source")
     sync.add_argument("source", choices=["mal", "lastfm", "all"])
-    rep = sub.add_parser("report", help="print a summary and write reports/*.csv")
-    rep.add_argument("--out", type=Path, default=REPORTS_DIR, help="folder for CSV files")
+    rep = sub.add_parser("report", help="print a summary and write CSV files")
+    rep.add_argument("--out", type=Path, help="folder for CSV files (default reports/<profile>)")
     sub.add_parser("status", help="row counts and last sync per source")
+    prof = sub.add_parser("profiles", help="list or create profiles")
+    prof_sub = prof.add_subparsers(dest="action")
+    create = prof_sub.add_parser("create", help="create a profile")
+    create.add_argument("profile_id")
+    create.add_argument("--name", help="display name")
     return parser
+
+
+def _open(args: argparse.Namespace) -> tuple[sqlite3.Connection, str]:
+    if args.db:
+        return db.connect(args.db), str(args.db)
+    profiles.validate_id(args.profile)
+    if not profiles.exists(args.profile):
+        if args.profile != DEFAULT_PROFILE:
+            raise ProfileError(
+                f"No profile named {args.profile!r}. Create it with "
+                f"`python -m taste profiles create {args.profile}` or in the app."
+            )
+        profiles.create(DEFAULT_PROFILE)
+    return profiles.open_profile(args.profile), str(profiles.db_path(args.profile))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,13 +143,21 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     load_env()
-    conn = db.connect(args.db)
+    if profiles.migrate_legacy():
+        print("Moved data/taste.db to the 'default' profile.")
+    try:
+        if args.command == "profiles":
+            return cmd_profiles(args)
+        conn, label = _open(args)
+    except ProfileError as exc:
+        print(exc, file=sys.stderr)
+        return 2
     try:
         if args.command == "sync":
-            return cmd_sync(conn, args.source)
+            return cmd_sync(conn, args.profile, args.source)
         if args.command == "report":
-            return cmd_report(conn, args.out)
-        return cmd_status(conn, args.db)
+            return cmd_report(conn, args.out or reports_dir() / args.profile)
+        return cmd_status(conn, label)
     finally:
         conn.close()
 

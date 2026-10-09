@@ -15,17 +15,25 @@ CREATE TABLE IF NOT EXISTS core_sources (
     scope_note            TEXT
 );
 
+-- The Last.fm scope and note come from the profile's settings (taste/settings.py
+-- copies them in on every connect), so re-running this file never overwrites them.
 INSERT INTO core_sources (source, display_name, default_capture_scope, scope_note)
 VALUES
     ('mal', 'MyAnimeList', 'self_reported',
-     'Self-reported list. Scores, statuses, and dates are what I entered by hand.'),
-    ('lastfm', 'Last.fm', 'desktop_only',
-     'Desktop listening only. Last.fm only receives scrobbles from Tidal on my desktop, '
-     || 'not my phone, so this is a sample of my listening, not all of it.')
+     'Self-reported list. Scores, statuses, and dates were entered by hand.'),
+    ('lastfm', 'Last.fm', 'unknown', NULL)
 ON CONFLICT (source) DO UPDATE SET
-    display_name = excluded.display_name,
-    default_capture_scope = excluded.default_capture_scope,
-    scope_note = excluded.scope_note;
+    display_name = excluded.display_name;
+
+-- ---------------------------------------------------------------------------
+-- Profile settings
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    setting_key   TEXT NOT NULL PRIMARY KEY,
+    setting_value TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
 
 -- ---------------------------------------------------------------------------
 -- Bookkeeping
@@ -276,6 +284,21 @@ CREATE TABLE IF NOT EXISTS core_behavior_events (
 
 CREATE INDEX IF NOT EXISTS ix_core_behavior_events_time ON core_behavior_events (occurred_at_unix);
 CREATE INDEX IF NOT EXISTS ix_core_behavior_events_item ON core_behavior_events (item_id);
+
+-- Event times converted to the profile's time zone (taste/local_time.py). Rebuilt
+-- when the time zone setting changes. Only events with an exact time get a row.
+CREATE TABLE IF NOT EXISTS core_event_local_times (
+    event_id          INTEGER NOT NULL PRIMARY KEY
+                      REFERENCES core_behavior_events (event_id) ON DELETE CASCADE,
+    occurred_at_unix  INTEGER NOT NULL,
+    tz_name           TEXT NOT NULL,
+    local_ts          TEXT NOT NULL,
+    local_date        TEXT NOT NULL,
+    local_year        INTEGER NOT NULL,
+    local_month       TEXT NOT NULL,
+    local_hour        INTEGER NOT NULL,
+    local_weekday_num INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS core_curation (
     curation_id       INTEGER PRIMARY KEY,

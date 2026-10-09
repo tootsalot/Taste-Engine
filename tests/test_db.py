@@ -1,4 +1,4 @@
-from taste import db
+from taste import db, settings
 from taste.sync_log import INTERRUPTED_MESSAGE, SyncRun
 
 
@@ -10,12 +10,37 @@ def test_schema_is_idempotent(tmp_path):
     assert sources == ["lastfm", "mal"]
 
 
-def test_lastfm_scope_note_says_desktop_only(conn):
+def test_lastfm_scope_follows_profile_setting(conn):
+    row = conn.execute(
+        "SELECT default_capture_scope, scope_note FROM core_sources WHERE source = 'lastfm'"
+    ).fetchone()
+    assert row["default_capture_scope"] == "unknown"
+    assert "Capture scope not set" in row["scope_note"]
+
+    settings.set_value(conn, "lastfm_capture_scope", "desktop_only")
     row = conn.execute(
         "SELECT default_capture_scope, scope_note FROM core_sources WHERE source = 'lastfm'"
     ).fetchone()
     assert row["default_capture_scope"] == "desktop_only"
     assert "Desktop listening only" in row["scope_note"]
+
+    settings.set_value(conn, "lastfm_scope_note", "My own note.")
+    assert (
+        conn.execute("SELECT scope_note FROM core_sources WHERE source = 'lastfm'").fetchone()[0]
+        == "My own note."
+    )
+
+
+def test_scope_note_survives_reconnect(tmp_path):
+    path = tmp_path / "taste.db"
+    conn = db.connect(path)
+    settings.set_value(conn, "lastfm_scope_note", "Custom.")
+    conn.close()
+    conn = db.connect(path)  # schema.sql re-runs and must not overwrite the note
+    assert (
+        conn.execute("SELECT scope_note FROM core_sources WHERE source = 'lastfm'").fetchone()[0]
+        == "Custom."
+    )
 
 
 def test_stale_running_row_is_marked_failed(conn):

@@ -64,6 +64,42 @@ class SleepRecorder:
 
 
 @pytest.fixture(autouse=True)
+def isolate_local_state(monkeypatch, tmp_path):
+    """Keep tests away from real data, real keys, and the real OS keyring.
+
+    - Profiles and reports go to a temp folder, never the project's data/.
+    - The OS keyring is replaced with "none", so keys use the file fallback in that
+      temp folder. Tests that need a keyring pass a FakeKeyring explicitly.
+    - Real credentials in the environment are hidden.
+    """
+    monkeypatch.setenv("TASTE_DATA_DIR", str(tmp_path / "taste-data"))
+    monkeypatch.setattr("taste.secrets_store._default_backend", lambda: None)
+    for name in ("MAL_CLIENT_ID", "MAL_USERNAME", "LASTFM_API_KEY", "LASTFM_USERNAME"):
+        monkeypatch.delenv(name, raising=False)
+    # A real .env on a dev machine must never feed real keys into tests.
+    monkeypatch.setattr("taste.config.load_env", lambda: None)
+    monkeypatch.setattr("taste.__main__.load_env", lambda: None)
+
+
+class FakeKeyring:
+    """In-memory stand-in for an OS credential store."""
+
+    def __init__(self) -> None:
+        self.saved: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service, entry):
+        return self.saved.get((service, entry))
+
+    def set_password(self, service, entry, value):
+        self.saved[(service, entry)] = value
+
+    def delete_password(self, service, entry):
+        if (service, entry) not in self.saved:
+            raise KeyError(entry)
+        del self.saved[(service, entry)]
+
+
+@pytest.fixture(autouse=True)
 def block_real_http(monkeypatch):
     """Fail loudly if any code path tries a real HTTP request."""
 

@@ -1,4 +1,5 @@
 from taste import __main__ as cli
+from taste import profiles, settings
 from taste.db import connect
 from tests.test_reports import seed_lastfm, seed_mal
 
@@ -29,11 +30,38 @@ def test_status_on_new_database(tmp_path, capsys):
     assert "never synced" in capsys.readouterr().out
 
 
-def test_sync_reports_missing_settings(tmp_path, monkeypatch, capsys):
-    for name in ("MAL_CLIENT_ID", "MAL_USERNAME", "LASTFM_API_KEY", "LASTFM_USERNAME"):
-        monkeypatch.setenv(name, "")
+def test_sync_reports_missing_settings(monkeypatch, capsys):
     monkeypatch.setattr(cli, "load_env", lambda: None)
-    assert cli.main(["--db", str(tmp_path / "x.db"), "sync", "all"]) == 1
-    err = capsys.readouterr().err
-    assert "MAL_CLIENT_ID" in err
-    assert "LASTFM_API_KEY" in err
+    assert cli.main(["sync", "all"]) == 1
+    out = capsys.readouterr().out
+    assert "MyAnimeList needs: MyAnimeList client ID, username" in out
+    assert "Last.fm needs: Last.fm API key, username" in out
+
+
+def test_default_profile_created_on_first_use(capsys):
+    assert cli.main(["status"]) == 0
+    assert profiles.exists("default")
+
+
+def test_unknown_profile_is_an_error(capsys):
+    assert cli.main(["--profile", "nobody", "status"]) == 2
+    assert "No profile named 'nobody'" in capsys.readouterr().err
+
+
+def test_profiles_create_and_list(capsys):
+    assert cli.main(["profiles", "create", "friend", "--name", "A Friend"]) == 0
+    assert cli.main(["profiles"]) == 0
+    assert "A Friend" in capsys.readouterr().out
+    assert cli.main(["--profile", "Bad/Name", "status"]) == 2
+
+
+def test_legacy_database_is_migrated(capsys):
+    legacy = profiles.legacy_db()
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    connect(legacy).close()
+    assert cli.main(["status"]) == 0
+    assert "Moved data/taste.db" in capsys.readouterr().out
+    assert not legacy.exists()
+    conn = profiles.open_profile("default")
+    assert settings.get(conn, "lastfm_capture_scope") == "desktop_only"
+    conn.close()

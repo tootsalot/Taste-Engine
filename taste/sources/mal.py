@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlparse
 
-from taste import core
+from taste import core, local_time
+from taste import settings as profile_settings
 from taste.config import MalSettings
 from taste.db import iso_to_utc, transaction, utc_now, utc_to_unix
 from taste.http_client import (
@@ -106,6 +107,7 @@ def sync(
         pages = _fetch_all_pages(conn, client, settings, run, out)
         with transaction(conn):
             removed = _load(conn, run, pages)
+            local_time.refresh(conn)
             run.save()
         run.finish("success")
         out(
@@ -147,7 +149,10 @@ def _fetch_all_pages(
     out: Callable[[str], None],
 ) -> list[tuple[int, dict[str, Any]]]:
     url: str | None = f"{API_BASE}/users/{quote(settings.username)}/animelist"
-    params: dict[str, Any] | None = {"limit": PAGE_LIMIT, "nsfw": "true", "fields": FIELDS}
+    params: dict[str, Any] | None = {"limit": PAGE_LIMIT, "fields": FIELDS}
+    if profile_settings.get(conn, "include_nsfw"):
+        # Without this, MAL silently leaves NSFW entries out of the list.
+        params["nsfw"] = "true"
     headers = {"X-MAL-CLIENT-ID": settings.client_id}
     pages: list[tuple[int, dict[str, Any]]] = []
     page_number = 1

@@ -1,5 +1,6 @@
 import math
 
+from taste import settings
 from taste.config import LastfmSettings
 from taste.sources import lastfm
 from tests.conftest import FAKE_LASTFM_KEY, FakeResponse, load_fixture
@@ -139,7 +140,7 @@ def test_incremental_sync_only_adds_newer_scrobbles(conn, make_client):
 
     assert result.mode == "incremental"
     first = transport.calls[0]["params"]
-    assert first["from"] == NOW_1 - lastfm.LOOKBACK_SECONDS
+    assert first["from"] == NOW_1 - 14 * lastfm.DAY_SECONDS  # default lookback setting
     assert first["to"] == NOW_2
     assert result.rows_inserted == 2  # Neon Rain again (new time) and Undertow
     assert conn.execute("SELECT COUNT(*) FROM stg_lastfm_scrobbles").fetchone()[0] == 7
@@ -242,6 +243,7 @@ def test_raw_pages_never_store_the_api_key(conn, make_client):
 
 
 def test_core_tracks_artists_albums_and_scope(conn, make_client):
+    settings.set_value(conn, "lastfm_capture_scope", "desktop_only")
     client, _ = make_client(recorded_pages_handler)
     run_sync(conn, client)
 
@@ -273,3 +275,29 @@ def test_core_tracks_artists_albums_and_scope(conn, make_client):
         "SELECT DISTINCT capture_scope, time_basis, event_type FROM core_behavior_events"
     ).fetchall()
     assert [tuple(r) for r in scopes] == [("desktop_only", "source_timestamp", "play")]
+
+
+def test_capture_scope_applies_to_new_scrobbles_only(conn, make_client):
+    server = FakeLastfm("lastfm_recent_page1.json", "lastfm_recent_page2.json")
+    client, _ = make_client(server)
+    settings.set_value(conn, "lastfm_capture_scope", "desktop_only")
+    run_sync(conn, client, now=NOW_1)
+    settings.set_value(conn, "lastfm_capture_scope", "all_devices")
+    server.add("lastfm_recent_newer.json")
+    run_sync(conn, client, now=NOW_2)
+    scopes = conn.execute(
+        "SELECT capture_scope, COUNT(*) FROM core_behavior_events GROUP BY capture_scope "
+        "ORDER BY capture_scope"
+    ).fetchall()
+    assert [tuple(r) for r in scopes] == [("all_devices", 2), ("desktop_only", 5)]
+    assert conn.execute("SELECT capture_scopes FROM rpt_lastfm_scope").fetchone()[0] == "mixed"
+
+
+def test_lookback_days_setting_is_used(conn, make_client):
+    server = FakeLastfm("lastfm_recent_page1.json")
+    client, transport = make_client(server)
+    run_sync(conn, client, now=NOW_1)
+    settings.set_value(conn, "lastfm_lookback_days", 3)
+    transport.calls.clear()
+    run_sync(conn, client, now=NOW_2)
+    assert transport.calls[0]["params"]["from"] == NOW_1 - 3 * lastfm.DAY_SECONDS
