@@ -225,6 +225,35 @@ SIMILAR = {
 TOP_ALBUMS = {"Example New X": ("X Marks", "newx"), "Example New Y": ("Y Not", None)}
 
 
+DEEZER_PHOTO = "https://cdn-images.dzcdn.net/images/artist/{}/250x250-000000-80-0-0.jpg"
+# What Deezer returns for an artist with no photo: the same URL with an empty hash.
+DEEZER_NO_PHOTO = "https://cdn-images.dzcdn.net/images/artist//250x250-000000-80-0-0.jpg"
+
+
+class FakeDeezer:
+    """Deezer's artist search. `artists` maps a query to [(name, photo hash or None)]."""
+
+    def __init__(self, artists=None, error=None):
+        self.artists = artists or {}
+        self.error = error
+        self.queries: list[str] = []
+
+    def __call__(self, url: str, params: dict[str, Any]) -> FakeResponse:
+        self.queries.append(params.get("q"))
+        if self.error:
+            return FakeResponse(200, {"error": self.error})
+        found = [
+            {
+                "id": i,
+                "name": name,
+                "type": "artist",
+                "picture_medium": DEEZER_PHOTO.format(photo) if photo else DEEZER_NO_PHOTO,
+            }
+            for i, (name, photo) in enumerate(self.artists.get(params.get("q"), []), 1)
+        ]
+        return FakeResponse(200, {"data": found, "total": len(found)})
+
+
 class FakeLastfmApi:
     """artist.getsimilar, artist.gettoptags, artist.gettopalbums, and scrobbles."""
 

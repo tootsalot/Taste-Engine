@@ -71,6 +71,7 @@ class _Job(QRunnable):
 
 class ArtLoader(QObject):
     loaded = Signal(str)  # cache key, once its pixmap is ready
+    failed_key = Signal(str)  # cache key of a picture that can't be had
     _finished = Signal(str, QImage)
 
     def __init__(self, cache: images.ImageCache | None = None) -> None:
@@ -100,6 +101,7 @@ class ArtLoader(QObject):
         self.pending.discard(key)
         if image.isNull():
             self.failed.add(key)
+            self.failed_key.emit(key)
             return
         QPixmapCache.insert(key, QPixmap.fromImage(image))
         self.loaded.emit(key)
@@ -131,25 +133,45 @@ class ArtTile(QWidget):
         self.radius = radius
         self.accent = QColor(accent)
         self.url: str | None = None
+        self.fallback: str | None = None
         self.letter = ""
         self._pixmap: QPixmap | None = None
         self.setFixedSize(size)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         loader.loaded.connect(self._on_loaded)
+        loader.failed_key.connect(self._on_failed)
 
-    def set_art(self, url: str | None, title: str = "") -> None:
+    def set_art(self, url: str | None, title: str = "", fallback: str | None = None) -> None:
+        """`fallback` is tried when `url` can't be had (missing, refused, too big)."""
         self.url = url
+        self.fallback = fallback
         self.letter = (title.strip()[:1] or "?").upper()
         self.setToolTip(title)
         self._pixmap = self.loader.pixmap(url, self.art_size)
+        if self._pixmap is None and not self._waiting():
+            self._use_fallback()
         self.update()
 
     def has_picture(self) -> bool:
         return self._pixmap is not None
 
+    def _waiting(self) -> bool:
+        """True while the current picture is still downloading."""
+        return bool(self.url) and cache_key(self.url, self.art_size) in self.loader.pending
+
+    def _use_fallback(self) -> None:
+        if self.fallback and self.fallback != self.url:
+            self.url, self.fallback = self.fallback, None
+            self._pixmap = self.loader.pixmap(self.url, self.art_size)
+
     def _on_loaded(self, key: str) -> None:
         if self.url and key == cache_key(self.url, self.art_size):
             self._pixmap = self.loader.pixmap(self.url, self.art_size)
+            self.update()
+
+    def _on_failed(self, key: str) -> None:
+        if self.url and key == cache_key(self.url, self.art_size):
+            self._use_fallback()
             self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)

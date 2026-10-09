@@ -21,7 +21,9 @@ INSERT INTO core_sources (source, display_name, default_capture_scope, scope_not
 VALUES
     ('mal', 'MyAnimeList', 'self_reported',
      'Self-reported list. Scores, statuses, and dates were entered by hand.'),
-    ('lastfm', 'Last.fm', 'unknown', NULL)
+    ('lastfm', 'Last.fm', 'unknown', NULL),
+    ('deezer', 'Deezer', 'not_applicable',
+     'Artist photos only, for suggested artists Last.fm has no picture for.')
 ON CONFLICT (source) DO UPDATE SET
     display_name = excluded.display_name;
 
@@ -375,6 +377,16 @@ CREATE TABLE IF NOT EXISTS stg_lastfm_artist_top_album (
     album_name TEXT NOT NULL,
     image_url  TEXT,
     fetched_at TEXT NOT NULL
+);
+
+-- Deezer artist search, only for photos. picture_url NULL means no exact match (or no
+-- photo), cached like a hit so it isn't asked again for 30 days.
+CREATE TABLE IF NOT EXISTS stg_deezer_artists (
+    artist_key  TEXT NOT NULL PRIMARY KEY,
+    deezer_id   INTEGER,
+    name        TEXT NOT NULL DEFAULT '',
+    picture_url TEXT,
+    fetched_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS core_item_images (

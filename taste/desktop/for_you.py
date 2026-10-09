@@ -106,7 +106,7 @@ class RecCard(Card):
         row = QHBoxLayout()
         row.setSpacing(14)
         self.art = ArtTile(ctx.art, POSTER if anime else COVER, accent=accent)
-        self.art.set_art(rec.image_url, rec.title)
+        self.art.set_art(rec.image_url, rec.title, fallback=rec.facts.get("fallback_image"))
         row.addWidget(self.art, 0, Qt.AlignmentFlag.AlignTop)
 
         text = QVBoxLayout()

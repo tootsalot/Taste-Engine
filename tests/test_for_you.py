@@ -13,7 +13,14 @@ from taste.recommend import Rec
 from taste.secrets_store import SecretStore
 from tests.conftest import FakeKeyring, FakeTransport
 from tests.fake_images import FakeImageSession, image_bytes
-from tests.fake_recs import LASTFM_CDN, NOW, FakeLastfmApi, FakeMal, listening_history
+from tests.fake_recs import (
+    LASTFM_CDN,
+    NOW,
+    FakeDeezer,
+    FakeLastfmApi,
+    FakeMal,
+    listening_history,
+)
 from tests.test_desktop import set_up_profile
 from tests.test_enrich import NOW_DT
 from tests.test_lastfm_sync import FakeLastfm
@@ -36,8 +43,11 @@ def window(qtbot, images):
     recent = FakeLastfm()
     recent.scrobbles = listening_history()
     music = FakeLastfmApi(recent)
+    photos = FakeDeezer()  # knows nobody: suggested artists keep their placeholder
 
     def handler(url, params):
+        if "deezer" in url:
+            return photos(url, params)
         return mal(url, params) if "myanimelist" in url else music(url, params)
 
     def client_factory(secrets):

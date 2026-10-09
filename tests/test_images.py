@@ -255,6 +255,20 @@ def test_missing_picture_keeps_the_placeholder_and_is_not_retried(qtbot, cache, 
     assert session.urls() == [url]
 
 
+def test_a_tile_falls_back_when_its_picture_cant_be_had(qtbot, cache, session):
+    # Some Last.fm covers are animated GIFs over the size cap; the artist photo stands in.
+    loader = ArtLoader(cache)
+    tile = ArtTile(loader, QSize(60, 60))
+    qtbot.addWidget(tile)
+    missing = "https://lastfm-img.freetls.fastly.net/i/u/300x300/missing.png"
+    photo = "https://cdn-images.dzcdn.net/images/artist/abc/250x250-000000-80-0-0.jpg"
+    session.add(photo, image_bytes(fmt="JPEG"), "image/jpeg")
+    tile.set_art(missing, "Example Artist", fallback=photo)
+    qtbot.waitUntil(tile.has_picture, timeout=5000)
+    assert session.urls() == [missing, photo]
+    loader.shutdown()
+
+
 def test_slow_downloads_never_block_the_ui_thread(qtbot, cache, session):
     session.gate = threading.Event()  # every download hangs until released
     loader = ArtLoader(cache)

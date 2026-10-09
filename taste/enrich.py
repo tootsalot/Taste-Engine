@@ -5,6 +5,7 @@ run each refresh is a few dozen calls:
 - MAL show details (community recommendations, related shows, genres, studios)
   for shows I scored above my own average, then for the strongest candidates.
 - Last.fm similar artists and top tags for the artists I play most.
+- Deezer photos for suggested artists that still have no picture.
 
 Every response is stored in the raw layer like any sync, and each item commits
 on its own, so an interrupted run picks up where it stopped.
@@ -23,7 +24,7 @@ from taste.config import LastfmSettings, MalSettings
 from taste.db import TIMESTAMP_FORMAT, transaction, utc_now
 from taste.http_client import RETRYABLE_HTTP_STATUSES, ApiError, HttpClient
 from taste.raw import store_page
-from taste.sources import lastfm, mal
+from taste.sources import deezer, lastfm, mal
 from taste.sync_log import SyncRun
 
 REFRESH_DAYS = 30
@@ -486,6 +487,73 @@ def fetch_artist_covers(
                         _stamp(now),
                     ),
                 )
+            count += 1
+        run.finish("success")
+    except ApiError as exc:
+        run.finish("failed", str(exc))
+    except Exception as exc:
+        run.finish("failed", client.redact(f"{type(exc).__name__}: {exc}"))
+        raise
+    return count
+
+
+def fetch_deezer_pictures(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    names: Iterable[str],
+    now: datetime | None = None,
+) -> int:
+    """Deezer photos for artists with no Last.fm picture. Cached 30 days, misses too.
+
+    Returns how many artists were looked up. An error (a quota, an outage) stops the
+    run quietly: whatever was stored stays, and the rest is tried next time.
+    """
+    now = now or datetime.now(timezone.utc)
+    fresh = {
+        r[0]
+        for r in conn.execute(
+            "SELECT artist_key FROM stg_deezer_artists WHERE fetched_at >= ?", (_cutoff(now),)
+        )
+    }
+    todo = [n for n in dict.fromkeys(names) if artist_key(n) not in fresh]
+    if not todo:
+        return 0
+    run = SyncRun(conn, deezer.SOURCE, "enrich")
+    count = 0
+    try:
+        for name in todo:
+            params = {"q": name, "limit": 5}
+            with transaction(conn):
+                response = client.get_json(
+                    deezer.SEARCH_URL, params=params, checker=deezer.check_error
+                )
+                store_page(
+                    conn,
+                    sync_run_id=run.run_id,
+                    source=deezer.SOURCE,
+                    endpoint="search/artist",
+                    params=params,
+                    page_number=None,
+                    http_status=response.status,
+                    payload=response.data,
+                )
+                run.pages_fetched += 1
+                match = deezer.best_match(name, response.data)
+                conn.execute(
+                    "INSERT INTO stg_deezer_artists (artist_key, deezer_id, name, picture_url, "
+                    "fetched_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (artist_key) DO UPDATE SET "
+                    "deezer_id = excluded.deezer_id, name = excluded.name, "
+                    "picture_url = excluded.picture_url, fetched_at = excluded.fetched_at",
+                    (
+                        artist_key(name),
+                        match.get("id") if match else None,
+                        (match.get("name") or "") if match else "",
+                        deezer.picture_url(match),
+                        _stamp(now),
+                    ),
+                )
+                run.rows_fetched += 1
+                run.save()
             count += 1
         run.finish("success")
     except ApiError as exc:

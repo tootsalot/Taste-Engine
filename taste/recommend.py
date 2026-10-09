@@ -387,7 +387,8 @@ def lastfm_artist_url(name: str) -> str:
 
 
 def _artist_cover(conn: sqlite3.Connection, name: str) -> str | None:
-    """Cover of the artist's most-played album or EP (decision Q1)."""
+    """The artist's picture: their most-played album's cover, else their top album's
+    cover from Last.fm, else a Deezer photo. Last.fm itself has no artist photos."""
     row = conn.execute(
         "SELECT img.url FROM core_creators c "
         "JOIN core_item_creators ic ON ic.creator_id = c.creator_id AND ic.role = 'artist' "
@@ -400,11 +401,29 @@ def _artist_cover(conn: sqlite3.Connection, name: str) -> str | None:
     ).fetchone()
     if row:
         return row[0]
+    key = enrich.artist_key(name)
     row = conn.execute(
-        "SELECT image_url FROM stg_lastfm_artist_top_album WHERE artist_key = ?",
+        "SELECT image_url FROM stg_lastfm_artist_top_album WHERE artist_key = ?", (key,)
+    ).fetchone()
+    if row and row[0]:
+        return row[0]
+    return _deezer_photo(conn, name)
+
+
+def _deezer_photo(conn: sqlite3.Connection, name: str) -> str | None:
+    row = conn.execute(
+        "SELECT picture_url FROM stg_deezer_artists WHERE artist_key = ?",
         (enrich.artist_key(name),),
     ).fetchone()
     return row[0] if row else None
+
+
+def _with_fallback(conn: sqlite3.Connection, rec: Rec) -> Rec:
+    """Keep the artist's Deezer photo as a backup for a cover that can't be downloaded."""
+    photo = _deezer_photo(conn, rec.title)
+    if rec.image_url and photo and photo != rec.image_url:
+        rec.facts["fallback_image"] = photo
+    return rec
 
 
 def _close_to(similar: list[tuple[str, float]]) -> str:
@@ -515,7 +534,10 @@ def music_recommendations(
         )
         if len(rediscover) >= cfg["rec_count"]:
             break
-    return discover, rediscover
+    return (
+        [_with_fallback(conn, r) for r in discover],
+        [_with_fallback(conn, r) for r in rediscover],
+    )
 
 
 # ---------------------------------------------------------------------------

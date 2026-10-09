@@ -28,9 +28,14 @@ import requests
 from taste.config import data_dir
 
 # Real Last.fm responses put covers on lastfm-img.freetls.fastly.net; the other
-# Last.fm host is kept in case it serves them too.
+# Last.fm host is kept in case it serves them too. Deezer is the artist photo fallback.
 ALLOWED_HOSTS = frozenset(
-    {"cdn.myanimelist.net", "lastfm-img.freetls.fastly.net", "lastfm.freetls.fastly.net"}
+    {
+        "cdn.myanimelist.net",
+        "lastfm-img.freetls.fastly.net",
+        "lastfm.freetls.fastly.net",
+        "cdn-images.dzcdn.net",
+    }
 )
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 REDIRECTS = {301, 302, 303, 307, 308}

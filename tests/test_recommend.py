@@ -30,7 +30,9 @@ from taste.sources import lastfm
 from tests.conftest import FakeKeyring, FakeTransport
 from tests.fake_recs import (
     DAY,
+    DEEZER_PHOTO,
     NOW,
+    FakeDeezer,
     FakeLastfmApi,
     FakeMal,
     anime,
@@ -392,8 +394,16 @@ def test_refresh_recommendations_end_to_end(conn):
     recent = FakeLastfm()
     recent.scrobbles = listening_history()
     music = FakeLastfmApi(recent)
+    photos = FakeDeezer(
+        {
+            "Example New Y": [("Example New Y", "newy")],
+            "Example New X": [("Example New X", "newx")],
+        }
+    )
 
     def handler(url, params):
+        if "deezer" in url:
+            return photos(url, params)
         return mal_fake(url, params) if "myanimelist" in url else music(url, params)
 
     def client_factory(secrets):
@@ -421,6 +431,13 @@ def test_refresh_recommendations_end_to_end(conn):
     discover, _, _ = recommend.latest(conn, "music_discover")
     covers = {r.title: r.image_url for r in discover}
     assert covers["Example New X"].endswith("/newx.png")
+    # Y's top album has no cover, so Deezer fills in.
+    assert covers["Example New Y"] == DEEZER_PHOTO.format("newy")
+    # X keeps its album cover, with the Deezer photo as a backup in case the cover
+    # can't be downloaded (some are animated GIFs over the size cap).
+    x = next(r for r in discover if r.title == "Example New X")
+    assert x.facts["fallback_image"] == DEEZER_PHOTO.format("newx")
+    assert "fallback_image" not in next(r for r in discover if r.title == "Example New Y").facts
 
     # Without keys it recomputes from the cache and says what it skipped.
     messages.clear()

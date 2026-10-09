@@ -160,6 +160,15 @@ def refresh_recommendations(
             conn, client_factory([lastfm_cfg.api_key]), lastfm_cfg, missing, now
         ):
             counts = compute("music")
+    if fetch:
+        # A Deezer photo for each suggested artist (no key; exact name only): the picture
+        # for artists Last.fm has none for, and a backup for covers that can't be
+        # downloaded. Cached 30 days, so usually nothing is fetched here.
+        discover, _, _ = recommend.latest(conn, "music_discover")
+        rediscover, _, _ = recommend.latest(conn, "music_rediscover")
+        names = [r.title for r in discover + rediscover]
+        if names and enrich.fetch_deezer_pictures(conn, client_factory([]), names, now):
+            counts = compute("music")
     out(
         f"Recommendations ready: {counts['anime']} anime, {counts['music_discover']} new "
         f"artists, {counts['music_rediscover']} to rediscover."
