@@ -54,10 +54,36 @@ def listen_for_others(name: str, on_show: Callable[[], None]) -> QLocalServer:
     return server
 
 
+def smoke_test(app: QApplication, out_path: str) -> int:
+    """Build the real window and report what loaded. Used to check packaged builds."""
+    from PySide6.QtGui import QFontDatabase
+
+    from taste.desktop import theme
+    from taste.desktop.main_window import MainWindow
+
+    theme.apply(app)
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+    families = QFontDatabase.families()
+    report = {
+        "version": __version__,
+        "title": window.windowTitle(),
+        "syne": "Syne" in families,
+        "manrope": "Manrope" in families,
+        "icon": not window.windowIcon().isNull(),
+        "pages": window.stack.count(),
+    }
+    with open(out_path, "w", encoding="utf-8") as handle:
+        handle.writelines(f"{key}={value}\n" for key, value in report.items())
+    window.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     if "--version" in argv[1:]:
-        print(f"taste-engine {__version__}")
+        print(f"taste-engine {__version__}")  # no-op in the windowed exe, which has no console
         return 0
 
     from taste import profiles
@@ -68,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("Taste Engine")
     app.setApplicationVersion(__version__)
+    if "--smoke-test" in argv[1:]:
+        return smoke_test(app, argv[argv.index("--smoke-test") + 1])
     name = instance_name()
     if notify_running_instance(name):
         return 0

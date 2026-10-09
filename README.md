@@ -1,6 +1,6 @@
 # Taste Engine
 
-A local app that pulls my anime list (MyAnimeList) and listening history (Last.fm) into one SQLite database and shows how my taste compares to everyone else's. Everything runs and stays on my own computer.
+A desktop app that pulls my anime list (MyAnimeList) and listening history (Last.fm) into one SQLite database and shows how my taste compares to everyone else's. Everything runs and stays on my own computer.
 
 ```mermaid
 flowchart LR
@@ -9,12 +9,12 @@ flowchart LR
 
 ## Run it
 
-**The desktop app is being built** (see [docs/PLAN_DESKTOP.md](docs/PLAN_DESKTOP.md)). Until it lands, use the command line below.
+**Windows:** download the latest zip from [Releases](../../releases), unzip it, and double-click `taste-engine.exe`. Windows warns the first time because the exe isn't signed: click **More info**, then **Run anyway**.
 
 **From source** (Python 3.10+):
 ```
 pip install -r requirements.txt
-python -m taste profiles create me
+python -m taste.desktop
 ```
 
 ## Use it

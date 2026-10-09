@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -83,11 +85,34 @@ def build() -> Path:
 
 
 def smoke_test(exe: Path, expected_version: str) -> None:
-    """Run the built app for real and check it reports the right version."""
-    out = subprocess.run([str(exe), "--version"], capture_output=True, text=True, check=True)
-    if expected_version not in out.stdout:
-        sys.exit(f"--version printed {out.stdout!r}, expected {expected_version}")
-    print(f"smoke test: --version OK ({out.stdout.strip()})")
+    """Start the built app for real (offscreen) and check what it loaded."""
+    with tempfile.TemporaryDirectory() as tmp:
+        report_path = Path(tmp) / "smoke.txt"
+        env = {
+            **os.environ,
+            "QT_QPA_PLATFORM": "offscreen",  # no screen needed, even on CI
+            "TASTE_DATA_DIR": str(Path(tmp) / "data"),  # never touch real data
+        }
+        subprocess.run(
+            [str(exe), "--smoke-test", str(report_path)], env=env, check=True, timeout=120
+        )
+        if not report_path.is_file():
+            sys.exit("The built app ran but wrote no smoke test report")
+        report = dict(
+            line.split("=", 1) for line in report_path.read_text(encoding="utf-8").splitlines()
+        )
+    expected = {
+        "version": expected_version,
+        "title": "Taste Engine",
+        "syne": "True",
+        "manrope": "True",
+        "icon": "True",
+        "pages": "4",
+    }
+    problems = {k: (report.get(k), v) for k, v in expected.items() if report.get(k) != v}
+    if problems:
+        sys.exit(f"Smoke test failed (got, expected): {problems}")
+    print(f"smoke test: window built, fonts and icon loaded, version {expected_version}")
 
 
 def package(exe: Path, ver: str) -> Path:

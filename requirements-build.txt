@@ -2,3 +2,5 @@
 -r requirements.txt
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
+# Only for regenerating packaging/taste-engine.ico (scripts/make_icon.py)
+pillow==12.3.0

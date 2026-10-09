@@ -4,7 +4,9 @@ Each release's notes on GitHub come from its section here.
 
 ## [0.2.0]
 
-First packaged release (in progress): a desktop app with profiles.
+First packaged release: a desktop app with profiles.
+
+- A real Windows app (`taste-engine.exe`) with the After Hours look: dark, lilac and coral
 
 - Profiles, each with its own API keys, settings, and data
 - API keys entered in the app and kept in Windows Credential Manager
