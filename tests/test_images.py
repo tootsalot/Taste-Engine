@@ -11,7 +11,7 @@ from PySide6.QtGui import QPixmapCache
 from taste import images
 from taste.config import data_dir
 from taste.desktop.art import ArtLoader, ArtTile, decode
-from tests.fake_images import FakeImageSession, image_bytes
+from tests.fake_images import GIF_BYTES, FakeImageSession, image_bytes
 
 POSTER = "https://cdn.myanimelist.net/images/anime/1/101.jpg"
 WEBP = "https://cdn.myanimelist.net/images/anime/2/202.webp"
@@ -104,7 +104,7 @@ def test_default_location_is_in_the_data_folder():
     "status, content_type, body",
     [
         (404, "text/html", b"not found"),
-        (302, "image/jpeg", b""),  # a redirect is never followed
+        (302, "image/jpeg", b""),  # a redirect with nowhere to go
         (200, "text/html", b"<html>"),
         (200, "image/png", b""),
     ],
@@ -118,6 +118,50 @@ def test_bad_responses_are_not_cached(cache, session, status, content_type, body
     cache.clear_failures()
     session.add(POSTER, image_bytes(), "image/jpeg")
     assert cache.get(POSTER) is not None
+
+
+GIF_COVER = "https://lastfm-img.freetls.fastly.net/i/u/300x300/0123456789abcdef.gif"
+PNG_COVER = "https://lastfm-img.freetls.fastly.net/i/u/300x300/0123456789abcdef.png"
+
+
+def test_a_redirect_on_the_same_host_is_followed_once(cache, session):
+    # Last.fm answers some .png covers with a 301 to the same picture as .gif.
+    session.redirect(PNG_COVER, GIF_COVER)
+    session.add(GIF_COVER, GIF_BYTES, "image/gif")
+    path = cache.get(PNG_COVER)
+    assert path is not None and path == cache.path_for(PNG_COVER)  # found by the URL asked for
+    assert session.urls() == [PNG_COVER, GIF_COVER]
+    assert all(not c["allow_redirects"] for c in session.calls)  # never left to requests
+    image = decode(str(path), QSize(30, 30))  # GIF bytes in a .png-named file still decode
+    assert not image.isNull()
+
+
+def test_relative_redirects_resolve_on_the_same_host(cache, session):
+    session.redirect(PNG_COVER, "/i/u/300x300/0123456789abcdef.gif")
+    session.add(GIF_COVER, GIF_BYTES, "image/gif")
+    assert cache.get(PNG_COVER) is not None
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://example.com/x.gif",  # another host
+        "https://cdn.myanimelist.net/images/x.jpg",  # allowed, but not the same host
+        "http://lastfm-img.freetls.fastly.net/i/u/300x300/0123456789abcdef.gif",  # not https
+    ],
+)
+def test_redirects_off_the_host_are_refused(cache, session, location):
+    session.redirect(PNG_COVER, location)
+    session.add(location, image_bytes(), "image/png")
+    assert cache.get(PNG_COVER) is None
+    assert session.urls() == [PNG_COVER]
+
+
+def test_only_one_redirect_is_followed(cache, session):
+    session.redirect(PNG_COVER, GIF_COVER)
+    session.redirect(GIF_COVER, PNG_COVER)  # a loop
+    assert cache.get(PNG_COVER) is None
+    assert session.urls() == [PNG_COVER, GIF_COVER]
 
 
 def test_oversized_images_are_refused(cache, session, monkeypatch):

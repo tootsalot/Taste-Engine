@@ -21,7 +21,7 @@ import os
 import threading
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
@@ -33,6 +33,7 @@ ALLOWED_HOSTS = frozenset(
     {"cdn.myanimelist.net", "lastfm-img.freetls.fastly.net", "lastfm.freetls.fastly.net"}
 )
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+REDIRECTS = {301, 302, 303, 307, 308}
 MAX_CACHE_BYTES = 100 * 1024 * 1024
 MAX_FILE_BYTES = 5 * 1024 * 1024
 TIMEOUT_SECONDS = (5, 10)  # connect, read: short, so quitting the app never waits long
@@ -113,11 +114,19 @@ class ImageCache:
             return None
         return self._store(url, data)
 
-    def _download(self, url: str) -> bytes:
+    def _download(self, url: str, hops: int = 1) -> bytes:
         response = self.session.get(
             url, timeout=TIMEOUT_SECONDS, stream=True, allow_redirects=False
         )
         try:
+            if response.status_code in REDIRECTS and hops > 0:
+                # Last.fm answers some .png covers with a 301 to the same picture as
+                # .gif. Follow one hop, and only on the same allowed host.
+                location = response.headers.get("Location") or ""
+                target = urljoin(url, location) if location else url
+                same_host = urlsplit(target).hostname == urlsplit(url).hostname
+                if target != url and allowed(target) and same_host:
+                    return self._download(target, hops - 1)
             if response.status_code != 200:
                 raise ValueError(f"HTTP {response.status_code}")
             kind = (response.headers.get("Content-Type") or "").lower()

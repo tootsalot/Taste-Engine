@@ -40,6 +40,8 @@ def decode(path: str, size: QSize) -> QImage:
     """Decode an image already scaled to cover `size` (cropping happens when painting)."""
     reader = QImageReader(path)
     reader.setAutoTransform(True)
+    # By content, not file name: a .png address can deliver a GIF after a redirect.
+    reader.setDecideFormatFromContent(True)
     full = reader.size()
     if full.isValid() and full.width() > 0 and full.height() > 0:
         scale = max(size.width() / full.width(), size.height() / full.height())
