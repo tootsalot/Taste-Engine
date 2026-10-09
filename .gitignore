@@ -36,3 +36,9 @@ data/profiles/
 # Release builds
 build/
 dist/
+
+# Planning and working notes stay local
+docs/PLAN*.md
+docs/PORTABILITY.md
+docs/RELEASING.md
+CLAUDE.md

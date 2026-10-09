@@ -464,7 +464,11 @@ def _load_core(conn: sqlite3.Connection, anime_id: int) -> None:
 
 
 def _load_events(conn: sqlite3.Connection, item_id: int, anime_id: int, entry: sqlite3.Row) -> None:
-    """watch_started / watch_finished events, with the fallback rules from PLAN.md 4.1."""
+    """watch_started / watch_finished events.
+
+    A completed show with no finish date falls back to the entry's last edit time
+    (labeled as a fallback). Start dates have no fallback.
+    """
     started_key = f"{anime_id}:started"
     started = date_event_time(entry["start_date"])
     if started:

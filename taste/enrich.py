@@ -1,4 +1,4 @@
-"""Enrichment: the extra API data recommendations and art need (docs/PLAN_RECS.md).
+"""Enrichment: the extra API data recommendations and art need.
 
 Everything here is cached in staging and refreshed slowly, so after the first
 run each refresh is a few dozen calls:

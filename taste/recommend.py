@@ -1,4 +1,4 @@
-"""Recommendations from my own history (docs/PLAN_RECS.md).
+"""Recommendations from my own history.
 
 Anime: predict the score I'd give a show, starting from the MAL community mean
 and adding how I usually differ from it, overall and by genre and studio. Those

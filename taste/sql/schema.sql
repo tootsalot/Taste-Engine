@@ -1,7 +1,7 @@
 -- taste-engine schema.
 -- Layers: sync_* (bookkeeping), raw_* (API pages as fetched), stg_* (per-source cleaned
 -- fields), core_* (source-agnostic). Report views live in views.sql.
--- Written to port to SQL Server with few changes. See docs/PORTABILITY.md.
+-- Written to port to SQL Server with few changes: INTEGER, REAL, and TEXT only.
 -- Every statement is idempotent so this file runs on every start.
 
 -- ---------------------------------------------------------------------------
@@ -319,7 +319,7 @@ CREATE TABLE IF NOT EXISTS core_curation (
 );
 
 -- ---------------------------------------------------------------------------
--- Enrichment (docs/PLAN_RECS.md): details fetched for recommendations and art
+-- Enrichment: details fetched for recommendations and art
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS stg_mal_anime_details (

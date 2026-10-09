@@ -44,8 +44,5 @@ python -m taste profiles
 
 ## More
 
-- [docs/PLAN.md](docs/PLAN.md) and [docs/PLAN_APP.md](docs/PLAN_APP.md): design and decisions
 - [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md): every table and column
-- [docs/PORTABILITY.md](docs/PORTABILITY.md): moving the SQL to SQL Server
-- [docs/RELEASING.md](docs/RELEASING.md): building and publishing releases
 - Tests: `pytest` (they never call the real APIs)

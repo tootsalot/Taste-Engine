@@ -1,4 +1,4 @@
-"""Image cache for posters and covers (docs/PLAN_RECS.md).
+"""Image cache for posters and covers.
 
 Images download the first time they're shown and are kept in
 <data folder>/cache/images. Image URLs on these CDNs never change, so a cached
