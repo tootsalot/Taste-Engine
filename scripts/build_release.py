@@ -108,6 +108,8 @@ def smoke_test(exe: Path, expected_version: str) -> None:
         "manrope": "True",
         "icon": "True",
         "pages": "4",
+        "webp": "True",
+        "jpeg": "True",
     }
     problems = {k: (report.get(k), v) for k, v in expected.items() if report.get(k) != v}
     if problems:

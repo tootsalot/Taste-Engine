@@ -58,7 +58,7 @@ def listen_for_others(name: str, on_show: Callable[[], None]) -> QLocalServer:
 
 def smoke_test(app: QApplication, out_path: str) -> int:
     """Build the real window and report what loaded. Used to check packaged builds."""
-    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtGui import QFontDatabase, QImageReader
 
     from taste.desktop import theme
     from taste.desktop.main_window import MainWindow
@@ -68,6 +68,7 @@ def smoke_test(app: QApplication, out_path: str) -> int:
     window.show()
     app.processEvents()
     families = QFontDatabase.families()
+    formats = {bytes(f).decode() for f in QImageReader.supportedImageFormats()}
     report = {
         "version": __version__,
         "title": window.windowTitle(),
@@ -75,6 +76,8 @@ def smoke_test(app: QApplication, out_path: str) -> int:
         "manrope": "Manrope" in families,
         "icon": not window.windowIcon().isNull(),
         "pages": window.stack.count(),
+        "webp": "webp" in formats,  # MAL posters are often .webp
+        "jpeg": "jpeg" in formats,
     }
     with open(out_path, "w", encoding="utf-8") as handle:
         handle.writelines(f"{key}={value}\n" for key, value in report.items())

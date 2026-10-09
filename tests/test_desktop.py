@@ -236,3 +236,13 @@ def test_labels_never_render_html(window):
     assert window.dashboard.title.textFormat() == Qt.TextFormat.PlainText
     assert window.dashboard.title.text() == "<b>bold</b> <img src=x>"
     assert window.reports.summary.textFormat() == Qt.TextFormat.PlainText
+
+
+def test_smoke_test_report(qapp, tmp_path):
+    from taste.desktop import smoke_test
+
+    path = tmp_path / "smoke.txt"
+    assert smoke_test(qapp, str(path)) == 0
+    report = dict(line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines())
+    assert report["pages"] == "4"
+    assert report["webp"] == "True" and report["jpeg"] == "True"

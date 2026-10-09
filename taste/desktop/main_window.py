@@ -214,4 +214,5 @@ class MainWindow(QMainWindow):
             # Stops after the page in flight; committed pages stay and the next sync resumes.
             self.dashboard.worker.cancel()
             self.dashboard.worker.wait(15000)
+        self.ctx.shutdown()
         event.accept()
