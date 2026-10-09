@@ -134,6 +134,8 @@ QFrame[role="card"] {{ background: {SURFACE}; border-radius: 14px; }}
 QLabel[role="badge"] {{ background: {RAISED}; color: {LILAC}; border-radius: 9px;
                         padding: 2px 10px; font-size: 12px; font-weight: 700; }}
 QLabel[role="reason"] {{ color: {TEXT}; font-size: 13px; }}
+QLabel[role="match"] {{ background: #2A1E26; color: {CORAL}; border-radius: 10px;
+                        padding: 3px 10px; font-size: 12px; font-weight: 700; }}
 QLabel[role="section"] {{ color: {MUTED}; font-size: 12px; font-weight: 700;
                           letter-spacing: 1px; }}
 QPushButton[role="link"] {{ background: transparent; border: none; color: {LILAC};

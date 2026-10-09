@@ -43,6 +43,7 @@ ADDED_COLUMNS = [
     ("stg_mal_anime", "main_picture_url", "TEXT"),
     ("stg_mal_anime", "nsfw_rating", "TEXT"),
     ("stg_lastfm_scrobbles", "image_url", "TEXT"),
+    ("rec_items", "facts_json", "TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 

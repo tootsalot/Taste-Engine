@@ -418,6 +418,7 @@ CREATE TABLE IF NOT EXISTS rec_items (
     image_url    TEXT,
     url          TEXT,
     reasons_json TEXT NOT NULL DEFAULT '[]',
+    facts_json   TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (rec_run_id, rank)
 );
 

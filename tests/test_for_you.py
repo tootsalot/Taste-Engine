@@ -6,9 +6,10 @@ from PySide6.QtGui import QPixmapCache
 
 from taste import recommend, settings
 from taste.desktop.context import AppContext
-from taste.desktop.for_you import accuracy_text, safe_link, score_text
+from taste.desktop.for_you import accuracy_text, chance_text, safe_link, score_text
 from taste.desktop.main_window import PAGES, MainWindow
 from taste.http_client import HttpClient
+from taste.recommend import Rec
 from taste.secrets_store import SecretStore
 from tests.conftest import FakeKeyring, FakeTransport
 from tests.fake_images import FakeImageSession, image_bytes
@@ -113,11 +114,14 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
     first = anime[0]
     assert first.title.text() == "Example Candidate One"
     assert first.score.text() == "8.2"
+    assert first.caption.text() == "for you · MAL 8.20"
+    assert first.chance.isHidden()  # four scored shows are too few to estimate it
     assert first.open_button.text() == "Open on MyAnimeList"
     reasons = [
         w.text() for w in first.findChildren(type(first.title)) if w.property("role") == "reason"
     ]
-    assert reasons[0] == "You gave Example Drama A a 9; 20 users recommend this from it."
+    assert reasons == ["Because you loved Example Drama A and really liked Example Action F."]
+    assert "20 MAL users who liked Example Drama A recommend this." in first.toolTip()
     badges = [
         w.text() for w in anime[2].findChildren(type(first.title)) if w.property("role") == "badge"
     ]
@@ -133,7 +137,8 @@ def test_music_tabs_build_when_shown_and_carry_the_scope_note(window, qtbot):
     assert discover.dirty and discover.cards == []  # not built until someone looks
     page.tabs.setCurrentWidget(discover)
     assert [c.rec.title for c in discover.cards][:2] == ["Example New X", "Example Dismissed Z"]
-    assert discover.cards[0].score.text() == "0.95"
+    assert discover.cards[0].score.text() == "Strong match"
+    assert "Match strength 0.95" in discover.cards[0].toolTip()
     assert discover.cards[0].open_button.text() == "Open on Last.fm"
     assert "Desktop listening only" in discover.note.text()
     page.tabs.setCurrentWidget(page.lists["music_rediscover"])
@@ -266,10 +271,22 @@ def test_helpers():
     assert safe_link("http://myanimelist.net/anime/1") is None
     assert safe_link("https://myanimelist.net.evil.example/x") is None
     assert safe_link(None) is None
-    assert score_text("anime", 7.675) == ("7.7", "predicted for you")
-    assert score_text("music_discover", 0.95) == ("0.95", "match")
-    assert score_text("music_rediscover", 1234.0) == ("1,234", "plays")
-    assert score_text("anime", None) == ("-", "")
+    anime = Rec("anime", "1", "T", score=7.675, facts={"mal_mean": 8.26})
+    assert score_text("anime", anime) == ("7.7", "for you · MAL 8.26")
+    older = Rec("anime", "1", "T", score=7.675)  # saved before facts existed
+    assert score_text("anime", older) == ("7.7", "predicted for you")
+    label = {"match_label": "Strong match"}
+    assert score_text("music_discover", Rec("artist", "x", "X", score=0.95, facts=label)) == (
+        "Strong match",
+        "",
+    )
+    assert score_text("music_discover", Rec("artist", "x", "X", score=0.95)) == ("0.95", "match")
+    assert score_text("music_rediscover", Rec("artist", "x", "X", score=1234.0)) == (
+        "1,234",
+        "plays",
+    )
+    assert score_text("anime", Rec("anime", "1", "T")) == ("-", "")
+    assert chance_text(0.684) == "68% chance you'd give it an 8 or more"
     text = accuracy_text({"held_out": 87, "community": 1.43, "overall": 1.40, "model": 1.35})
     assert "on 87 of your scored shows" in text
     assert "off by 1.35 points" in text and "alone was off by 1.43" in text

@@ -180,24 +180,54 @@ def test_cards_explain_themselves(conn, anime_world):
     _, recs = anime_keys(conn)
     one = recs[201]
     assert one.title == "Example Candidate One"
-    assert one.subtitle == "TV · 2020 · 12 eps · MAL 8.20"
+    assert one.subtitle == "TV · 2020 · 12 eps"  # the MAL mean sits next to the prediction
+    assert one.facts["mal_mean"] == 8.2
     assert one.url == "https://myanimelist.net/anime/201"
     assert one.image_url == "https://cdn.myanimelist.net/images/anime/1/201.jpg"
-    # The show I liked most comes first.
-    assert one.reasons[:2] == [
-        "You gave Example Drama A a 9; 20 users recommend this from it.",
-        "You gave Example Action F an 8; 7 users recommend this from it.",
+    # Plain words, the show I liked most first. The numbers go to the tooltip.
+    assert one.reasons == ["Because you loved Example Drama A and really liked Example Action F."]
+    assert one.facts["details"] == [
+        "20 MAL users who liked Example Drama A recommend this.",
+        "7 MAL users who liked Example Action F recommend this.",
     ]
-    assert recs[203].reasons[0] == "Sequel of Example Drama A, which you gave a 9."
+    assert recs[203].reasons == ["It's the sequel to Example Drama A, which you gave a 9."]
+    assert "chance_8_plus" not in one.facts  # four scored shows are too few to say
 
 
-def test_genre_reasons():
+def test_reasons_use_english_titles(conn, anime_world):
+    conn.execute(
+        "UPDATE stg_mal_anime SET title_en = 'Drama A in English' WHERE mal_anime_id = 101"
+    )
+    _, recs = anime_keys(conn)
+    assert recs[201].reasons[0].startswith("Because you loved Drama A in English and")
+    assert recs[203].reasons == ["It's the sequel to Drama A in English, which you gave a 9."]
+
+
+def test_genre_leans():
     model = TasteModel(0.0, {"Drama": 0.4, "Comedy": -0.5, "Action": 0.05}, {}, {})
-    assert recommend._genre_reasons(model, ["Drama", "Comedy"]) == [
-        "You rate Drama +0.40 above your usual.",
-        "Heads up: you're usually harsh on Comedy (-0.50).",
+    assert recommend._genre_leans(model, ["Drama", "Comedy"]) == ("Drama", "Comedy")
+    assert recommend._genre_leans(model, ["Action"]) == (None, None)  # too small to mention
+
+
+def test_because_sentences():
+    because = recommend._because
+    assert because([("Show A", 10), ("Show B", 8)], "Award Winning", None) == [
+        "Because you loved Show A and really liked Show B, and you tend to enjoy "
+        "award winning anime."
     ]
-    assert recommend._genre_reasons(model, ["Action"]) == []  # too small to mention
+    assert because([("Show A", 7)], None, None) == ["Because you liked Show A."]
+    assert because([], "Samurai", "Mystery") == [
+        "You tend to enjoy samurai anime.",
+        "Heads up: you're usually tougher on mystery anime.",
+    ]
+    assert because([], None, None) == []
+
+
+def test_chance_of_an_8_or_more():
+    # Predicted 7.6, and real scores have landed -1, 0, +0.5, and +1 from predictions:
+    # 6.6, 7.6, 8.1, 8.6. Three of four round to 8 or more.
+    assert recommend.chance_at_least(7.6, [-1.0, 0.0, 0.5, 1.0] * 5, 8) == 0.75
+    assert recommend.chance_at_least(7.6, [0.0] * 3, 8) is None  # too few to say
 
 
 # ---------------------------------------------------------------------------
@@ -268,11 +298,19 @@ def test_discover_scores_by_similarity_and_recent_plays(conn, music_world):
         ("Example New W", 0.25),
     ]
     x = discover[0]
-    assert x.subtitle == "Similar to 2 artists you play"
-    assert x.reasons == [
-        "Similar to Example Seed One (0.80 match).",
-        "Similar to Example Seed Two (0.60 match).",
+    assert x.subtitle == "Sounds like 2 artists you play"
+    assert x.reasons == ["Close to Example Seed One (80% similar) and Example Seed Two (60%)."]
+    # A label by place in the list instead of an unexplained number.
+    assert [r.facts["match_label"] for r in discover] == [
+        "Strong match",
+        "Good match",
+        "Worth a try",
     ]
+    assert x.facts["details"] == [
+        "Match strength 0.95: how similar it is to artists you play, weighted by how "
+        "much you play them."
+    ]
+    assert discover[1].reasons == ["Close to Example Seed One (50% similar), an artist you play."]
     assert x.url == "https://www.last.fm/music/Example+New+X"
     assert x.image_url is None  # no cover until fetch_artist_covers runs
 
@@ -312,7 +350,8 @@ def test_runs_are_saved_and_read_back(conn, anime_world):
     assert counts["anime"] == 4
     recs, metrics, created = recommend.latest(conn, "anime")
     assert [r.item_key for r in recs] == ["201", "203", "104", "206"]
-    assert recs[0].reasons[0].startswith("You gave Example Drama A a 9")
+    assert recs[0].reasons[0].startswith("Because you loved Example Drama A")
+    assert recs[0].facts["mal_mean"] == 8.2  # facts survive the round trip
     assert metrics["model_overall_bias"] == pytest.approx(-0.275)
     assert created is not None
     params = conn.execute("SELECT params_json FROM rec_runs WHERE kind = 'anime'").fetchone()[0]
@@ -378,4 +417,5 @@ def test_refresh_without_data_is_empty_not_an_error(conn):
 
 def test_reasons_read_like_sentences(conn, anime_world):
     _, recs = anime_keys(conn)
-    assert "You gave Example Action F an 8; 1 user recommends this from it." in recs[206].reasons
+    assert recs[206].reasons == ["Because you really liked Example Action F."]
+    assert recs[206].facts["details"] == ["1 MAL user who liked Example Action F recommends this."]

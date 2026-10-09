@@ -30,6 +30,19 @@ GENRE_SHRINK = 5  # a genre's bias counts fully only after several shows
 STUDIO_SHRINK = 3
 STUDIO_WEIGHT = 0.5  # studios overlap with genres, so they count half
 MAX_REASON_SEEDS = 2
+GENRE_MENTION = 0.15  # a genre lean this big is worth a word on the card
+GENRE_WARNING = -0.3
+MIN_RESIDUALS = 20  # fewer past predictions than this and the chance of an 8+ isn't shown
+RELATION_PHRASES = {
+    "sequel": "the sequel to",
+    "prequel": "the prequel to",
+    "side_story": "a side story of",
+    "spin_off": "a spin-off of",
+    "alternative_version": "another version of",
+    "alternative_setting": "set in the world of",
+    "parent_story": "the main story of",
+    "full_story": "the full story of",
+}
 REDISCOVER_MIN_PLAYS = 15
 REDISCOVER_QUIET_DAYS = 180
 MEDIA_LABELS = {
@@ -55,7 +68,9 @@ class Rec:
     badge: str = ""
     image_url: str | None = None
     url: str | None = None
-    reasons: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)  # plain sentences for the card
+    # mal_mean, chance_8_plus, match_label, and details (the numbers, for a tooltip)
+    facts: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -169,10 +184,11 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
         )
     }
 
-    # Who recommends each candidate, for the reasons line.
+    # Who recommends each candidate, for the reasons line. English titles when MAL has one.
     sources: dict[int, list[tuple[float, str, int]]] = {}
     for rec_id, title, score, votes in conn.execute(
-        "SELECT r.recommended_id, a.title, l.score, r.num_recommendations "
+        "SELECT r.recommended_id, COALESCE(NULLIF(a.title_en, ''), a.title), l.score, "
+        "r.num_recommendations "
         "FROM stg_mal_anime_recommendations r JOIN stg_mal_list_entries l "
         "ON l.mal_anime_id = r.mal_anime_id "
         "JOIN stg_mal_anime a ON a.mal_anime_id = r.mal_anime_id "
@@ -184,7 +200,8 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
         )
     related: dict[int, tuple[str, str, int]] = {}
     for rel_id, kind, title, score in conn.execute(
-        "SELECT r.related_id, r.relation_type, a.title, l.score FROM stg_mal_related_anime r "
+        "SELECT r.related_id, r.relation_type, COALESCE(NULLIF(a.title_en, ''), a.title), "
+        "l.score FROM stg_mal_related_anime r "
         "JOIN stg_mal_list_entries l ON l.mal_anime_id = r.mal_anime_id "
         "JOIN stg_mal_anime a ON a.mal_anime_id = r.mal_anime_id "
         "WHERE l.removed_at IS NULL AND l.score > ? ORDER BY l.score DESC",
@@ -196,6 +213,7 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
     candidates = set(support)
     if cfg["rec_include_plan_to_watch"]:
         candidates |= plan_to_watch
+    residuals = holdout_residuals(_scored(conn), facts)
     recs: list[Rec] = []
     for anime_id in candidates:
         f = facts.get(anime_id)
@@ -221,22 +239,34 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
         if f["start_season_year"]:
             parts.append(str(f["start_season_year"]))
         if f["num_episodes"]:
-            parts.append(f"{f['num_episodes']} eps")
-        parts.append(f"MAL {f['community_mean']:.2f}")
+            parts.append(f"{f['num_episodes']} ep" if f["num_episodes"] == 1 else
+                         f"{f['num_episodes']} eps")  # fmt: skip
         rec.subtitle = " · ".join(p for p in parts if p)
+        rec.facts["mal_mean"] = f["community_mean"]
+        chance = chance_at_least(predicted, residuals, 8)
+        if chance is not None:
+            rec.facts["chance_8_plus"] = round(chance, 3)
         if anime_id in plan_to_watch:
             rec.badge = "On your Plan to Watch"
+
+        details = []
         if anime_id in related:
             kind, title, score = related[anime_id]
-            rec.reasons.append(
-                f"{kind.replace('_', ' ').capitalize()} of {title}, which you gave {_a(score)}."
-            )
+            phrase = RELATION_PHRASES.get(kind, "related to")
+            rec.reasons.append(f"It's {phrase} {title}, which you gave {_a(score)}.")
+        seeds = []
         for _, title, score, votes in sorted(sources.get(anime_id, []), reverse=True)[
             :MAX_REASON_SEEDS
         ]:
-            who = "1 user recommends" if votes == 1 else f"{votes} users recommend"
-            rec.reasons.append(f"You gave {title} {_a(score)}; {who} this from it.")
-        rec.reasons.extend(_genre_reasons(model, f["genres"]))
+            seeds.append((title, score))
+            who = "1 MAL user who liked" if votes == 1 else f"{votes} MAL users who liked"
+            verb = "recommends" if votes == 1 else "recommend"
+            details.append(f"{who} {title} {verb} this.")
+        liked, harsh = _genre_leans(model, f["genres"])
+        for genre in filter(None, (liked, harsh)):
+            details.append(f"You rate {genre} shows {model.genre[genre]:+.2f} vs your usual.")
+        rec.reasons.extend(_because(seeds, liked, harsh))
+        rec.facts["details"] = details
         recs.append(rec)
 
     # Best predicted first; how strongly my favorites point at it breaks near-ties.
@@ -251,16 +281,73 @@ def _a(score: int) -> str:
     return f"an {score}" if score in (8, 11, 18) else f"a {score}"
 
 
-def _genre_reasons(model: TasteModel, genres: list[str]) -> list[str]:
+def _genre_leans(model: TasteModel, genres: list[str]) -> tuple[str | None, str | None]:
+    """(a genre of this show I lean toward, one I'm usually hard on), when worth a mention."""
     scored = [(model.genre[g], g) for g in genres if g in model.genre]
-    reasons = []
     best = max(scored, default=None)
-    if best and best[0] >= 0.15:
-        reasons.append(f"You rate {best[1]} {best[0]:+.2f} above your usual.")
     worst = min(scored, default=None)
-    if worst and worst[0] <= -0.3:
-        reasons.append(f"Heads up: you're usually harsh on {worst[1]} ({worst[0]:+.2f}).")
-    return reasons
+    return (
+        best[1] if best and best[0] >= GENRE_MENTION else None,
+        worst[1] if worst and worst[0] <= GENRE_WARNING else None,
+    )
+
+
+def _loved(score: float) -> str:
+    return "loved" if score >= 9 else "really liked" if score >= 8 else "liked"
+
+
+def _because(
+    seeds: list[tuple[str, float]], liked_genre: str | None, harsh_genre: str | None
+) -> list[str]:
+    """The card's reasons in plain words, no numbers.
+
+    "Because you loved A and really liked B, and you tend to enjoy samurai anime."
+    """
+    sentences = []
+    clauses = []  # "loved A", "B", "really liked C": a verb only when it changes
+    last_verb = None
+    for title, score in seeds:
+        verb = _loved(score)
+        clauses.append(title if verb == last_verb else f"{verb} {title}")
+        last_verb = verb
+    genre = f"you tend to enjoy {liked_genre.lower()} anime" if liked_genre else ""
+    if clauses:
+        sentence = "Because you " + " and ".join(clauses)
+        sentences.append(sentence + (f", and {genre}." if genre else "."))
+    elif genre:
+        sentences.append(genre[0].upper() + genre[1:] + ".")
+    if harsh_genre:
+        sentences.append(f"Heads up: you're usually tougher on {harsh_genre.lower()} anime.")
+    return sentences
+
+
+def holdout_residuals(
+    scored: list[tuple[int, float, float]], facts: dict[int, dict]
+) -> list[float]:
+    """How far my real scores landed from predictions made without them (5 folds).
+
+    Every scored show is predicted once by a model that never saw it. Used to say how
+    likely a predicted score is to end up an 8 or more.
+    """
+    if len(scored) < MIN_RESIDUALS:
+        return []
+    residuals = []
+    for fold in range(5):
+        train = [x for x in scored if x[0] % 5 != fold]
+        model = build_model(train, facts)
+        for anime_id, score, community in scored:
+            if anime_id % 5 == fold:
+                f = facts.get(anime_id, {})
+                guess = model.predict(community, f.get("genres", []), f.get("studios", []))
+                residuals.append(score - guess)
+    return residuals
+
+
+def chance_at_least(predicted: float, residuals: list[float], at_least: int) -> float | None:
+    """Share of past misses that would put this show at `at_least` or more once rounded."""
+    if len(residuals) < MIN_RESIDUALS:
+        return None
+    return mean(1.0 if predicted + r >= at_least - 0.5 else 0.0 for r in residuals)
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +378,29 @@ def _artist_cover(conn: sqlite3.Connection, name: str) -> str | None:
         (enrich.artist_key(name),),
     ).fetchone()
     return row[0] if row else None
+
+
+def _close_to(similar: list[tuple[str, float]]) -> str:
+    """'Close to A (84% similar) and B (60%), plus 6 more artists you play.'"""
+    shown = similar[:MAX_REASON_SEEDS]
+    if len(shown) == 1:
+        name, match = shown[0]
+        return f"Close to {name} ({match:.0%} similar), an artist you play."
+    first, second = shown[0], shown[1]
+    text = f"Close to {first[0]} ({first[1]:.0%} similar) and {second[0]} ({second[1]:.0%})"
+    more = len(similar) - len(shown)
+    if more:
+        text += f", plus {more} more {'artist' if more == 1 else 'artists'} you play"
+    return text + "."
+
+
+def _match_label(rank: int, total: int) -> str:
+    """The list in thirds: the match score itself (a sum) has no natural scale."""
+    if rank <= math.ceil(total / 3):
+        return "Strong match"
+    if rank <= math.ceil(2 * total / 3):
+        return "Good match"
+    return "Worth a try"
 
 
 def music_recommendations(
@@ -328,25 +438,28 @@ def music_recommendations(
             names[similar_key] = similar_name
             because.setdefault(similar_key, []).append((w * match, weights[seed][0], match))
 
+    picked = sorted(scores, key=lambda k: (-scores[k], k))[: cfg["rec_count"]]
     discover = []
-    for key in sorted(scores, key=lambda k: (-scores[k], k))[: cfg["rec_count"]]:
+    for rank, key in enumerate(picked, 1):
         seeds_for = sorted(because[key], reverse=True)
         plural = "artist" if len(seeds_for) == 1 else "artists"
-        reasons = [f"Similar to {n} ({m:.2f} match)." for _, n, m in seeds_for[:MAX_REASON_SEEDS]]
-        if len(seeds_for) > MAX_REASON_SEEDS:
-            reasons.append(
-                f"Also close to {len(seeds_for) - MAX_REASON_SEEDS} more artists you play."
-            )
         discover.append(
             Rec(
                 kind="artist",
                 item_key=key,
                 title=names[key],
-                subtitle=f"Similar to {len(seeds_for)} {plural} you play",
+                subtitle=f"Sounds like {len(seeds_for)} {plural} you play",
                 score=round(scores[key], 3),
                 image_url=_artist_cover(conn, names[key]),
                 url=lastfm_artist_url(names[key]),
-                reasons=reasons,
+                reasons=[_close_to([(n, m) for _, n, m in seeds_for])],
+                facts={
+                    "match_label": _match_label(rank, len(picked)),
+                    "details": [
+                        f"Match strength {scores[key]:.2f}: how similar it is to artists you "
+                        "play, weighted by how much you play them."
+                    ],
+                },
             )
         )
 
@@ -394,7 +507,8 @@ def save_run(
     for rank, r in enumerate(recs, 1):
         conn.execute(
             "INSERT INTO rec_items (rec_run_id, rank, item_key, title, subtitle, score, support, "
-            "badge, image_url, url, reasons_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "badge, image_url, url, reasons_json, facts_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 rank,
@@ -407,6 +521,7 @@ def save_run(
                 r.image_url,
                 r.url,
                 json.dumps(r.reasons, ensure_ascii=False),
+                json.dumps(r.facts, ensure_ascii=False),
             ),
         )
     return run_id
@@ -435,6 +550,7 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
             image_url=r["image_url"],
             url=r["url"],
             reasons=json.loads(r["reasons_json"]),
+            facts=json.loads(r["facts_json"] or "{}"),
         )
         for r in conn.execute(
             "SELECT * FROM rec_items WHERE rec_run_id = ? ORDER BY rank", (run["rec_run_id"],)

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -73,16 +74,22 @@ def safe_link(url: str | None) -> str | None:
     return url if parts.scheme == "https" and parts.hostname in LINK_HOSTS else None
 
 
-def score_text(kind: str, score: float | None) -> tuple[str, str]:
-    """(big number, caption) for a card."""
-    if score is None:
+def score_text(kind: str, rec: Rec) -> tuple[str, str]:
+    """(big number or label, caption) for a card. Runs saved before facts existed still read."""
+    if rec.score is None:
         return "-", ""
     if kind == "anime":
         # One decimal: the model is good to about a point, not a hundredth.
-        return f"{score:.1f}", "predicted for you"
+        mal = rec.facts.get("mal_mean")
+        return f"{rec.score:.1f}", f"for you · MAL {mal:.2f}" if mal else "predicted for you"
     if kind == "music_discover":
-        return f"{score:.2f}", "match"
-    return f"{int(score):,}", "plays"
+        label_text = rec.facts.get("match_label")
+        return (label_text, "") if label_text else (f"{rec.score:.2f}", "match")
+    return f"{int(rec.score):,}", "plays"
+
+
+def chance_text(chance: float) -> str:
+    return f"{chance:.0%} chance you'd give it an 8 or more"
 
 
 class RecCard(Card):
@@ -113,17 +120,23 @@ class RecCard(Card):
         if rec.subtitle:
             titles.addWidget(label(rec.subtitle, role="muted", wrap=True))
         top.addLayout(titles, 1)
-        number, caption = score_text(list_kind, rec.score)
+        number, caption = score_text(list_kind, rec)
         score_box = QVBoxLayout()
         score_box.setSpacing(0)
         self.score = label(number)
-        self.score.setFont(theme.number_font(26))
-        self.score.setStyleSheet(f"color: {accent};")
+        if rec.facts.get("match_label") and list_kind == "music_discover":
+            self.score.setProperty("role", "match")  # a word, drawn as a coral pill
+            self.score.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        else:
+            self.score.setFont(theme.number_font(26))
+            self.score.setStyleSheet(f"color: {accent};")
         self.score.setAlignment(Qt.AlignmentFlag.AlignRight)
-        score_box.addWidget(self.score)
-        cap = label(caption, role="muted")
-        cap.setAlignment(Qt.AlignmentFlag.AlignRight)
-        score_box.addWidget(cap)
+        score_box.addWidget(self.score, 0, Qt.AlignmentFlag.AlignRight)
+        self.caption = label(caption, role="muted")
+        self.caption.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.caption.setVisible(bool(caption))
+        score_box.addWidget(self.caption)
+        score_box.addStretch()
         top.addLayout(score_box)
         text.addLayout(top)
 
@@ -132,7 +145,13 @@ class RecCard(Card):
             text.addWidget(badge, 0, Qt.AlignmentFlag.AlignLeft)
         for reason in rec.reasons:
             text.addWidget(label(reason, role="reason", wrap=True))
+        chance = rec.facts.get("chance_8_plus")
+        self.chance = label(chance_text(chance) if chance is not None else "", role="muted")
+        self.chance.setVisible(chance is not None)
+        text.addWidget(self.chance)
         text.addStretch()
+        # The numbers behind the words, for anyone curious.
+        self.setToolTip("\n".join(rec.facts.get("details", [])))
 
         buttons = QHBoxLayout()
         link = safe_link(rec.url)
