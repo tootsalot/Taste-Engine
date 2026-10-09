@@ -1,12 +1,13 @@
 """The For You page: real widgets, offscreen Qt, fake APIs and images, temp data folder."""
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QPixmapCache
+from PySide6.QtWidgets import QWidget
 
 from taste import recommend, settings
 from taste.desktop.context import AppContext
-from taste.desktop.for_you import accuracy_text, chance_text, safe_link, score_text
+from taste.desktop.for_you import RecCard, accuracy_text, chance_text, safe_link, score_text
 from taste.desktop.main_window import PAGES, MainWindow
 from taste.http_client import HttpClient
 from taste.recommend import Rec
@@ -35,6 +36,39 @@ def images():
     )
     yield session
     QPixmapCache.clear()
+
+
+class WindowWatcher(QObject):
+    """Records every widget shown as its own window, apart from the ones meant to be.
+
+    A widget shown before it has a parent becomes a real top-level window: on Windows
+    it flashes up as an empty little window with a title bar until it's reparented.
+    """
+
+    EXPECTED = ("MainWindow", "QMenu", "QTipLabel", "QMessageBox")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stray: list[str] = []
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt naming)
+        if (
+            event.type() == QEvent.Type.Show
+            and isinstance(obj, QWidget)
+            and obj.isWindow()
+            and type(obj).__name__ not in self.EXPECTED
+        ):
+            text = obj.text() if hasattr(obj, "text") else None
+            self.stray.append(type(obj).__name__ + (f" {text!r}" if text is not None else ""))
+        return False
+
+
+@pytest.fixture
+def stray_windows(qapp):
+    watcher = WindowWatcher()
+    qapp.installEventFilter(watcher)
+    yield watcher.stray
+    qapp.removeEventFilter(watcher)
 
 
 @pytest.fixture
@@ -320,6 +354,34 @@ def test_sync_everything_also_refreshes_recommendations(window, qtbot):
     assert window.for_you.tabs.tabText(0) == "Anime (4)"  # For You picked them up
     assert len(cards(window, "anime")) == 4
     assert progress  # the bar followed the recommendation steps too
+
+
+def test_no_stray_windows_flash_up(stray_windows, window, qtbot):
+    # Building the window, syncing (which refreshes recommendations), refreshing again,
+    # and opening every page and tab must never show a widget as its own window.
+    synced(window, qtbot)
+    refreshed(window, qtbot)
+    for row in range(len(PAGES)):
+        window.sidebar.setCurrentRow(row)
+    for index in range(window.for_you.tabs.count()):
+        window.for_you.tabs.setCurrentIndex(index)
+    window.reports.refresh()
+    assert stray_windows == [], "\n".join(sorted(set(stray_windows)))
+
+
+def test_a_card_with_every_line_opens_no_window(stray_windows, qtbot, images):
+    rec = Rec(
+        "anime", "1", "Example Show", "TV · 2020 · 12 eps", 8.1, badge="On your Plan to Watch",
+        reasons=["Because you loved Example Drama A."],
+        facts={"mal_mean": 8.0, "chance_8_plus": 0.55, "details": ["a number"]},
+    )  # fmt: skip
+    ctx = AppContext(image_session=images)
+    card = RecCard(ctx, "anime", rec)
+    qtbot.addWidget(card)
+    card.show()  # the card itself is a window here; nothing inside it may be one
+    assert not card.chance.isHidden() and not card.caption.isHidden()
+    assert stray_windows == ["RecCard"]
+    ctx.shutdown()
 
 
 def test_syncing_one_source_leaves_recommendations_alone(window, qtbot):

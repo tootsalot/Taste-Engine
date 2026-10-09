@@ -56,8 +56,8 @@ def chart_card(title: str, chart: QWidget, note: str = "") -> Card:
     card = Card()
     card.body.addWidget(section(title))
     card.note = label(note, role="muted", wrap=True)
-    card.note.setVisible(bool(note))
     card.body.addWidget(card.note)
+    card.note.setVisible(bool(note))  # after it has a parent, or it opens as its own window
     card.body.addWidget(chart, 1)
     return card
 

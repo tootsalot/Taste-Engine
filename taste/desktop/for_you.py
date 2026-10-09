@@ -134,7 +134,6 @@ class RecCard(Card):
         score_box.addWidget(self.score, 0, Qt.AlignmentFlag.AlignRight)
         self.caption = label(caption, role="muted")
         self.caption.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.caption.setVisible(bool(caption))
         score_box.addWidget(self.caption)
         score_box.addStretch()
         top.addLayout(score_box)
@@ -147,7 +146,6 @@ class RecCard(Card):
             text.addWidget(label(reason, role="reason", wrap=True))
         chance = rec.facts.get("chance_8_plus")
         self.chance = label(chance_text(chance) if chance is not None else "", role="muted")
-        self.chance.setVisible(chance is not None)
         text.addWidget(self.chance)
         text.addStretch()
         # The numbers behind the words, for anyone curious.
@@ -173,6 +171,10 @@ class RecCard(Card):
         text.addLayout(buttons)
         row.addLayout(text, 1)
         self.body.addLayout(row)
+        # Only now do the labels have a parent. Showing a widget without one opens it
+        # as its own window, which flashed up on screen for every card.
+        self.caption.setVisible(bool(caption))
+        self.chance.setVisible(chance is not None)
 
 
 class RecList(QWidget):
