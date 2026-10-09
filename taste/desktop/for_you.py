@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import recommend, settings
+from taste import local_time, recommend, settings
 from taste.desktop import theme
 from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
@@ -241,6 +241,7 @@ class ForYouPage(QWidget):
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
         self.status = label("", role="muted", wrap=True)
+        self.status.setVisible(False)  # no empty band above the tabs
         layout.addWidget(self.status)
 
         self.tabs = QTabWidget()
@@ -258,7 +259,7 @@ class ForYouPage(QWidget):
 
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
-        self.status.setText("")
+        self.say("")
         self.reload()
 
     def reload(self) -> None:
@@ -277,12 +278,21 @@ class ForYouPage(QWidget):
                     self.lists[kind].note.setText(accuracy_text(metrics))
                 newest = max(filter(None, (newest, created)), default=None)
             scope = settings.lastfm_scope_note(conn)
+            tz_name = settings.get(conn, "timezone")
         finally:
             conn.close()
         for kind in ("music_discover", "music_rediscover"):
             self.lists[kind].note.setText(f"Based on Last.fm plays. {scope}")
-        self.updated.setText(f"Updated {newest} UTC" if newest else "Never refreshed")
+        self.updated.setText(
+            f"Updated {local_time.describe(newest, tz_name, self.ctx.now())}"
+            if newest
+            else "Never refreshed"
+        )
         self._render_current()
+
+    def say(self, text: str) -> None:
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
 
     def _render_current(self) -> None:
         tab = self.tabs.currentWidget()
@@ -305,7 +315,7 @@ class ForYouPage(QWidget):
         finally:
             conn.close()
         hidden = next((r.title for r in self.lists[list_kind].recs if r.item_key == item_key), "")
-        self.status.setText(f"Hidden {hidden}. It won't be suggested again.")
+        self.say(f"Hidden {hidden}. It won't be suggested again.")
         self.reload()
 
     # -- refreshing ---------------------------------------------------------
@@ -329,7 +339,7 @@ class ForYouPage(QWidget):
         self.refresh_button.setEnabled(False)
         self.progress.setRange(0, 0)
         self.progress.setVisible(True)
-        self.status.setText(
+        self.say(
             "Fetching what recommendations need. The first time takes about five minutes."
             if fetch
             else "Recomputing recommendations."
@@ -346,7 +356,7 @@ class ForYouPage(QWidget):
         return self.worker
 
     def _on_message(self, message: str) -> None:
-        self.status.setText(message.removeprefix("Recommendations: "))
+        self.say(message.removeprefix("Recommendations: "))
         match = PROGRESS.search(message)
         if match:
             done, total = int(match.group(1)), int(match.group(2))
@@ -358,7 +368,7 @@ class ForYouPage(QWidget):
         self.progress.setVisible(False)
         self.refresh_button.setEnabled(not self.is_blocked())
         if not counts:
-            self.status.setText(
+            self.say(
                 (self.status.text() + " " if self.status.text() else "")
                 + "Whatever was fetched is kept; the next refresh continues."
             )

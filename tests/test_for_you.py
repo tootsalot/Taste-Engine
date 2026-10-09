@@ -12,7 +12,7 @@ from taste.http_client import HttpClient
 from taste.secrets_store import SecretStore
 from tests.conftest import FakeKeyring, FakeTransport
 from tests.fake_images import FakeImageSession, image_bytes
-from tests.fake_recs import NOW, FakeLastfmApi, FakeMal, listening_history
+from tests.fake_recs import LASTFM_CDN, NOW, FakeLastfmApi, FakeMal, listening_history
 from tests.test_desktop import set_up_profile
 from tests.test_enrich import NOW_DT
 from tests.test_lastfm_sync import FakeLastfm
@@ -50,6 +50,7 @@ def window(qtbot, images):
         sync_kwargs={"now": lambda: NOW + 1},
         recs_kwargs={"now": NOW_DT},
         image_session=images,
+        clock=lambda: NOW_DT,
     )
     win = MainWindow(ctx)
     qtbot.addWidget(win)
@@ -82,6 +83,7 @@ def test_for_you_is_second_in_the_sidebar(window):
     assert window.stack.currentWidget() is window.for_you
     page = window.for_you
     assert page.updated.text() == "Never refreshed"
+    assert page.status.isHidden()  # no empty band between the heading and the tabs
     assert "Sync MyAnimeList, then press Refresh" in page.lists["anime"].empty.text()
     assert "Accuracy check: not enough scored shows" in page.lists["anime"].note.text()
 
@@ -102,7 +104,9 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
     assert window.dashboard.sync_buttons["all"].isEnabled()
     assert page.progress.isHidden()
     assert "Recommendations ready" in page.status.text()
+    assert not page.status.isHidden()
     assert page.updated.text().startswith("Updated ")
+    assert "UTC" not in page.updated.text()  # in the profile's time zone, in plain words
 
     anime = cards(window, "anime")
     assert [c.rec.item_key for c in anime] == ["201", "203", "104", "206"]
@@ -147,9 +151,12 @@ def test_posters_load_in_the_background(window, qtbot, images):
     # Cards without a downloadable picture keep their placeholder letter.
     qtbot.waitUntil(window.ctx.art.is_idle, timeout=5000)
     assert not cards(window, "anime")[1].art.has_picture()
-    assert all(
-        url.startswith("https://cdn.myanimelist.net/") for url in images.urls()
-    )  # only shown cards, only known hosts
+    # Only known hosts (the Dashboard asks for album covers too), and nothing for
+    # the music tabs, which nobody has opened yet.
+    urls = images.urls()
+    hosts = ("https://cdn.myanimelist.net/", "https://lastfm.freetls.fastly.net/")
+    assert urls and all(url.startswith(hosts) for url in urls)
+    assert LASTFM_CDN.format("newx") not in urls
 
 
 def test_not_interested_hides_a_card_for_good(window, qtbot):

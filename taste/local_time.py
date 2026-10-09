@@ -60,3 +60,24 @@ def refresh(conn: sqlite3.Connection) -> int:
         rows,
     )
     return len(rows)
+
+
+def describe(utc_text: str, tz_name: str, now: datetime | None = None) -> str:
+    """A stored UTC time in plain words, in the profile's time zone.
+
+    "today at 10:52 PM", "yesterday at 9:05 AM", "Oct 1 at 12:05 PM", or
+    "Dec 31, 2025" for another year.
+    """
+    zone = ZoneInfo(tz_name)
+    moment = datetime.strptime(utc_text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    local = moment.astimezone(zone)
+    today = (now or datetime.now(timezone.utc)).astimezone(zone).date()
+    clock = f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+    day = f"{local.strftime('%b')} {local.day}"
+    if local.date() == today:
+        return f"today at {clock}"
+    if (today - local.date()).days == 1:
+        return f"yesterday at {clock}"
+    if local.year == today.year:
+        return f"{day} at {clock}"
+    return f"{day}, {local.year}"

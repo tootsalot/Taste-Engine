@@ -24,7 +24,7 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from taste import enrich, settings
-from taste.db import unix_to_utc, utc_now
+from taste.db import utc_now
 
 GENRE_SHRINK = 5  # a genre's bias counts fully only after several shows
 STUDIO_SHRINK = 3
@@ -356,12 +356,14 @@ def music_recommendations(
     for key, (name, _, plays, last) in sorted(all_time.items(), key=lambda kv: -kv[1][2]):
         if plays < REDISCOVER_MIN_PLAYS or last >= quiet_since or key in dismissed:
             continue
+        last_day = datetime.fromtimestamp(last, timezone.utc)
         rediscover.append(
             Rec(
                 kind="artist",
                 item_key=key,
                 title=name,
-                subtitle=f"{plays} plays, last {unix_to_utc(last)[:10]}",
+                # The play count is the card's big number and its reason already.
+                subtitle=f"Last played {last_day:%b} {last_day.day}, {last_day.year}",
                 score=float(plays),
                 image_url=_artist_cover(conn, name),
                 url=lastfm_artist_url(name),

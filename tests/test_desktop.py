@@ -98,6 +98,15 @@ def test_create_profile_opens_settings(window):
     assert window.sidebar.currentRow() == PAGES.index("Settings")
 
 
+def test_status_messages_fade_and_the_version_stays(window, qtbot, monkeypatch):
+    monkeypatch.setattr("taste.desktop.main_window.STATUS_MS", 50)
+    window.new_profile(("me", "Me"))
+    bar = window.statusBar()
+    assert bar.currentMessage().startswith("Created me.")
+    qtbot.waitUntil(lambda: bar.currentMessage() == "", timeout=3000)
+    assert "Your data stays on this computer" in window.version_label.text()
+
+
 def test_bad_profile_id_is_refused(window, monkeypatch):
     warnings = []
     monkeypatch.setattr(
@@ -172,8 +181,7 @@ def test_full_sync_updates_dashboard_and_reports(window, qtbot):
     assert blocker.args[0] == {"mal": True, "lastfm": True}
     assert dash.sync_buttons["all"].isEnabled()
     assert "Last.fm: page 1 of 1" in dash.log.toPlainText()
-    assert dash.tile_entries.value.text() == "5"
-    assert dash.tile_plays.value.text() == "5"
+    assert dash.counts.text() == "5 on your list · 3 scored · 5 Last.fm plays"
     assert dash.critic_value.text() == "-1.64"
 
     reports_page = window.reports

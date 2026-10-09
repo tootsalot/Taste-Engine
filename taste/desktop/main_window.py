@@ -30,6 +30,7 @@ from taste.profiles import ProfileError
 from taste.settings import SettingError
 
 PAGES = ("Dashboard", "For You", "Reports", "Settings")
+STATUS_MS = 8000  # how long a status bar message stays
 
 
 class MainWindow(QMainWindow):
@@ -110,10 +111,15 @@ class MainWindow(QMainWindow):
         ):
             signal.connect(self._update_busy)
 
-        self.statusBar().showMessage(
-            f"Taste Engine {__version__}. Your data stays on this computer."
+        # The version line stays; messages cover it for a few seconds, then fade.
+        self.version_label = label(
+            f"Taste Engine {__version__}. Your data stays on this computer.", role="muted"
         )
+        self.statusBar().addWidget(self.version_label)
         self.reload_profiles()
+        # Start keyboard focus on the page list, not on whichever button comes first
+        # (a focus ring on "New profile" at launch looks like a pending action).
+        self.sidebar.setFocus()
 
     def _empty_state(self) -> QWidget:
         page = QWidget()
@@ -198,8 +204,11 @@ class MainWindow(QMainWindow):
             return False
         self.reload_profiles(select=profile_id)
         self.sidebar.setCurrentRow(PAGES.index("Settings"))  # first stop: keys and usernames
-        self.statusBar().showMessage(f"Created {profile_id}. Add your usernames and API keys.")
+        self.say(f"Created {profile_id}. Add your usernames and API keys.")
         return True
+
+    def say(self, text: str) -> None:
+        self.statusBar().showMessage(text, STATUS_MS)
 
     def _after_settings_saved(self, changed: list[str]) -> None:
         pid = self.current_profile()
@@ -213,7 +222,7 @@ class MainWindow(QMainWindow):
             self.for_you.start_refresh(fetch=False)
 
     def _after_profile_deleted(self, profile_id: str) -> None:
-        self.statusBar().showMessage(f"Deleted profile {profile_id}.")
+        self.say(f"Deleted profile {profile_id}.")
         self.reload_profiles()
 
     # -- window -------------------------------------------------------------

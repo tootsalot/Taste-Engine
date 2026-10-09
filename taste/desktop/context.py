@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from taste import db, images, profiles
@@ -17,8 +18,12 @@ class AppContext:
     sync_kwargs: dict[str, Any] = field(default_factory=dict)
     recs_kwargs: dict[str, Any] = field(default_factory=dict)  # tests pin "now"
     image_session: Any = None  # tests pass a fake download session
+    clock: Any = None  # tests pin "now" for the Dashboard
     _prepared: set[str] = field(default_factory=set)
     _art: Any = None
+
+    def now(self) -> datetime:
+        return self.clock() if self.clock is not None else datetime.now(timezone.utc)
 
     @property
     def art(self):

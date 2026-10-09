@@ -17,6 +17,7 @@ PANEL = "#14131F"  # sidebar and top bar
 SURFACE = "#1B1929"  # cards
 RAISED = "#232036"  # inputs, hovered rows
 LINE = "#2E2B45"  # borders
+EDGE = "#66618F"  # input edges: 3:1 against cards, so fields are findable
 TEXT = "#EDEAF7"
 MUTED = "#B4B0CC"
 LILAC = "#B69CFF"  # anime and primary actions
@@ -86,6 +87,9 @@ def apply(app: QApplication) -> None:
     app.setStyleSheet(STYLESHEET)
 
 
+CHEVRON_UP = (ASSETS / "chevron-up.svg").as_posix()
+CHEVRON_DOWN = (ASSETS / "chevron-down.svg").as_posix()
+
 STYLESHEET = f"""
 QMainWindow, QDialog {{ background: {BG}; }}
 QWidget {{ color: {TEXT}; }}
@@ -111,27 +115,57 @@ QLabel[role="section"] {{ color: {MUTED}; font-size: 12px; font-weight: 700;
 QPushButton[role="link"] {{ background: transparent; border: none; color: {LILAC};
                             padding: 4px 0; font-weight: 700; }}
 QPushButton[role="link"]:hover {{ color: #C7B3FF; text-decoration: underline; }}
+QPushButton[role="link"]:focus {{ color: #C7B3FF; text-decoration: underline; }}
 QPushButton[role="link"]:disabled {{ color: {MUTED}; }}
 
 QPushButton {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: 18px;
                padding: 8px 16px; min-height: 20px; }}
 QPushButton:hover {{ border-color: {LILAC}; }}
-QPushButton:disabled {{ color: {MUTED}; border-color: {SURFACE}; }}
+QPushButton:focus {{ border-color: {LILAC}; background: {RAISED}; }}
+QPushButton:disabled {{ color: {MUTED}; border-color: {RAISED}; }}
 QPushButton[role="primary"] {{ background: {LILAC}; color: {ON_ACCENT}; border: none;
                                font-weight: 700; }}
 QPushButton[role="primary"]:hover {{ background: #C7B3FF; }}
+QPushButton[role="primary"]:focus {{ border: 2px solid {TEXT}; padding: 6px 14px; }}
 QPushButton[role="primary"]:disabled {{ background: {RAISED}; color: {MUTED}; }}
 QPushButton[role="danger"] {{ background: transparent; color: {DANGER}; border-color: {DANGER}; }}
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {{
-    background: {RAISED}; border: 1px solid {LINE}; border-radius: 8px; padding: 6px 8px;
+    background: {RAISED}; border: 1px solid {EDGE}; border-radius: 8px; padding: 6px 8px;
     selection-background-color: {LILAC}; selection-color: {ON_ACCENT}; }}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{ border-color: {LILAC}; }}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus,
+QPlainTextEdit:focus {{ border-color: {LILAC}; }}
+QSpinBox, QDoubleSpinBox {{ padding-left: 8px; padding-right: 24px; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{
+    subcontrol-origin: border; subcontrol-position: top right; width: 22px;
+    border: none; border-left: 1px solid {LINE}; border-top-right-radius: 8px; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border; subcontrol-position: bottom right; width: 22px;
+    border: none; border-left: 1px solid {LINE}; border-bottom-right-radius: 8px; }}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{ background: {LINE}; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image: url("{CHEVRON_UP}");
+                                                width: 10px; height: 10px; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url("{CHEVRON_DOWN}");
+                                                    width: 10px; height: 10px; }}
+QComboBox {{ padding-right: 28px; }}
+QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 26px;
+                        border: none; border-left: 1px solid {LINE}; }}
+QComboBox::down-arrow {{ image: url("{CHEVRON_DOWN}"); width: 10px; height: 10px; }}
 QComboBox QAbstractItemView {{ background: {SURFACE}; border: 1px solid {LINE};
                                selection-background-color: {RAISED}; selection-color: {TEXT}; }}
 QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px;
-                        border: 1px solid {LINE}; background: {RAISED}; }}
+                        border: 1px solid {EDGE}; background: {RAISED}; }}
 QCheckBox::indicator:checked {{ background: {LILAC}; border-color: {LILAC}; }}
+QCheckBox:focus {{ color: {LILAC}; }}
+QCheckBox::indicator:focus {{ border: 2px solid {TEXT}; }}
+
+QFrame[role="strip"] {{ background: {PANEL}; border: 1px solid {LINE}; border-radius: 12px; }}
+QFrame#StatusDot {{ background: {MUTED}; border-radius: 4px; }}
+QFrame#StatusDot[state="running"] {{ background: {LILAC}; }}
+QFrame#StatusDot[state="ok"] {{ background: {GOOD}; }}
+QFrame#StatusDot[state="error"] {{ background: {DANGER}; }}
+QLabel[role="caption"] {{ color: {MUTED}; font-size: 12px; }}
 
 QProgressBar {{ background: {RAISED}; border: none; border-radius: 4px; height: 8px;
                 text-align: center; color: transparent; }}

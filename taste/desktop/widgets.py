@@ -1,4 +1,4 @@
-"""Small reusable widgets: cards, stat tiles, the bar chart, and the report table model."""
+"""Small reusable widgets: cards, stat tiles, charts, and the report table model."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from taste.desktop import theme
@@ -30,6 +30,17 @@ def heading(text: str, size: int = 26) -> QLabel:
     return widget
 
 
+def section(text: str) -> QLabel:
+    """A small spaced-out card title. Shown in capitals; the text itself stays as written."""
+    widget = label(text, role="section")
+    font = QFont(theme.BODY_FAMILY)
+    font.setPixelSize(12)
+    font.setWeight(QFont.Weight.Bold)
+    font.setCapitalization(QFont.Capitalization.AllUppercase)
+    widget.setFont(font)
+    return widget
+
+
 class Card(QFrame):
     """A rounded surface panel."""
 
@@ -41,24 +52,18 @@ class Card(QFrame):
         self.body.setSpacing(8)
 
 
-class StatTile(Card):
-    def __init__(self, caption: str, color: str = theme.LILAC) -> None:
-        super().__init__()
-        self.value = label("0", role="big")
-        self.value.setStyleSheet(f"color: {color};")
-        self.body.addWidget(self.value)
-        self.body.addWidget(label(caption, role="muted"))
-
-    def set_value(self, value: int) -> None:
-        self.value.setText(f"{value:,}")
-
-
 class BarChart(QWidget):
     """Plain vertical bars with a few axis labels. Painted directly, no chart library."""
 
-    def __init__(self, color: str = theme.CORAL, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        color: str = theme.CORAL,
+        parent: QWidget | None = None,
+        empty_text: str = "No plays yet",
+    ) -> None:
         super().__init__(parent)
         self.color = QColor(color)
+        self.empty_text = empty_text
         self.values: list[float] = []
         self.labels: list[str] = []
         self.setMinimumHeight(140)
@@ -79,7 +84,7 @@ class BarChart(QWidget):
         n = len(self.values)
         if n == 0 or chart_h <= 0:
             painter.setPen(QColor(theme.MUTED))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No plays yet")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_text)
             return
         top = max(self.values) or 1
         gap = 3
@@ -92,9 +97,54 @@ class BarChart(QWidget):
             painter.drawRoundedRect(QRectF(x, chart_h - h, bar_w, h), 3, 3)
         painter.setPen(QColor(theme.MUTED))
         step = max(n // 6, 1)
+        # A label for every bar sits under its bar; sparser labels start at theirs.
+        align = Qt.AlignmentFlag.AlignHCenter if step == 1 else Qt.AlignmentFlag.AlignLeft
         for i in range(0, n, step):
             x = i * (bar_w + gap)
-            painter.drawText(QRectF(x, chart_h + 4, bar_w * step, label_h), self.labels[i])
+            painter.drawText(QRectF(x, chart_h + 4, bar_w * step, label_h), align, self.labels[i])
+
+
+class LeanBar(QWidget):
+    """One horizontal bar from a zero line: negative goes left, positive right.
+
+    Bars in a group share `low` and `high` (the group's range, including 0), so zero
+    sits where the data needs it: at the right edge when every value is negative.
+    """
+
+    MARGIN = 2
+
+    def __init__(self, value: float, low: float, high: float, color: str = theme.LILAC) -> None:
+        super().__init__()
+        self.value = value
+        self.low = min(low, 0.0)
+        self.high = max(high, 0.0)
+        self.color = QColor(color)
+        self.setMinimumWidth(60)
+        self.setFixedHeight(14)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _x(self, value: float) -> float:
+        usable = self.width() - 2 * self.MARGIN
+        return self.MARGIN + (value - self.low) / (self.high - self.low) * usable
+
+    def bar_rect(self) -> QRectF:
+        if self.high == self.low:
+            return QRectF()
+        zero, end = self._x(0.0), self._x(self.value)
+        return QRectF(min(zero, end), 3, abs(end - zero), self.height() - 6)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.high == self.low:
+            return
+        zero = self._x(0.0)
+        painter.fillRect(QRectF(zero - 0.5, 0, 1, self.height()), QColor(theme.LINE))
+        rect = self.bar_rect()
+        if rect.width() >= 1:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.color)
+            painter.drawRoundedRect(rect, 4, 4)
 
 
 class RowsModel(QAbstractTableModel):

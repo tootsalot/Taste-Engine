@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from taste import enrich, recommend, runner, settings
-from taste.db import transaction, unix_to_utc
+from taste.db import transaction
 from taste.http_client import HttpClient
 from taste.recommend import GENRE_SHRINK, TasteModel, build_model
 from taste.secrets_store import SecretStore
@@ -290,7 +290,9 @@ def test_rediscover_window(conn, music_world):
     # was played 10 days ago; Seed One and Seed Two are current.
     assert [r.title for r in rediscover] == ["Example Old Favorite"]
     old = rediscover[0]
-    assert old.subtitle == f"20 plays, last {unix_to_utc(NOW - 400 * DAY)[:10]}"
+    # The play count is already the card's big number and its reason; the subtitle says when.
+    last = datetime.fromtimestamp(NOW - 400 * DAY, timezone.utc)
+    assert old.subtitle == f"Last played {last:%b} {last.day}, {last.year}"
     # Artist art: the cover of their most-played album.
     assert old.image_url == "https://lastfm.freetls.fastly.net/i/u/300x300/olddays.png"
 
