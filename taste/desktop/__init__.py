@@ -44,11 +44,13 @@ def listen_for_others(name: str, on_show: Callable[[], None]) -> QLocalServer:
     server.listen(name)
 
     def accept() -> None:
-        connection = server.nextPendingConnection()
-        if connection is None:
-            return
-        connection.readyRead.connect(lambda: on_show())
-        connection.disconnected.connect(connection.deleteLater)
+        # The connection itself is the signal. Waiting for its bytes is unreliable on
+        # Windows named pipes: they can arrive before readyRead is connected, and then
+        # readyRead never fires.
+        while (connection := server.nextPendingConnection()) is not None:
+            connection.disconnected.connect(connection.deleteLater)
+            connection.disconnectFromServer()
+            on_show()
 
     server.newConnection.connect(accept)
     return server
