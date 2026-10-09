@@ -1,0 +1,47 @@
+{
+ "recenttracks": {
+  "track": [
+   {
+    "artist": {"mbid": "00000000-0000-4000-8000-00000000a002", "#text": "Night Driver"},
+    "streamable": "0",
+    "image": [],
+    "mbid": "",
+    "album": {"mbid": "", "#text": "After Hours Drive"},
+    "name": "Slow Fade",
+    "@attr": {"nowplaying": "true"},
+    "url": "https://www.last.fm/music/Night Driver/_/Slow+Fade"
+   },
+   {
+    "artist": {"mbid": "00000000-0000-4000-8000-00000000a001", "#text": "The Example Band"},
+    "streamable": "0",
+    "image": [],
+    "mbid": "00000000-0000-4000-8000-00000000b001",
+    "album": {"mbid": "00000000-0000-4000-8000-00000000c001", "#text": "First Light"},
+    "name": "Signal",
+    "url": "https://www.last.fm/music/The+Example+Band/_/Signal",
+    "date": {"uts": "1791400300", "#text": "07 Oct 2026, 19:11"}
+   },
+   {
+    "artist": {"mbid": "00000000-0000-4000-8000-00000000a001", "#text": "The Example Band"},
+    "streamable": "0",
+    "image": [],
+    "mbid": "",
+    "album": {"mbid": "00000000-0000-4000-8000-00000000c001", "#text": "First Light"},
+    "name": "Static",
+    "url": "https://www.last.fm/music/The+Example+Band/_/Static",
+    "date": {"uts": "1791400200", "#text": "07 Oct 2026, 19:10"}
+   },
+   {
+    "artist": {"mbid": "00000000-0000-4000-8000-00000000a002", "#text": "Night Driver"},
+    "streamable": "0",
+    "image": [],
+    "mbid": "",
+    "album": {"mbid": "", "#text": "After Hours Drive"},
+    "name": "Neon Rain",
+    "url": "https://www.last.fm/music/Night Driver/_/Neon+Rain",
+    "date": {"uts": "1791400100", "#text": "07 Oct 2026, 19:08"}
+   }
+  ],
+  "@attr": {"user": "example_user", "totalPages": "2", "page": "1", "perPage": "3", "total": "5"}
+ }
+}

@@ -1,0 +1,180 @@
+{
+ "data": [
+  {
+   "node": {
+    "id": 10001,
+    "title": "Example Isekai Show",
+    "alternative_titles": {
+     "synonyms": [],
+     "en": "Example Isekai Show (English)",
+     "ja": ""
+    },
+    "media_type": "tv",
+    "num_episodes": 12,
+    "start_season": {
+     "year": 2020,
+     "season": "fall"
+    },
+    "genres": [
+     {
+      "id": 1,
+      "name": "Action"
+     },
+     {
+      "id": 2,
+      "name": "Adventure"
+     },
+     {
+      "id": 62,
+      "name": "Isekai"
+     }
+    ],
+    "studios": [
+     {
+      "id": 20,
+      "name": "Studio Alpha"
+     }
+    ],
+    "mean": 6.52,
+    "num_scoring_users": 169486,
+    "status": "finished_airing",
+    "start_date": "2020-10-02",
+    "end_date": "2020-12-18",
+    "rating": "pg_13",
+    "source": "manga",
+    "average_episode_duration": 1420
+   },
+   "list_status": {
+    "status": "completed",
+    "score": 4,
+    "num_episodes_watched": 12,
+    "is_rewatching": false,
+    "updated_at": "2025-11-03T08:54:27+00:00",
+    "num_times_rewatched": 0,
+    "priority": 0,
+    "rewatch_value": 0,
+    "tags": [],
+    "comments": "",
+    "finish_date": "2021-01-15"
+   }
+  },
+  {
+   "node": {
+    "id": 10002,
+    "title": "Example Unscored Show",
+    "alternative_titles": {
+     "synonyms": [],
+     "en": "Example Unscored Show",
+     "ja": ""
+    },
+    "media_type": "tv",
+    "num_episodes": 64,
+    "start_season": {
+     "year": 2009,
+     "season": "spring"
+    },
+    "genres": [
+     {
+      "id": 1,
+      "name": "Action"
+     },
+     {
+      "id": 2,
+      "name": "Adventure"
+     },
+     {
+      "id": 8,
+      "name": "Drama"
+     }
+    ],
+    "studios": [
+     {
+      "id": 4,
+      "name": "Studio Beta"
+     }
+    ],
+    "mean": 9.1,
+    "num_scoring_users": 2200000,
+    "status": "finished_airing",
+    "start_date": "2009-10-02",
+    "end_date": "2009-12-18",
+    "rating": "pg_13",
+    "source": "manga",
+    "average_episode_duration": 1420
+   },
+   "list_status": {
+    "status": "completed",
+    "score": 0,
+    "num_episodes_watched": 64,
+    "is_rewatching": false,
+    "updated_at": "2025-06-01T12:00:00+00:00",
+    "num_times_rewatched": 0,
+    "priority": 0,
+    "rewatch_value": 0,
+    "tags": [],
+    "comments": ""
+   }
+  },
+  {
+   "node": {
+    "id": 30000,
+    "title": "Example Dropped Show",
+    "alternative_titles": {
+     "synonyms": [],
+     "en": "",
+     "ja": ""
+    },
+    "media_type": "tv",
+    "num_episodes": 24,
+    "start_season": {
+     "year": 2019,
+     "season": "winter"
+    },
+    "genres": [
+     {
+      "id": 1,
+      "name": "Action"
+     },
+     {
+      "id": 4,
+      "name": "Comedy"
+     }
+    ],
+    "studios": [
+     {
+      "id": 10,
+      "name": "Example Studio"
+     },
+     {
+      "id": 11,
+      "name": "Second Studio"
+     }
+    ],
+    "mean": 7.4,
+    "num_scoring_users": 50000,
+    "status": "finished_airing",
+    "start_date": "2019-10-02",
+    "end_date": "2019-12-18",
+    "rating": "pg_13",
+    "source": "manga",
+    "average_episode_duration": 1420
+   },
+   "list_status": {
+    "status": "dropped",
+    "score": 5,
+    "num_episodes_watched": 6,
+    "is_rewatching": false,
+    "updated_at": "2024-02-10T03:00:00+00:00",
+    "num_times_rewatched": 0,
+    "priority": 0,
+    "rewatch_value": 0,
+    "tags": [],
+    "comments": "",
+    "start_date": "2024-01-05"
+   }
+  }
+ ],
+ "paging": {
+  "next": "https://api.myanimelist.net/v2/users/example_user/animelist?offset=3&limit=1000&nsfw=true&fields=list_status%7Bstatus%2Cscore%7D%2Ctitle"
+ }
+}

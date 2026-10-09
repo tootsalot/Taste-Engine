@@ -1,0 +1,30 @@
+# Secrets
+.env
+
+# Local database and anything derived from personal data
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/dumps/
+reports/*.csv
+*.dump.json
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

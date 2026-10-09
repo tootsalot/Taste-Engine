@@ -1,0 +1,27 @@
+{
+ "recenttracks": {
+  "track": [
+   {
+    "artist": {"mbid": "", "#text": "the example band"},
+    "streamable": "0",
+    "image": [],
+    "mbid": "",
+    "album": {"mbid": "", "#text": "First Light"},
+    "name": "signal",
+    "url": "https://www.last.fm/music/the+example+band/_/signal",
+    "date": {"uts": "1791400050", "#text": "07 Oct 2026, 19:07"}
+   },
+   {
+    "artist": {"mbid": "", "#text": "Some Indie Artist"},
+    "streamable": "0",
+    "image": [],
+    "mbid": "",
+    "album": {"mbid": "", "#text": ""},
+    "name": "Untitled Demo",
+    "url": "https://www.last.fm/music/Some+Indie+Artist/_/Untitled+Demo",
+    "date": {"uts": "1791400000", "#text": "07 Oct 2026, 19:06"}
+   }
+  ],
+  "@attr": {"user": "example_user", "totalPages": "2", "page": "2", "perPage": "3", "total": "5"}
+ }
+}
