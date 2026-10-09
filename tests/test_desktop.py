@@ -23,6 +23,11 @@ def api_handler():
     lastfm = FakeLastfm("lastfm_recent_page1.json", "lastfm_recent_page2.json")
 
     def handler(url, params):
+        if "myanimelist" in url and "/anime/" in url:
+            return FakeResponse(404, {"error": "not_found"})  # show details: none in these tests
+        if str(params.get("method", "")).startswith("artist."):
+            empty = {"similarartists": {"artist": []}, "toptags": {"tag": []}}
+            return FakeResponse(200, {**empty, "topalbums": {"album": []}})
         if "myanimelist" in url:
             name = "mal_animelist_page2.json" if "offset=3" in url else "mal_animelist_page1.json"
             return FakeResponse(200, load_fixture(name))

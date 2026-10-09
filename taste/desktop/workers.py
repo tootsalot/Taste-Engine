@@ -20,7 +20,10 @@ class SyncCancelled(Exception):
 
 
 class SyncWorker(QThread):
+    """Sync one source or all. Syncing everything also refreshes recommendations after."""
+
     message = Signal(str)
+    recs_updated = Signal()  # a recommendations list was saved
     done = Signal(dict)  # {source: succeeded}
 
     def __init__(
@@ -30,6 +33,7 @@ class SyncWorker(QThread):
         store: SecretStore,
         client_factory: Any = None,
         sync_kwargs: dict[str, Any] | None = None,
+        recs_kwargs: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.profile_id = profile_id
@@ -37,6 +41,7 @@ class SyncWorker(QThread):
         self.store = store
         self.client_factory = client_factory
         self.sync_kwargs = sync_kwargs or {}
+        self.recs_kwargs = recs_kwargs or {}
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -59,6 +64,8 @@ class SyncWorker(QThread):
             results = runner.sync_sources(
                 conn, self.profile_id, self.source, store=self.store, out=self._out, **kwargs
             )
+            if self.source == "all" and any(results.values()):
+                self._refresh_recommendations(conn)
         except SyncCancelled:
             # The sync code recorded the run as failed with this reason; the next one resumes.
             results = {self.source: False}
@@ -72,6 +79,28 @@ class SyncWorker(QThread):
             if conn is not None:
                 conn.close()
         self.done.emit(results)
+
+    def _refresh_recommendations(self, conn) -> None:
+        """Top up enrichment and recompute. A failure here doesn't undo the sync."""
+        kwargs: dict[str, Any] = dict(self.recs_kwargs)
+        if self.client_factory is not None:
+            kwargs["client_factory"] = self.client_factory
+        try:
+            runner.refresh_recommendations(
+                conn,
+                self.profile_id,
+                store=self.store,
+                out=self._out,
+                on_update=self.recs_updated.emit,
+                **kwargs,
+            )
+        except SyncCancelled:
+            raise
+        except Exception as exc:
+            self.message.emit(
+                f"Recommendations stopped on an unexpected error ({type(exc).__name__})."
+            )
+            traceback.print_exc()
 
 
 class RecsWorker(QThread):

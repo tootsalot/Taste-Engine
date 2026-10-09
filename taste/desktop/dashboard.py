@@ -21,12 +21,13 @@ from taste.desktop.context import AppContext
 from taste.desktop.widgets import Card, StatTile, heading, label
 from taste.desktop.workers import SyncWorker
 
-PAGE_PROGRESS = re.compile(r"page (\d+) of (\d+)")
+PROGRESS = re.compile(r"(\d+) of (\d+)")  # "page 3 of 40", "details for candidates, 10 of 200"
 
 
 class DashboardPage(QWidget):
     sync_started = Signal()
     sync_finished = Signal(dict)
+    recs_updated = Signal()
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -161,8 +162,14 @@ class DashboardPage(QWidget):
         for button in self.sync_buttons.values():
             button.setEnabled(False)
         self.worker = SyncWorker(
-            self.profile_id, source, self.ctx.store, self.ctx.client_factory, self.ctx.sync_kwargs
+            self.profile_id,
+            source,
+            self.ctx.store,
+            self.ctx.client_factory,
+            self.ctx.sync_kwargs,
+            self.ctx.recs_kwargs,
         )
+        self.worker.recs_updated.connect(self.recs_updated)
         self.worker.message.connect(self._on_message)
         self.worker.done.connect(self._on_done)
         self.worker.start()
@@ -170,7 +177,7 @@ class DashboardPage(QWidget):
 
     def _on_message(self, message: str) -> None:
         self.log.appendPlainText(message)
-        match = PAGE_PROGRESS.search(message)
+        match = PROGRESS.search(message)
         if match:
             page, total = int(match.group(1)), int(match.group(2))
             self.progress.setRange(0, total)

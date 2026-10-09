@@ -93,6 +93,8 @@ class MainWindow(QMainWindow):
         outer.addLayout(body, 1)
 
         self.dashboard.sync_finished.connect(lambda _: self.reports.refresh())
+        self.dashboard.sync_finished.connect(lambda _: self.for_you.reload())
+        self.dashboard.recs_updated.connect(self.for_you.reload)
         self.settings.settings_saved.connect(self._after_settings_saved)
         self.settings.profile_deleted.connect(self._after_profile_deleted)
         # A sync and a recommendations refresh never run at the same time: both write

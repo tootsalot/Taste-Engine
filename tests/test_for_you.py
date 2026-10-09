@@ -229,3 +229,27 @@ def test_helpers():
     assert "on 87 of your scored shows" in text
     assert "off by 1.35 points" in text and "alone was off by 1.43" in text
     assert settings.BY_KEY["rec_count"].default == 30
+
+
+def test_sync_everything_also_refreshes_recommendations(window, qtbot):
+    set_up_profile(window)
+    dash = window.dashboard
+    progress = []
+    dash.progress.valueChanged.connect(progress.append)
+    with qtbot.waitSignal(dash.sync_finished, timeout=15000) as blocker:
+        dash.start_sync("all")
+    assert blocker.args[0] == {"mal": True, "lastfm": True}
+    log = dash.log.toPlainText()
+    assert "Recommendations: details for shows you liked, 2 of 2" in log
+    assert "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover." in log
+    assert window.for_you.tabs.tabText(0) == "Anime (4)"  # For You picked them up
+    assert len(cards(window, "anime")) == 4
+    assert progress  # the bar followed the recommendation steps too
+
+
+def test_syncing_one_source_leaves_recommendations_alone(window, qtbot):
+    set_up_profile(window)
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        window.dashboard.start_sync("mal")
+    assert "Recommendations" not in window.dashboard.log.toPlainText()
+    assert window.for_you.updated.text() == "Never refreshed"
