@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
 
-from taste import credentials
+from taste import credentials, raw, settings
 from taste.config import ConfigError
 from taste.http_client import ApiError, HttpClient
 from taste.secrets_store import SecretStore
@@ -54,6 +54,9 @@ def sync_sources(
         except ConfigError as exc:
             out(f"{SOURCE_LABELS[name]}: {exc}")
             results[name] = False
+    pruned = raw.prune(conn, settings.get(conn, "raw_retention_days"))
+    if pruned:
+        out(f"Cleaned up {pruned} old raw API pages.")
     return results
 
 

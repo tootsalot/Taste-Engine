@@ -51,7 +51,7 @@ The Last.fm resume ledger. Each sync fetches a fixed time window `[from_unix, to
 ## Raw
 
 ### `raw_api_pages`
-Every successful API response page, unchanged. This makes re-processing possible without calling the APIs again.
+Every successful API response page, unchanged. Identical repeats aren't stored twice, Last.fm pages with nothing new aren't kept, and pages older than `raw_retention_days` (default 180) are pruned after each sync unless staging points to them or they're the latest copy of their request. This makes re-processing possible without calling the APIs again.
 
 | Column | Type | Description |
 |---|---|---|

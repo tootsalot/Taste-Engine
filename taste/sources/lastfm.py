@@ -28,7 +28,7 @@ from taste import settings as profile_settings
 from taste.config import LastfmSettings
 from taste.db import transaction, unix_to_utc, utc_now
 from taste.http_client import RETRYABLE_HTTP_STATUSES, ApiError, HttpClient
-from taste.raw import store_page
+from taste.raw import discard_if_unused, store_page
 from taste.sync_log import SyncRun
 
 SOURCE = "lastfm"
@@ -215,7 +215,11 @@ def _fetch_window(
                 http_status=response.status,
                 payload=response.data,
             )
-            run.rows_inserted += _insert_scrobbles(conn, scrobbles, raw_id)
+            inserted = _insert_scrobbles(conn, scrobbles, raw_id)
+            if inserted == 0:
+                # Nothing new (usually a lookback page): don't keep a copy of it.
+                discard_if_unused(conn, raw_id)
+            run.rows_inserted += inserted
             run.pages_fetched += 1
             run.rows_fetched += len(scrobbles)
             if scrobbles:

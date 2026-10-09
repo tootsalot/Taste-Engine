@@ -106,6 +106,16 @@ SETTINGS: list[Setting] = [
     Setting("top_n_per_year", "Top N, per year", "int", 25, minimum=1, maximum=1000),
     Setting("top_n_per_month", "Top N, per month", "int", 10, minimum=1, maximum=1000),
     Setting(
+        "raw_retention_days",
+        "Keep raw API pages for (days)",
+        "int",
+        180,
+        "Older raw pages are pruned after each sync, except the latest copy of each "
+        "request and anything still in use. 0 keeps everything.",
+        minimum=0,
+        maximum=3650,
+    ),
+    Setting(
         "lastfm_lookback_days",
         "Last.fm lookback days",
         "int",
