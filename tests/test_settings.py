@@ -26,11 +26,50 @@ def test_defaults_exist_for_every_setting(conn):
         ("lastfm_lookback_days", "400", "at most 365"),
         ("display_name", "x" * 201, "too long"),
         ("not_a_setting", "1", "Unknown setting"),
+        ("rec_media_types", "tv,tvv", "Unknown anime type: tvv"),
+        ("rec_media_types", " , ", "at least one"),
     ],
 )
 def test_validation_errors(conn, key, raw, message):
     with pytest.raises(SettingError, match=message):
         settings.set_value(conn, key, raw)
+
+
+def test_anime_types_are_stored_tidy_in_a_fixed_order(conn):
+    # A typo used to slip through as free text and quietly filter out every show.
+    assert settings.set_value(conn, "rec_media_types", "Movie, tv") == "tv,movie"
+    assert settings.set_value(conn, "rec_media_types", ["ova", "tv", "ova"]) == "tv,ova"
+    assert settings.get(conn, "rec_media_types") == "tv,ova"
+    assert set(settings.BY_KEY["rec_media_types"].choices) == {
+        "tv",
+        "movie",
+        "ona",
+        "ova",
+        "special",
+        "tv_special",
+        "music",
+    }
+
+
+def test_every_setting_belongs_to_a_group_in_display_order():
+    assert [s.group for s in settings.SETTINGS] == sorted(
+        (s.group for s in settings.SETTINGS), key=settings.GROUPS.index
+    )
+    by_group = {g: [s.key for s in settings.SETTINGS if s.group == g] for g in settings.GROUPS}
+    assert by_group["Recommendations"] == [
+        "rec_count",
+        "rec_min_raters",
+        "rec_media_types",
+        "rec_include_plan_to_watch",
+        "rec_seed_artists",
+    ]
+    assert settings.GROUPS == [
+        "Profile",
+        "Last.fm",
+        "Reports",
+        "Recommendations",
+        "Syncing and storage",
+    ]
 
 
 def test_values_round_trip_with_types(conn):

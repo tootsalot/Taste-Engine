@@ -28,12 +28,13 @@ from taste import __version__, profiles, settings
 from taste.config import data_dir
 from taste.desktop.context import AppContext
 from taste.desktop.dialogs import ConfirmDeleteDialog
-from taste.desktop.widgets import Card, heading, label
+from taste.desktop.widgets import Card, heading, label, section
 from taste.desktop.workers import ConnectionTestWorker
 from taste.secrets_store import KEY_LABELS, KEY_NAMES, SecretStoreError
 from taste.settings import SettingError
 
 KEY_SOURCES = {"MAL_CLIENT_ID": "mal", "LASTFM_API_KEY": "lastfm"}
+LABEL_WIDTH = 290
 CREDITS = (
     "Built with Python and Qt for Python (PySide6, used under the LGPL 3.0), plus requests, "
     "keyring, python-dotenv, and tzdata. Fonts: Space Grotesk and Inter (SIL Open Font "
@@ -120,19 +121,32 @@ class SettingsPage(QWidget):
         keys.body.addWidget(self.key_message)
         layout.addWidget(keys)
 
-        # Profile settings, generated from the registry
+        # Profile settings, generated from the registry, one heading per group
         form_card = Card()
         form_card.body.addWidget(heading("Profile settings", 18))
-        form = QFormLayout()
-        form.setVerticalSpacing(10)
         self.inputs: dict[str, QWidget] = {}
-        for field in settings.SETTINGS:
-            widget = self._input_for(field)
-            if field.help:
-                widget.setToolTip(field.help)
-            self.inputs[field.key] = widget
-            form.addRow(field.label, widget)
-        form_card.body.addLayout(form)
+        self.headings: list[str] = []
+        self.group_of: dict[str, str] = {}
+        for group in settings.GROUPS:
+            fields = [f for f in settings.SETTINGS if f.group == group]
+            if not fields:
+                continue
+            title = section(group)
+            title.setContentsMargins(0, 10 if self.headings else 2, 0, 0)
+            form_card.body.addWidget(title)
+            self.headings.append(group)
+            form = QFormLayout()
+            form.setVerticalSpacing(10)
+            for field in fields:
+                widget = self._input_for(field)
+                if field.help:
+                    widget.setToolTip(field.help)
+                self.inputs[field.key] = widget
+                self.group_of[field.key] = group
+                name = label(field.label, wrap=True)
+                name.setFixedWidth(LABEL_WIDTH)  # one label column across all groups
+                form.addRow(name, widget)
+            form_card.body.addLayout(form)
         save_row = QHBoxLayout()
         self.save_button = QPushButton("Save settings")
         self.save_button.setProperty("role", "primary")
@@ -200,6 +214,8 @@ class SettingsPage(QWidget):
             for value, text in (field.choices or {}).items():
                 combo.addItem(text, value)
             return combo
+        if field.kind == "multichoice":
+            return ChoiceBoxes(field.choices or {})
         if field.kind == "timezone":
             combo = QComboBox()
             combo.setEditable(True)
@@ -238,7 +254,9 @@ class SettingsPage(QWidget):
 
     @staticmethod
     def _set_input(widget: QWidget, field: settings.Setting, value) -> None:
-        if isinstance(widget, QCheckBox):
+        if isinstance(widget, ChoiceBoxes):
+            widget.set_value(value)
+        elif isinstance(widget, QCheckBox):
             widget.setChecked(bool(value))
         elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
             widget.setValue(value)
@@ -251,6 +269,8 @@ class SettingsPage(QWidget):
 
     @staticmethod
     def _read_input(widget: QWidget):
+        if isinstance(widget, ChoiceBoxes):
+            return widget.value()
         if isinstance(widget, QCheckBox):
             return widget.isChecked()
         if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
@@ -291,7 +311,8 @@ class SettingsPage(QWidget):
             for field in settings.SETTINGS:
                 value = self._read_input(self.inputs[field.key])
                 try:
-                    if value != settings.get(conn, field.key):
+                    # Compare in stored form: ticked boxes are a list, the stored value text.
+                    if settings.validate(field.key, value) != settings.get(conn, field.key):
                         settings.set_value(conn, field.key, value)
                         changed.append(field.key)
                 except SettingError as exc:
@@ -366,6 +387,30 @@ class SettingsPage(QWidget):
         profiles.delete(deleted, store=self.ctx.store)
         self.profile_deleted.emit(deleted)
         return True
+
+
+class ChoiceBoxes(QWidget):
+    """A checkbox per choice, four to a row. The value is the ticked keys, in order."""
+
+    def __init__(self, choices: dict[str, str]) -> None:
+        super().__init__()
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 4, 0, 4)
+        grid.setHorizontalSpacing(18)
+        self.boxes: dict[str, QCheckBox] = {}
+        for i, (key, text) in enumerate(choices.items()):
+            box = QCheckBox(text)
+            self.boxes[key] = box
+            grid.addWidget(box, i // 4, i % 4)
+        grid.setColumnStretch(4, 1)
+
+    def set_value(self, stored: str) -> None:
+        picked = {part.strip().lower() for part in stored.split(",")}
+        for key, box in self.boxes.items():
+            box.setChecked(key in picked)
+
+    def value(self) -> list[str]:
+        return [key for key, box in self.boxes.items() if box.isChecked()]
 
 
 def notices_path() -> Path | None:

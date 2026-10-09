@@ -4,7 +4,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmapCache
 
-from taste import settings
+from taste import recommend, settings
 from taste.desktop.context import AppContext
 from taste.desktop.for_you import accuracy_text, safe_link, score_text
 from taste.desktop.main_window import PAGES, MainWindow
@@ -199,6 +199,44 @@ def test_changing_a_rec_setting_recomputes_without_the_network(window, qtbot):
     window.settings.inputs["top_n_all_time"].setValue(40)
     assert window.settings.save_settings()
     assert not page.is_refreshing()
+
+
+def test_rec_settings_sit_under_their_own_heading(window):
+    window.new_profile(("me", "Me"))
+    page = window.settings
+    assert page.headings == settings.GROUPS
+    assert all(key in page.inputs for key in recommend.REC_SETTINGS)
+    rec_keys = [k for k in recommend.REC_SETTINGS if k.startswith("rec_")]
+    assert {page.group_of[k] for k in rec_keys} == {"Recommendations"}
+    types = page.inputs["rec_media_types"]
+    assert [box.text() for box in types.boxes.values()] == [
+        "TV",
+        "Movie",
+        "ONA",
+        "OVA",
+        "Special",
+        "TV special",
+        "Music",
+    ]
+    assert types.value() == ["tv", "movie", "ona", "ova"]  # the default
+
+
+def test_unticking_an_anime_type_saves_and_recomputes(window, qtbot):
+    synced(window, qtbot)
+    refreshed(window, qtbot)
+    page = window.for_you
+    window.settings.inputs["rec_media_types"].boxes["movie"].setChecked(False)
+    with qtbot.waitSignal(page.refresh_finished, timeout=15000):
+        assert window.settings.save_settings()
+    conn = window.ctx.connect("me")
+    assert settings.get(conn, "rec_media_types") == "tv,ona,ova"
+    conn.close()
+
+    # Unticking everything is refused instead of quietly emptying the anime list.
+    for box in window.settings.inputs["rec_media_types"].boxes.values():
+        box.setChecked(False)
+    assert not window.settings.save_settings()
+    assert "at least one" in window.settings.settings_message.text()
 
 
 def test_sync_blocks_refresh(window, qtbot):

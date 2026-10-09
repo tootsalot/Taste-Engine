@@ -1,7 +1,7 @@
 """Per-profile settings, stored in each profile's app_settings table.
 
-One registry defines every setting's type, default, and validation, so the web
-settings page, the CLI, and the report views all agree.
+One registry defines every setting's type, default, validation, and group, so
+the Settings page, the CLI, and the report views all agree.
 """
 
 from __future__ import annotations
@@ -43,17 +43,32 @@ STANDARD_SCOPE_NOTES = {
 }
 
 
+ANIME_TYPES = {
+    "tv": "TV",
+    "movie": "Movie",
+    "ona": "ONA",
+    "ova": "OVA",
+    "special": "Special",
+    "tv_special": "TV special",
+    "music": "Music",
+}
+
+# Headings on the Settings page, in order. Every setting names one.
+GROUPS = ["Profile", "Last.fm", "Reports", "Recommendations", "Syncing and storage"]
+
+
 @dataclass(frozen=True)
 class Setting:
     key: str
     label: str
-    kind: str  # text, int, float, bool, choice, timezone
+    kind: str  # text, int, float, bool, choice, multichoice, timezone
     default: Any
     help: str = ""
     choices: dict[str, str] | None = None
     minimum: float | None = None
     maximum: float | None = None
     max_length: int = 200
+    group: str = "Profile"
 
 
 SETTINGS: list[Setting] = [
@@ -67,6 +82,7 @@ SETTINGS: list[Setting] = [
         "America/Phoenix",
         "Used for hour of day, weekday, month, and year in the Last.fm reports.",
     ),
+    Setting("include_nsfw", "Include NSFW anime", "bool", True, "Sends nsfw=true to MAL."),
     Setting(
         "lastfm_capture_scope",
         "Which devices scrobble to Last.fm?",
@@ -74,6 +90,7 @@ SETTINGS: list[Setting] = [
         "unknown",
         "Applies to scrobbles synced from now on. Earlier plays keep their label.",
         choices=CAPTURE_SCOPES,
+        group="Last.fm",
     ),
     Setting(
         "lastfm_scope_note",
@@ -82,8 +99,8 @@ SETTINGS: list[Setting] = [
         "",
         "Printed on every Last.fm report. Blank uses a standard note for the scope above.",
         max_length=500,
+        group="Last.fm",
     ),
-    Setting("include_nsfw", "Include NSFW anime", "bool", True, "Sends nsfw=true to MAL."),
     Setting(
         "genre_min_sample",
         "Genre minimum sample",
@@ -92,6 +109,7 @@ SETTINGS: list[Setting] = [
         "Genres with fewer scored shows are left out of the genre report.",
         minimum=1,
         maximum=1000,
+        group="Reports",
     ),
     Setting(
         "in_line_threshold",
@@ -101,11 +119,26 @@ SETTINGS: list[Setting] = [
         "How close to the community average (in MAL points) counts as in line.",
         minimum=0,
         maximum=9,
+        group="Reports",
     ),
-    Setting("top_n_all_time", "Top N, all time", "int", 50, minimum=1, maximum=1000),
-    Setting("top_n_per_year", "Top N, per year", "int", 25, minimum=1, maximum=1000),
-    Setting("top_n_per_month", "Top N, per month", "int", 10, minimum=1, maximum=1000),
-    Setting("rec_count", "Recommendations per list", "int", 30, minimum=5, maximum=200),
+    Setting(
+        "top_n_all_time", "Top N, all time", "int", 50, minimum=1, maximum=1000, group="Reports"
+    ),
+    Setting(
+        "top_n_per_year", "Top N, per year", "int", 25, minimum=1, maximum=1000, group="Reports"
+    ),
+    Setting(
+        "top_n_per_month", "Top N, per month", "int", 10, minimum=1, maximum=1000, group="Reports"
+    ),
+    Setting(
+        "rec_count",
+        "Recommendations per list",
+        "int",
+        30,
+        minimum=5,
+        maximum=200,
+        group="Recommendations",
+    ),
     Setting(
         "rec_min_raters",
         "Minimum MAL raters for anime suggestions",
@@ -114,13 +147,16 @@ SETTINGS: list[Setting] = [
         "Leaves out obscure shows whose community score rests on few people.",
         minimum=0,
         maximum=5_000_000,
+        group="Recommendations",
     ),
     Setting(
         "rec_media_types",
         "Anime types to suggest",
-        "text",
+        "multichoice",
         "tv,movie,ona,ova",
-        "Comma separated: tv, movie, ona, ova, special, tv_special, music.",
+        "Only these kinds of shows are suggested.",
+        choices=ANIME_TYPES,
+        group="Recommendations",
     ),
     Setting(
         "rec_include_plan_to_watch",
@@ -128,6 +164,7 @@ SETTINGS: list[Setting] = [
         "bool",
         True,
         "Ranks shows already on your Plan to Watch alongside new ones, labeled.",
+        group="Recommendations",
     ),
     Setting(
         "rec_seed_artists",
@@ -137,6 +174,17 @@ SETTINGS: list[Setting] = [
         "Your most played artists over the last year, recent plays counting more.",
         minimum=5,
         maximum=200,
+        group="Recommendations",
+    ),
+    Setting(
+        "lastfm_lookback_days",
+        "Last.fm lookback days",
+        "int",
+        14,
+        "How far back each incremental sync re-checks for late scrobbles.",
+        minimum=0,
+        maximum=365,
+        group="Syncing and storage",
     ),
     Setting(
         "raw_retention_days",
@@ -147,15 +195,7 @@ SETTINGS: list[Setting] = [
         "request and anything still in use. 0 keeps everything.",
         minimum=0,
         maximum=3650,
-    ),
-    Setting(
-        "lastfm_lookback_days",
-        "Last.fm lookback days",
-        "int",
-        14,
-        "How far back each incremental sync re-checks for late scrobbles.",
-        minimum=0,
-        maximum=365,
+        group="Syncing and storage",
     ),
 ]
 BY_KEY = {s.key: s for s in SETTINGS}
@@ -186,6 +226,8 @@ def validate(key: str, raw: Any) -> Any:
         if isinstance(raw, bool):
             return raw
         return str(raw).strip().lower() in {"1", "true", "on", "yes"}
+    if setting.kind == "multichoice":
+        return _validate_multichoice(setting, raw)
     text = str(raw).strip()
     if setting.kind in ("int", "float"):
         try:
@@ -210,6 +252,19 @@ def validate(key: str, raw: Any) -> Any:
     if len(text) > setting.max_length:
         raise SettingError(f"{setting.label} is too long (max {setting.max_length}).")
     return text
+
+
+def _validate_multichoice(setting: Setting, raw: Any) -> str:
+    """A list or comma-separated text. Stored comma-separated, in the choices' order."""
+    parts = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    picked = {str(p).strip().lower() for p in parts if str(p).strip()}
+    choices = setting.choices or {}
+    unknown = sorted(picked - set(choices))
+    if unknown:
+        raise SettingError(f"Unknown anime type: {', '.join(unknown)}.")
+    if not picked:
+        raise SettingError(f"{setting.label}: pick at least one.")
+    return ",".join(key for key in choices if key in picked)
 
 
 def ensure_defaults(conn: sqlite3.Connection) -> None:
