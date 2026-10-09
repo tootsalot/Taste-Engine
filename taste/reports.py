@@ -58,21 +58,26 @@ REPORTS = [
 ]
 
 
+def write_csv(conn: sqlite3.Connection, report: Report, path: Path) -> int:
+    """Write one report view to `path`. Returns the row count."""
+    cursor = conn.execute(f"SELECT * FROM {report.view} ORDER BY {report.order_by}")
+    columns = [d[0] for d in cursor.description]
+    rows = cursor.fetchall()
+    # utf-8-sig so Excel on Windows shows Japanese titles correctly.
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(columns)
+        writer.writerows(tuple(row) for row in rows)
+    return len(rows)
+
+
 def write_csvs(conn: sqlite3.Connection, out_dir: Path) -> list[tuple[Path, int]]:
     """Write one CSV per report view. Returns (path, row count) for each."""
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for report in REPORTS:
-        cursor = conn.execute(f"SELECT * FROM {report.view} ORDER BY {report.order_by}")
-        columns = [d[0] for d in cursor.description]
-        rows = cursor.fetchall()
         path = out_dir / report.csv_name
-        # utf-8-sig so Excel on Windows shows Japanese titles correctly.
-        with path.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(columns)
-            writer.writerows(tuple(row) for row in rows)
-        written.append((path, len(rows)))
+        written.append((path, write_csv(conn, report, path)))
     return written
 
 

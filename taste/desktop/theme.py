@@ -155,6 +155,17 @@ QPushButton[role="primary"]:hover {{ background: #C7B3FF; }}
 QPushButton[role="primary"]:focus {{ border: 2px solid {TEXT}; padding: 6px 14px; }}
 QPushButton[role="primary"]:disabled {{ background: {RAISED}; color: {MUTED}; }}
 QPushButton[role="danger"] {{ background: transparent; color: {DANGER}; border-color: {DANGER}; }}
+QToolButton#ExportButton {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: 18px;
+                            padding: 8px 32px 8px 16px; min-height: 20px; }}
+QToolButton#ExportButton:hover {{ border-color: {LILAC}; }}
+QToolButton#ExportButton:focus, QToolButton#ExportButton:open {{
+    border-color: {LILAC}; background: {RAISED}; }}
+QToolButton#ExportButton::menu-indicator {{ image: url("{CHEVRON_DOWN}"); width: 10px; height: 10px;
+    subcontrol-origin: padding; subcontrol-position: center right; right: 14px; }}
+QMenu {{ background: {SURFACE}; border: 1px solid {LINE}; padding: 6px 0; }}
+QMenu::item {{ padding: 6px 20px; }}
+QMenu::item:selected {{ background: {RAISED}; color: {TEXT}; }}
+QMenu::separator {{ height: 1px; background: {LINE}; margin: 4px 12px; }}
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {{
     background: {RAISED}; border: 1px solid {EDGE}; border-radius: 8px; padding: 6px 8px;
@@ -200,12 +211,6 @@ QProgressBar::chunk {{ background: {CORAL}; border-radius: 4px; }}
 QTabWidget::pane {{ border: 1px solid {LINE}; border-radius: 10px; top: -1px; }}
 QTabBar::tab {{ background: transparent; color: {MUTED}; padding: 8px 14px; margin-right: 2px; }}
 QTabBar::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {LILAC}; }}
-
-QTableView {{ background: {SURFACE}; alternate-background-color: #1F1D2F; border: none;
-              gridline-color: {LINE}; selection-background-color: {RAISED};
-              selection-color: {TEXT}; }}
-QHeaderView::section {{ background: {PANEL}; color: {MUTED}; border: none;
-                        border-bottom: 1px solid {LINE}; padding: 6px 8px; font-weight: 700; }}
 
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px 2px 4px 0; border: none; }}
 QScrollBar::handle:vertical {{ background: {LINE}; border-radius: 3px; min-height: 32px;

@@ -4,7 +4,7 @@ import csv
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit
+from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QTableView
 
 from taste import profiles, settings
 from taste.desktop import listen_for_others, notify_running_instance
@@ -208,19 +208,29 @@ def test_full_sync_updates_dashboard_and_reports(window, qtbot):
     assert dash.critic_value.text() == "-1.64"
 
     reports_page = window.reports
-    assert "3 scored shows" in reports_page.summary.text()
+    # Charts only: the raw numbers live in the CSV exports, not in tables on screen.
+    assert reports_page.findChildren(QTableView) == []
+    assert [t.value.text() for t in reports_page.tiles] == [
+        "3",
+        "-1.64",
+        "5",
+        reports_page.tiles[3].value.text(),
+    ]
+    assert sorted(reports_page.scatter.points) == [(6.52, 4.0), (7.4, 5.0), (8.0, 8.0)]
     assert "Desktop listening only" in reports_page.scope.text()
-    assert reports_page.tabs.count() == 12
     assert sum(reports_page.hour_chart.values) == 5
+    assert reports_page.hour_card.note.text() == "In your time zone, America/Phoenix."
+    assert reports_page.top_artists.rows()[0] == ("the example band", "3")
+    menu = [a.text() for a in reports_page.export_menu.actions() if not a.isSeparator()]
+    assert menu[0] == "All reports…" and len(menu) == 1 + 12
 
 
-def test_export_current_and_all(window, qtbot, tmp_path):
+def test_export_one_and_all(window, qtbot, tmp_path):
     set_up_profile(window)
     with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
         window.dashboard.start_sync("all")
     page = window.reports
-    page.tabs.setCurrentIndex(page.tabs.count() - 2)  # plays by hour
-    path = page.export_current(str(tmp_path / "hour.csv"))
+    path = page.export_report("rpt_lastfm_by_hour", str(tmp_path / "hour.csv"))
     with open(path, encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.reader(handle))
     assert rows[0][:3] == ["local_hour", "plays", "pct_of_plays"]
@@ -271,7 +281,7 @@ def test_labels_never_render_html(window):
     window.new_profile(("me", "<b>bold</b> <img src=x>"))
     assert window.dashboard.title.textFormat() == Qt.TextFormat.PlainText
     assert window.dashboard.title.text() == "<b>bold</b> <img src=x>"
-    assert window.reports.summary.textFormat() == Qt.TextFormat.PlainText
+    assert window.reports.scope.textFormat() == Qt.TextFormat.PlainText
 
 
 def test_smoke_test_report(qapp, tmp_path):

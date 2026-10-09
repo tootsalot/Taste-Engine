@@ -13,7 +13,6 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QPlainTextEdit,
     QProgressBar,
@@ -28,7 +27,7 @@ from taste import local_time, overview, settings
 from taste.desktop import theme
 from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import BarChart, Card, LeanBar, heading, label, section
+from taste.desktop.widgets import BarChart, Card, GenreCard, heading, label, section
 from taste.desktop.workers import SyncWorker
 
 PROGRESS = re.compile(r"(\d+) of (\d+)")  # "page 3 of 40", "details for candidates, 10 of 200"
@@ -197,67 +196,6 @@ class Shelf(Card):
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         super().resizeEvent(event)
         self._fit()
-
-
-class GenreCard(Card):
-    """Most generous and harshest genres against the MAL community, as bars from zero."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.body.setSpacing(6)
-        self.body.addWidget(section("Genres vs the MAL crowd"))
-        self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(10)
-        self.grid.setVerticalSpacing(3)
-        self.grid.setColumnStretch(1, 1)
-        self.body.addLayout(self.grid)
-        self.empty = label("", role="muted", wrap=True)
-        self.body.addWidget(self.empty)
-        self.body.addStretch()
-        self._rows: dict[str, list[tuple[str, str]]] = {"generous": [], "harsh": []}
-
-    def rows(self, kind: str) -> list[tuple[str, str]]:
-        """(genre, value text) as shown, for tests."""
-        return list(self._rows[kind])
-
-    def set_genres(
-        self, generous: list[overview.GenreLean], harsh: list[overview.GenreLean], empty: str
-    ) -> None:
-        while self.grid.count():
-            widget = self.grid.takeAt(0).widget()
-            if widget is not None:
-                widget.deleteLater()
-        self._rows = {"generous": [], "harsh": []}
-        values = [g.avg_diff for g in generous + harsh]
-        low, high = min(values, default=0.0), max(values, default=0.0)
-        line = 0
-        for kind, title, genres in (
-            ("generous", "Most generous", generous),
-            ("harsh", "Harshest", harsh),
-        ):
-            if not genres:
-                continue
-            self.grid.addWidget(label(title, role="muted"), line, 0, 1, 3)
-            line += 1
-            for g in genres:
-                value = f"{g.avg_diff:+.2f}"
-                tip = (
-                    f"{g.genre}: you average {g.my_avg_score:.2f}, the MAL community "
-                    f"{g.community_avg_score:.2f}, across {g.shows_scored} scored shows."
-                )
-                name = label(g.genre)
-                name.setFixedWidth(120)
-                bar = LeanBar(g.avg_diff, low, high)
-                number = label(value)
-                number.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                number.setFixedWidth(48)
-                for column, widget in enumerate((name, bar, number)):
-                    widget.setToolTip(tip)
-                    self.grid.addWidget(widget, line, column)
-                self._rows[kind].append((g.genre, value))
-                line += 1
-        self.empty.setText(empty)
-        self.empty.setVisible(not (generous or harsh))
 
 
 class DashboardPage(QWidget):

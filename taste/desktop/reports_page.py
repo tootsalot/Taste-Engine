@@ -1,28 +1,65 @@
-"""Reports: summary, listening charts, every report as a sortable table, CSV export."""
+"""Reports: charts only. The numbers behind them are one click away as CSV files.
+
+The data comes from taste.charts (Qt-free); this page only lays it out. Every
+report view can be exported, one at a time or all at once, from the Export menu.
+"""
 
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt
 from PySide6.QtWidgets import (
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
-    QPushButton,
+    QMenu,
     QScrollArea,
-    QTableView,
-    QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from taste import reports
+from taste import charts, reports
 from taste.desktop import theme
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import BarChart, Card, RowsModel, heading, label
+from taste.desktop.widgets import (
+    BarChart,
+    Card,
+    GenreCard,
+    RankList,
+    ScatterChart,
+    heading,
+    label,
+    section,
+)
 
-HIDDEN_COLUMNS = {"data_scope", "item_id"}
+DROP_LABELS = [f"{i * 10}%" for i in range(10)]
+
+
+class StatTile(Card):
+    def __init__(self) -> None:
+        super().__init__()
+        self.value = label("-")
+        self.value.setFont(theme.number_font(26))
+        self.body.addWidget(self.value)
+        self.caption = label("", role="muted")
+        self.body.addWidget(self.caption)
+
+    def set(self, tile: charts.Tile) -> None:
+        self.value.setText(tile.value)
+        self.caption.setText(tile.caption)
+        color = theme.LILAC if tile.kind == "anime" else theme.CORAL
+        self.value.setStyleSheet(f"color: {color};")
+
+
+def chart_card(title: str, chart: QWidget, note: str = "") -> Card:
+    card = Card()
+    card.body.addWidget(section(title))
+    card.note = label(note, role="muted", wrap=True)
+    card.note.setVisible(bool(note))
+    card.body.addWidget(card.note)
+    card.body.addWidget(chart, 1)
+    return card
 
 
 class ReportsPage(QWidget):
@@ -30,7 +67,6 @@ class ReportsPage(QWidget):
         super().__init__()
         self.ctx = ctx
         self.profile_id: str | None = None
-        self.tables: dict[str, tuple[list[str], list[tuple]]] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -41,57 +77,96 @@ class ReportsPage(QWidget):
         body = QWidget()
         scroll.setWidget(body)
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(28, 20, 28, 24)
+        layout.setSpacing(12)
 
         top = QHBoxLayout()
         top.addWidget(heading("Reports", 28))
         top.addStretch()
-        self.export_one = QPushButton("Export this report")
-        self.export_one.clicked.connect(lambda: self.export_current())
-        self.export_all_button = QPushButton("Export all as CSV")
-        self.export_all_button.setProperty("role", "primary")
-        self.export_all_button.clicked.connect(lambda: self.export_all())
-        top.addWidget(self.export_one)
-        top.addWidget(self.export_all_button)
+        self.export_button = QToolButton()
+        self.export_button.setText("Export CSV")
+        self.export_button.setObjectName("ExportButton")
+        self.export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.export_menu = QMenu(self.export_button)
+        self.export_menu.addAction("All reports…", lambda: self.export_all())
+        self.export_menu.addSeparator()
+        for report in reports.REPORTS:
+            self.export_menu.addAction(
+                f"{report.title}…", lambda v=report.view: self.export_report(v)
+            )
+        self.export_button.setMenu(self.export_menu)
+        top.addWidget(self.export_button)
         layout.addLayout(top)
 
-        self.summary = label("", wrap=True)
-        self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        summary_card = Card()
-        summary_card.body.addWidget(self.summary)
-        layout.addWidget(summary_card)
+        tiles = QHBoxLayout()
+        tiles.setSpacing(12)
+        self.tiles = [StatTile() for _ in range(4)]
+        for tile in self.tiles:
+            tiles.addWidget(tile)
+        layout.addLayout(tiles)
 
-        charts = QHBoxLayout()
-        charts.setSpacing(12)
-        self.hour_card, self.hour_chart = self._chart_card("Plays by hour")
-        self.day_card, self.day_chart = self._chart_card("Plays by day of week")
-        charts.addWidget(self.hour_card, 3)
-        charts.addWidget(self.day_card, 2)
-        layout.addLayout(charts)
+        # Anime
+        layout.addWidget(section("Anime"))
+        anime = QGridLayout()
+        anime.setSpacing(12)
+        self.scatter = ScatterChart()
+        anime.addWidget(
+            chart_card("Your score vs MAL", self.scatter, "One dot per scored show. On the "
+                       "line, you agree with MAL; below it, you scored lower."),
+            0,
+            0,
+        )  # fmt: skip
+        self.drop_chart = BarChart(theme.LILAC, empty_text="No dropped shows")
+        self.drop_chart.setMinimumHeight(200)
+        anime.addWidget(
+            chart_card("Where you drop shows", self.drop_chart,
+                       "How far into a show you were when you dropped it."),
+            0,
+            1,
+        )  # fmt: skip
+        self.genres = GenreCard()
+        anime.addWidget(self.genres, 1, 0, 1, 2)
+        anime.setColumnStretch(0, 1)
+        anime.setColumnStretch(1, 1)
+        layout.addLayout(anime)
+
+        # Music
+        layout.addWidget(section("Music"))
         self.scope = label("", role="scope", wrap=True)
         layout.addWidget(self.scope)
+        music = QGridLayout()
+        music.setSpacing(12)
+        self.month_chart = BarChart(theme.CORAL)
+        self.month_chart.setMinimumHeight(170)
+        music.addWidget(chart_card("Plays per month", self.month_chart), 0, 0, 1, 2)
+        self.top_artists = RankList(empty_text="No plays yet")
+        music.addWidget(chart_card("Top artists", self.top_artists), 1, 0)
+        self.top_tracks = RankList(empty_text="No plays yet")
+        music.addWidget(chart_card("Top tracks", self.top_tracks), 1, 1)
+        self.hour_chart = BarChart(theme.CORAL)
+        self.hour_card = chart_card("Plays by hour", self.hour_chart, "In your time zone.")
+        music.addWidget(self.hour_card, 2, 0)
+        self.day_chart = BarChart(theme.CORAL)
+        music.addWidget(
+            chart_card(
+                "Plays by day of week", self.day_chart, "Days start at midnight, your time."
+            ),
+            2,
+            1,
+        )
+        music.setColumnStretch(0, 1)
+        music.setColumnStretch(1, 1)
+        layout.addLayout(music)
 
-        self.tabs = QTabWidget()
-        self.tabs.setMinimumHeight(420)
-        self.tabs.setUsesScrollButtons(True)
-        layout.addWidget(self.tabs, 1)
         self.status = label("", role="muted")
         layout.addWidget(self.status)
-
-    def _chart_card(self, title: str) -> tuple[Card, BarChart]:
-        card = Card()
-        title_label = label(title, role="muted")
-        chart = BarChart(theme.CORAL)
-        card.body.addWidget(title_label)
-        card.body.addWidget(chart)
-        card.title_label = title_label
-        return card, chart
+        layout.addStretch(1)
 
     # -- data ---------------------------------------------------------------
 
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
+        self.status.setText("")
         self.refresh()
 
     def refresh(self) -> None:
@@ -99,60 +174,41 @@ class ReportsPage(QWidget):
             return
         conn = self.ctx.connect(self.profile_id)
         try:
-            # The CLI indents detail lines; the card doesn't need that.
-            self.summary.setText("\n".join(line.strip() for line in reports.summary_lines(conn)))
-            hours = conn.execute(
-                "SELECT local_hour, plays FROM rpt_lastfm_by_hour ORDER BY local_hour"
-            ).fetchall()
-            days = conn.execute(
-                "SELECT weekday, plays FROM rpt_lastfm_by_weekday ORDER BY local_weekday_num"
-            ).fetchall()
-            scope = conn.execute("SELECT * FROM rpt_lastfm_scope").fetchone()
-            tz_name = conn.execute("SELECT timezone FROM rpt_settings").fetchone()[0]
-            self.tables = {}
-            for report in reports.REPORTS:
-                cursor = conn.execute(f"SELECT * FROM {report.view} ORDER BY {report.order_by}")
-                self.tables[report.view] = (
-                    [d[0] for d in cursor.description],
-                    [tuple(r) for r in cursor.fetchall()],
-                )
+            data = charts.load(conn)
         finally:
             conn.close()
 
-        hour_labels = [f"{h % 12 or 12}{'a' if h < 12 else 'p'}" for h, _ in hours]
-        self.hour_chart.set_data([p for _, p in hours], hour_labels)
-        self.day_chart.set_data([p for _, p in days], [d[:3] for d, _ in days])
-        self.hour_card.title_label.setText(f"Plays by hour ({tz_name})")
-        mixed = scope["capture_scopes"] == "mixed"
-        self.scope.setText(
-            f"Last.fm: {scope['data_scope']}"
-            + (" Plays were captured under more than one scope setting." if mixed else "")
+        for tile, value in zip(self.tiles, data.tiles, strict=True):
+            tile.set(value)
+        self.scatter.set_points(data.scatter)
+        if any(data.drops):
+            self.drop_chart.set_data(data.drops, DROP_LABELS)
+        else:
+            self.drop_chart.set_data([], [])
+        self.genres.set_genres(
+            data.generous,
+            data.harsh,
+            "Sync MyAnimeList to see which genres you rate above or below the crowd.",
         )
-
-        current = self.tabs.currentIndex()
-        self.tabs.clear()
-        for report in reports.REPORTS:
-            columns, rows = self.tables[report.view]
-            self.tabs.addTab(self._table(columns, rows), report.title)
-        self.tabs.setCurrentIndex(max(current, 0))
-
-    def _table(self, columns: list[str], rows: list[tuple]) -> QTableView:
-        view = QTableView()
-        model = RowsModel(columns, rows)
-        proxy = QSortFilterProxyModel(view)
-        proxy.setSourceModel(model)
-        view.setModel(proxy)
-        view.setSortingEnabled(True)
-        view.sortByColumn(-1, Qt.SortOrder.AscendingOrder)  # keep the report's own order
-        view.setAlternatingRowColors(True)
-        view.verticalHeader().setVisible(False)
-        view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
-        view.horizontalHeader().setStretchLastSection(True)
-        for i, column in enumerate(columns):
-            if column in HIDDEN_COLUMNS:
-                view.setColumnHidden(i, True)
-        view.resizeColumnsToContents()
-        return view
+        mixed = (
+            " Plays were captured under more than one scope setting." if data.mixed_scopes else ""
+        )
+        self.scope.setText(f"Last.fm: {data.scope_note}{mixed}")
+        self.month_chart.set_data(
+            [p for _, p in data.months], [month_label(m) for m, _ in data.months]
+        )
+        self.top_artists.set_rows(data.top_artists)
+        self.top_tracks.set_rows(
+            [(track, plays) for track, _, plays in data.top_tracks],
+            tips=[f"{track} by {artist}" for track, artist, _ in data.top_tracks],
+        )
+        hour_labels = [f"{h % 12 or 12}{'a' if h < 12 else 'p'}" for h in range(24)]
+        self.hour_chart.set_data(data.hours if any(data.hours) else [], hour_labels)
+        self.day_chart.set_data(
+            [p for _, p in data.weekdays] if any(p for _, p in data.weekdays) else [],
+            [d for d, _ in data.weekdays],
+        )
+        self.hour_card.note.setText(f"In your time zone, {data.tz_name}.")
 
     # -- export -------------------------------------------------------------
 
@@ -163,19 +219,19 @@ class ReportsPage(QWidget):
     def _ask_folder(self) -> str:
         return QFileDialog.getExistingDirectory(self, "Export all reports to")
 
-    def export_current(self, path: str | None = None) -> Path | None:
-        if not self.tables:
+    def export_report(self, view: str, path: str | None = None) -> Path | None:
+        """One report view as CSV. `path` skips the file dialog (tests)."""
+        if not self.profile_id:
             return None
-        report = reports.REPORTS[self.tabs.currentIndex()]
+        report = next(r for r in reports.REPORTS if r.view == view)
         target = path or self._ask_file(f"{self.profile_id}-{report.csv_name}")
         if not target:
             return None
-        columns, rows = self.tables[report.view]
-        # utf-8-sig so Excel shows non-English titles correctly.
-        with open(target, "w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(columns)
-            writer.writerows(rows)
+        conn = self.ctx.connect(self.profile_id)
+        try:
+            reports.write_csv(conn, report, Path(target))
+        finally:
+            conn.close()
         self.status.setText(f"Saved {target}")
         return Path(target)
 
@@ -193,3 +249,11 @@ class ReportsPage(QWidget):
             conn.close()
         self.status.setText(f"Saved {len(written)} CSV files to {out}")
         return out
+
+
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def month_label(month: str) -> str:
+    """'2026-10' as 'Oct 26'."""
+    return f"{MONTH_NAMES[int(month[5:7]) - 1]} {month[2:4]}"
