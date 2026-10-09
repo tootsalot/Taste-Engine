@@ -117,7 +117,7 @@ class DashboardPage(QWidget):
             for source, label_text in (("mal", "MyAnimeList"), ("lastfm", "Last.fm")):
                 row = conn.execute(
                     "SELECT ended_at FROM sync_runs WHERE source = ? AND status = 'success' "
-                    "ORDER BY sync_run_id DESC LIMIT 1",
+                    "AND mode <> 'enrich' ORDER BY sync_run_id DESC LIMIT 1",
                     (source,),
                 ).fetchone()
                 lines.append(f"{label_text}: {row[0] + ' UTC' if row else 'never synced'}")

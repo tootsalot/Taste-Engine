@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from statistics import mean
 from typing import Any
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote_plus
 
 from taste import enrich, settings
 from taste.db import unix_to_utc, utc_now
@@ -262,6 +262,10 @@ def _genre_reasons(model: TasteModel, genres: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def lastfm_artist_url(name: str) -> str:
+    return f"https://www.last.fm/music/{quote_plus(name)}"
+
+
 def _artist_cover(conn: sqlite3.Connection, name: str) -> str | None:
     """Cover of the artist's most-played album or EP (decision Q1)."""
     row = conn.execute(
@@ -335,7 +339,7 @@ def music_recommendations(
                 subtitle=f"Similar to {len(seeds_for)} {plural} you play",
                 score=round(scores[key], 3),
                 image_url=_artist_cover(conn, names[key]),
-                url=f"https://www.last.fm/music/{quote_plus(names[key])}",
+                url=lastfm_artist_url(names[key]),
                 reasons=reasons,
             )
         )
@@ -354,7 +358,7 @@ def music_recommendations(
                 subtitle=f"{plays} plays, last {unix_to_utc(last)[:10]}",
                 score=float(plays),
                 image_url=_artist_cover(conn, name),
-                url=f"https://www.last.fm/music/{quote(name)}",
+                url=lastfm_artist_url(name),
                 reasons=[
                     f"You played {name} {plays} times, but not in the last "
                     f"{REDISCOVER_QUIET_DAYS} days."

@@ -27,11 +27,13 @@ def status_lines(conn: sqlite3.Connection) -> list[str]:
     for source in conn.execute("SELECT source, scope_note FROM core_sources ORDER BY source"):
         name = source["source"]
         last = conn.execute(
-            "SELECT * FROM sync_runs WHERE source = ? ORDER BY sync_run_id DESC LIMIT 1", (name,)
+            "SELECT * FROM sync_runs WHERE source = ? AND mode <> 'enrich' "
+            "ORDER BY sync_run_id DESC LIMIT 1",
+            (name,),
         ).fetchone()
         last_ok = conn.execute(
             "SELECT * FROM sync_runs WHERE source = ? AND status = 'success' "
-            "ORDER BY sync_run_id DESC LIMIT 1",
+            "AND mode <> 'enrich' ORDER BY sync_run_id DESC LIMIT 1",
             (name,),
         ).fetchone()
         lines.append(f"  {name}")

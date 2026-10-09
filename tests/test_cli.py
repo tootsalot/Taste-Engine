@@ -65,3 +65,15 @@ def test_legacy_database_is_migrated(capsys):
     conn = profiles.open_profile("default")
     assert settings.get(conn, "lastfm_capture_scope") == "desktop_only"
     conn.close()
+
+
+def test_status_ignores_enrichment_runs(tmp_path):
+    conn = connect(tmp_path / "enrich.db")
+    from taste.sync_log import SyncRun
+
+    SyncRun(conn, "mal", "full").finish("success")
+    SyncRun(conn, "mal", "enrich").finish("failed", "MAL HTTP 503")
+    lines = "\n".join(cli.status_lines(conn))
+    conn.close()
+    assert "last success" in lines and "(full," in lines
+    assert "enrich" not in lines and "503" not in lines

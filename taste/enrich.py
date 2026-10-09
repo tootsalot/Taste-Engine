@@ -41,10 +41,15 @@ RELATED_KINDS = {
     "full_story",
 }
 HALF_LIFE_DAYS = 90  # a play from 90 days ago counts half as much as one today
+ARTIST_NOT_FOUND = 6  # Last.fm error code
 
 
 def _cutoff(now: datetime) -> str:
     return (now - timedelta(days=REFRESH_DAYS)).strftime(TIMESTAMP_FORMAT)
+
+
+def _stamp(now: datetime) -> str:
+    return now.strftime(TIMESTAMP_FORMAT)
 
 
 def refresh_slice(total: int) -> int:
@@ -150,10 +155,16 @@ def _minimal_item(conn: sqlite3.Connection, node: dict[str, Any]) -> int:
     return item_id
 
 
-def save_details(conn: sqlite3.Connection, data: dict[str, Any], raw_id: int | None) -> None:
+def save_details(
+    conn: sqlite3.Connection,
+    data: dict[str, Any],
+    raw_id: int | None,
+    fetched_at: str | None = None,
+) -> None:
     """Load one details response into staging and core."""
     anime_id = data["id"]
-    mal.upsert_stg_anime(conn, data, raw_id, utc_now())
+    fetched_at = fetched_at or utc_now()
+    mal.upsert_stg_anime(conn, data, raw_id, fetched_at)
     conn.execute("DELETE FROM stg_mal_anime_recommendations WHERE mal_anime_id = ?", (anime_id,))
     for rec in data.get("recommendations") or []:
         node = rec["node"]
@@ -175,7 +186,7 @@ def save_details(conn: sqlite3.Connection, data: dict[str, Any], raw_id: int | N
         "INSERT INTO stg_mal_anime_details (mal_anime_id, fetched_at, raw_page_id) "
         "VALUES (?, ?, ?) ON CONFLICT (mal_anime_id) DO UPDATE SET "
         "fetched_at = excluded.fetched_at, raw_page_id = excluded.raw_page_id",
-        (anime_id, utc_now(), raw_id),
+        (anime_id, fetched_at, raw_id),
     )
 
     item_id = mal.load_anime_core(conn, anime_id)
@@ -206,6 +217,7 @@ def _fetch_details(
     ids: list[int],
     label: str,
     out: Callable[[str], None],
+    now: datetime,
 ) -> int:
     fields = {"fields": MAL_DETAIL_FIELDS}
     for i, anime_id in enumerate(ids, 1):
@@ -222,7 +234,7 @@ def _fetch_details(
                 conn.execute(
                     "INSERT INTO stg_mal_anime_details (mal_anime_id, fetched_at) VALUES (?, ?) "
                     "ON CONFLICT (mal_anime_id) DO UPDATE SET fetched_at = excluded.fetched_at",
-                    (anime_id, utc_now()),
+                    (anime_id, _stamp(now)),
                 )
                 continue
             raise
@@ -237,7 +249,7 @@ def _fetch_details(
                 http_status=response.status,
                 payload=response.data,
             )
-            save_details(conn, response.data, raw_id)
+            save_details(conn, response.data, raw_id, _stamp(now))
             run.pages_fetched += 1
             run.rows_fetched += 1
             run.save()
@@ -262,12 +274,12 @@ def enrich_mal(
     try:
         seeds = seed_ids(conn)
         fetched = _fetch_details(
-            conn, client, cfg, run, _needs_details(conn, seeds, now), "shows you liked", out
+            conn, client, cfg, run, _needs_details(conn, seeds, now), "shows you liked", out, now
         )
         support = candidate_support(conn)
         top = sorted(support, key=lambda i: (-support[i], i))[:candidate_limit]
         fetched += _fetch_details(
-            conn, client, cfg, run, _needs_details(conn, top, now), "candidates", out
+            conn, client, cfg, run, _needs_details(conn, top, now), "candidates", out, now
         )
         run.finish("success")
         return fetched
@@ -321,11 +333,11 @@ def _fresh(conn: sqlite3.Connection, key: str, method: str, now: datetime) -> bo
     return row is not None and row[0] >= _cutoff(now)
 
 
-def _mark_fetched(conn: sqlite3.Connection, key: str, method: str) -> None:
+def _mark_fetched(conn: sqlite3.Connection, key: str, method: str, now: datetime) -> None:
     conn.execute(
         "INSERT INTO stg_lastfm_artist_fetches (artist_key, method, fetched_at) VALUES (?, ?, ?) "
         "ON CONFLICT (artist_key, method) DO UPDATE SET fetched_at = excluded.fetched_at",
-        (key, method, utc_now()),
+        (key, method, _stamp(now)),
     )
 
 
@@ -344,9 +356,9 @@ def _lastfm_call(
     try:
         response = client.get_json(lastfm.API_URL, params=params, checker=lastfm.check_error)
     except ApiError as exc:
-        if not exc.retryable and "Last.fm error" in str(exc):
-            return None  # for example error 6, artist not found
-        raise
+        if str(exc).startswith(f"Last.fm error {ARTIST_NOT_FOUND}:"):
+            return None
+        raise  # a bad key or an outage stops the run instead of caching "no data" for a month
     store_page(
         conn,
         sync_run_id=run.run_id,
@@ -407,7 +419,7 @@ def enrich_lastfm(
                             float(a.get("match") or 0),
                         ),
                     )
-                _mark_fetched(conn, key, "artist.getsimilar")
+                _mark_fetched(conn, key, "artist.getsimilar", now)
                 tags = _lastfm_call(conn, client, cfg, run, "artist.gettoptags", name, {})
                 conn.execute("DELETE FROM stg_lastfm_artist_tags WHERE artist_key = ?", (key,))
                 for t in (((tags or {}).get("toptags") or {}).get("tag") or [])[:10]:
@@ -416,7 +428,7 @@ def enrich_lastfm(
                         "VALUES (?, ?, ?) ON CONFLICT (artist_key, tag) DO NOTHING",
                         (key, t["name"].lower(), int(t.get("count") or 0)),
                     )
-                _mark_fetched(conn, key, "artist.gettoptags")
+                _mark_fetched(conn, key, "artist.gettoptags", now)
                 run.rows_fetched += 1
                 run.save()
             fetched += 1
@@ -467,10 +479,18 @@ def fetch_artist_covers(
                     "fetched_at) VALUES (?, ?, ?, ?) ON CONFLICT (artist_key) DO UPDATE SET "
                     "album_name = excluded.album_name, image_url = excluded.image_url, "
                     "fetched_at = excluded.fetched_at",
-                    (key, album.get("name") or "", lastfm.image_url(album.get("image")), utc_now()),
+                    (
+                        key,
+                        album.get("name") or "",
+                        lastfm.image_url(album.get("image")),
+                        _stamp(now),
+                    ),
                 )
             count += 1
         run.finish("success")
     except ApiError as exc:
         run.finish("failed", str(exc))
+    except Exception as exc:
+        run.finish("failed", client.redact(f"{type(exc).__name__}: {exc}"))
+        raise
     return count

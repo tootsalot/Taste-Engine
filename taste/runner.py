@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -110,6 +111,7 @@ def refresh_recommendations(
     out: Callable[[str], None] = print,
     client_factory: ClientFactory = _default_client,
     fetch: bool = True,
+    now: datetime | None = None,
 ) -> dict[str, int]:
     """Fetch what's missing (unless fetch=False), then recompute every list.
 
@@ -120,7 +122,7 @@ def refresh_recommendations(
     if fetch:
         try:
             mal_cfg = credentials.mal(conn, profile_id, store)
-            enrich.enrich_mal(conn, client_factory([mal_cfg.client_id]), mal_cfg, out)
+            enrich.enrich_mal(conn, client_factory([mal_cfg.client_id]), mal_cfg, out, now=now)
         except ConfigError:
             out("Recommendations: skipping MyAnimeList (no key or username).")
         try:
@@ -130,21 +132,22 @@ def refresh_recommendations(
                 client_factory([lastfm_cfg.api_key]),
                 lastfm_cfg,
                 out,
+                now=now,
                 seed_count=settings.get(conn, "rec_seed_artists"),
             )
         except ConfigError:
             out("Recommendations: skipping Last.fm (no key or username).")
     with transaction(conn):
-        counts = recommend.compute_all(conn)
+        counts = recommend.compute_all(conn, now)
     if lastfm_cfg is not None:
         # Covers for suggested artists I've never played, then recompute so they show.
         discover, _, _ = recommend.latest(conn, "music_discover")
         missing = [r.title for r in discover if not r.image_url]
         if missing and enrich.fetch_artist_covers(
-            conn, client_factory([lastfm_cfg.api_key]), lastfm_cfg, missing
+            conn, client_factory([lastfm_cfg.api_key]), lastfm_cfg, missing, now
         ):
             with transaction(conn):
-                counts = recommend.compute_all(conn)
+                counts = recommend.compute_all(conn, now)
     out(
         f"Recommendations ready: {counts['anime']} anime, {counts['music_discover']} new "
         f"artists, {counts['music_rediscover']} to rediscover."
