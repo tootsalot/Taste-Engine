@@ -7,7 +7,14 @@ from PySide6.QtWidgets import QWidget
 
 from taste import recommend, settings
 from taste.desktop.context import AppContext
-from taste.desktop.for_you import RecCard, accuracy_text, chance_text, safe_link, score_text
+from taste.desktop.for_you import (
+    RecCard,
+    accuracy_text,
+    accuracy_tip,
+    chance_text,
+    safe_link,
+    score_text,
+)
 from taste.desktop.main_window import PAGES, MainWindow
 from taste.http_client import HttpClient
 from taste.recommend import Rec
@@ -130,7 +137,9 @@ def test_for_you_is_second_in_the_sidebar(window):
     assert page.updated.text() == "Never refreshed"
     assert page.status.isHidden()  # no empty band between the heading and the tabs
     assert "Sync MyAnimeList, then press Refresh" in page.lists["anime"].empty.text()
-    assert "Accuracy check: not enough scored shows" in page.lists["anime"].note.text()
+    assert page.lists["anime"].note.text() == (
+        "Accuracy: not enough scored shows yet to check (it needs about 25)."
+    )
 
 
 def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
@@ -334,9 +343,12 @@ def test_helpers():
     )
     assert score_text("anime", Rec("anime", "1", "T")) == ("-", "")
     assert chance_text(0.684) == "68% chance you'd give it an 8 or more"
-    text = accuracy_text({"held_out": 87, "community": 1.43, "overall": 1.40, "model": 1.35})
-    assert "on 87 of your scored shows" in text
-    assert "off by 1.35 points" in text and "alone was off by 1.43" in text
+    metrics = {"held_out": 87, "community": 1.43, "overall": 1.40, "model": 1.35}
+    # One line on the page; the full comparison is in its tooltip.
+    assert accuracy_text(metrics) == (
+        "Accuracy: off by 1.35 points on average on 87 shows it hadn't seen (MAL alone: 1.43)."
+    )
+    assert "MAL score plus your usual difference by 1.40" in accuracy_tip(metrics)
     assert settings.BY_KEY["rec_count"].default == 30
 
 

@@ -23,11 +23,11 @@ from taste import charts, reports
 from taste.desktop import theme
 from taste.desktop.context import AppContext
 from taste.desktop.widgets import (
+    BandChart,
     BarChart,
     Card,
     GenreCard,
     RankList,
-    ScatterChart,
     heading,
     label,
     section,
@@ -109,22 +109,23 @@ class ReportsPage(QWidget):
         layout.addWidget(section("Anime"))
         anime = QGridLayout()
         anime.setSpacing(12)
-        self.scatter = ScatterChart()
+        self.scores = BandChart()
         anime.addWidget(
-            chart_card("Your score vs MAL", self.scatter, "One dot per scored show. On the "
-                       "line, you agree with MAL; below it, you scored lower."),
+            chart_card("Your score vs MAL", self.scores, "Your average for shows MAL rates "
+                       "about the same. Bars cover the middle half of your scores."),
             0,
             0,
         )  # fmt: skip
-        self.drop_chart = BarChart(theme.LILAC, empty_text="No dropped shows")
+        self.drop_chart = BarChart(theme.LILAC, empty_text="No dropped shows", value_labels=True)
         self.drop_chart.setMinimumHeight(200)
         anime.addWidget(
             chart_card("Where you drop shows", self.drop_chart,
-                       "How far into a show you were when you dropped it."),
+                       "How far into a show you were when you dropped it. Each bar spans ten "
+                       "points: 20% means 20 to 29% watched."),
             0,
             1,
         )  # fmt: skip
-        self.genres = GenreCard()
+        self.genres = GenreCard(columns=2)
         anime.addWidget(self.genres, 1, 0, 1, 2)
         anime.setColumnStretch(0, 1)
         anime.setColumnStretch(1, 1)
@@ -136,17 +137,17 @@ class ReportsPage(QWidget):
         layout.addWidget(self.scope)
         music = QGridLayout()
         music.setSpacing(12)
-        self.month_chart = BarChart(theme.CORAL)
+        self.month_chart = BarChart(theme.CORAL, scale=True)
         self.month_chart.setMinimumHeight(170)
         music.addWidget(chart_card("Plays per month", self.month_chart), 0, 0, 1, 2)
         self.top_artists = RankList(empty_text="No plays yet")
         music.addWidget(chart_card("Top artists", self.top_artists), 1, 0)
         self.top_tracks = RankList(empty_text="No plays yet")
         music.addWidget(chart_card("Top tracks", self.top_tracks), 1, 1)
-        self.hour_chart = BarChart(theme.CORAL)
+        self.hour_chart = BarChart(theme.CORAL, scale=True)
         self.hour_card = chart_card("Plays by hour", self.hour_chart, "In your time zone.")
         music.addWidget(self.hour_card, 2, 0)
-        self.day_chart = BarChart(theme.CORAL)
+        self.day_chart = BarChart(theme.CORAL, value_labels=True)
         music.addWidget(
             chart_card(
                 "Plays by day of week", self.day_chart, "Days start at midnight, your time."
@@ -174,28 +175,32 @@ class ReportsPage(QWidget):
             return
         conn = self.ctx.connect(self.profile_id)
         try:
-            data = charts.load(conn)
+            data = charts.load(conn, now=self.ctx.now())
         finally:
             conn.close()
 
         for tile, value in zip(self.tiles, data.tiles, strict=True):
             tile.set(value)
-        self.scatter.set_points(data.scatter)
+        self.scores.set_bands(data.bands)
         if any(data.drops):
-            self.drop_chart.set_data(data.drops, DROP_LABELS)
+            self.drop_chart.set_data(data.drops, DROP_LABELS, unit="shows")
         else:
             self.drop_chart.set_data([], [])
         self.genres.set_genres(
             data.generous,
             data.harsh,
             "Sync MyAnimeList to see which genres you rate above or below the crowd.",
+            usual=data.usual,
         )
         mixed = (
             " Plays were captured under more than one scope setting." if data.mixed_scopes else ""
         )
         self.scope.setText(f"Last.fm: {data.scope_note}{mixed}")
         self.month_chart.set_data(
-            [p for _, p in data.months], [month_label(m) for m, _ in data.months]
+            [p for _, p in data.months],
+            [month_label(m) for m, _ in data.months],
+            unit="plays",
+            partial_last=data.partial_month,
         )
         self.top_artists.set_rows(data.top_artists)
         self.top_tracks.set_rows(
@@ -203,10 +208,11 @@ class ReportsPage(QWidget):
             tips=[f"{track} by {artist}" for track, artist, _ in data.top_tracks],
         )
         hour_labels = [f"{h % 12 or 12}{'a' if h < 12 else 'p'}" for h in range(24)]
-        self.hour_chart.set_data(data.hours if any(data.hours) else [], hour_labels)
+        self.hour_chart.set_data(data.hours if any(data.hours) else [], hour_labels, unit="plays")
         self.day_chart.set_data(
             [p for _, p in data.weekdays] if any(p for _, p in data.weekdays) else [],
             [d for d, _ in data.weekdays],
+            unit="plays",
         )
         self.hour_card.note.setText(f"In your time zone, {data.tz_name}.")
 

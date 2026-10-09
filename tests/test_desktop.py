@@ -1,6 +1,7 @@
 """Desktop app tests: real widgets, offscreen Qt, fake HTTP, temp data folder."""
 
 import csv
+from datetime import datetime, timezone
 
 import pytest
 from PySide6.QtCore import Qt
@@ -18,6 +19,7 @@ from tests.test_lastfm_sync import FakeLastfm
 
 MAL_KEY = "fake-mal-client-id-desktop"
 LASTFM_KEY = "fake-lastfm-key-desktop-0123"
+SYNC_NOW = 1791500000  # 2026-10-09, the month the fixture plays fall in
 
 
 def api_handler():
@@ -53,7 +55,8 @@ def window(qtbot):
     ctx = AppContext(
         store=SecretStore(backend=FakeKeyring()),
         client_factory=client_factory,
-        sync_kwargs={"now": lambda: 1791500000},
+        sync_kwargs={"now": lambda: SYNC_NOW},
+        clock=lambda: datetime.fromtimestamp(SYNC_NOW, timezone.utc),
     )
     win = MainWindow(ctx)
     qtbot.addWidget(win)
@@ -216,7 +219,17 @@ def test_full_sync_updates_dashboard_and_reports(window, qtbot):
         "5",
         reports_page.tiles[3].value.text(),
     ]
-    assert sorted(reports_page.scatter.points) == [(6.52, 4.0), (7.4, 5.0), (8.0, 8.0)]
+    # Averages per half point of the MAL mean, not one dot per show.
+    assert [(b.mal_from, b.average) for b in reports_page.scores.bands] == [
+        (6.5, 4.0),
+        (7.0, 5.0),
+        (8.0, 8.0),
+    ]
+    assert reports_page.genres.usual == -1.64  # "your usual" on the genre chart
+    assert len(reports_page.genres.grids) == 2  # the two lists side by side
+    assert reports_page.drop_chart.value_labels and reports_page.day_chart.value_labels
+    assert reports_page.month_chart.scale and reports_page.hour_chart.scale
+    assert reports_page.month_chart.partial_last  # October has only just begun
     assert "Desktop listening only" in reports_page.scope.text()
     assert sum(reports_page.hour_chart.values) == 5
     assert reports_page.hour_card.note.text() == "In your time zone, America/Phoenix."

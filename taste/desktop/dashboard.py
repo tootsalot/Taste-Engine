@@ -27,7 +27,15 @@ from taste import local_time, overview, settings
 from taste.desktop import theme
 from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import BarChart, Card, GenreCard, heading, label, section
+from taste.desktop.widgets import (
+    BarChart,
+    Card,
+    GenreCard,
+    elided_lines,
+    heading,
+    label,
+    section,
+)
 from taste.desktop.workers import SyncWorker
 
 PROGRESS = re.compile(r"(\d+) of (\d+)")  # "page 3 of 40", "details for candidates, 10 of 200"
@@ -140,7 +148,8 @@ class ShelfItem(QWidget):
 
     def set(self, url: str | None, title: str, caption: str, tip: str = "") -> None:
         self.art.set_art(url, title)
-        self.title.setText(title)
+        # Two lines at most, ending in "…" when cut; the tooltip has the whole title.
+        self.title.setText(elided_lines(title, self.title.font(), self.width(), 2))
         self.caption.setText(caption)
         self.setToolTip(tip or f"{title}\n{caption}")
 
@@ -265,7 +274,7 @@ class DashboardPage(QWidget):
         hero.addWidget(critic, 11)
         scores = Card()
         scores.body.addWidget(section("Your scores, 1 to 10"))
-        self.score_chart = BarChart(theme.LILAC, empty_text="No scores yet")
+        self.score_chart = BarChart(theme.LILAC, empty_text="No scores yet", value_labels=True)
         self.score_chart.setMinimumHeight(80)
         scores.body.addWidget(self.score_chart, 1)
         hero.addWidget(scores, 9)
@@ -370,6 +379,7 @@ class DashboardPage(QWidget):
             if not scored
             else f"No genre has {cfg['genre_min_sample']} scored shows yet. The genre minimum "
             "sample in Settings sets how many it takes.",
+            usual=summary["avg_diff"] + 0.0 if summary and summary["shows_scored"] else None,
         )
 
         if not self.is_syncing():

@@ -54,6 +54,7 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     assert dash.critic_value.text() == "-0.28"
     assert dash.counts.text() == "6 on your list · 4 scored · 69 Last.fm plays"
     assert dash.score_chart.values == [0, 0, 0, 0, 1, 0, 1, 1, 1, 0]
+    assert dash.score_chart.value_labels  # each bar shows its count
 
     # The fake list has no finish dates, so all four share the same last edit time.
     assert captions(dash.recent) == [
@@ -73,6 +74,19 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     # Same numbers as the Reports page: against the MAL community.
     assert dash.genres.rows("generous") == [("Action", "+0.40"), ("Drama", "+0.25")]
     assert dash.genres.rows("harsh") == [("Comedy", "-1.25")]
+    assert dash.genres.headings() == ["Furthest above MAL", "Furthest below MAL"]
+    assert dash.genres.usual == -0.28  # the dashed "usual" line
+
+
+def test_long_titles_end_in_an_ellipsis_under_a_poster(window):
+    window.new_profile(("me", "Me"))
+    shelf = window.dashboard.recent
+    long_title = "That Time I Got Reincarnated as a Slime Season 3 Part 2"
+    shelf.set_items([(None, long_title, "You 8 · MAL 8.10", "")], "")
+    item = shelf.items[0]
+    lines = item.title.text().split("\n")
+    assert len(lines) == 2 and lines[1].endswith("…")
+    assert long_title in item.toolTip()  # the whole title is still a hover away
 
 
 def test_the_log_opens_while_syncing_and_folds_away_after(window, qtbot):
@@ -139,6 +153,8 @@ def test_stylesheet_shows_keyboard_focus_and_draws_control_arrows():
         "QComboBox::drop-down",
     ):
         assert rule in theme.STYLESHEET
+    # Qt frames each status bar item, which drew a stray line after the version text.
+    assert "QStatusBar::item { border: none; }" in theme.STYLESHEET
 
 
 def test_scroll_bars_are_thin_with_no_default_groove():

@@ -297,6 +297,7 @@ class ForYouPage(QWidget):
                 self.tabs.setTabText(index, f"{title} ({len(recs)})" if created else title)
                 if kind == "anime":
                     self.lists[kind].note.setText(accuracy_text(metrics))
+                    self.lists[kind].note.setToolTip(accuracy_tip(metrics))
                 newest = max(filter(None, (newest, created)), default=None)
             scope = settings.lastfm_scope_note(conn)
             tz_name = settings.get(conn, "timezone")
@@ -398,15 +399,24 @@ class ForYouPage(QWidget):
 
 
 def accuracy_text(metrics: dict) -> str:
-    """The holdout check, in plain words (recommend.evaluate)."""
+    """The holdout check in one line (recommend.evaluate). accuracy_tip has the rest."""
+    if metrics.get("model") is None:
+        return "Accuracy: not enough scored shows yet to check (it needs about 25)."
+    return (
+        f"Accuracy: off by {metrics['model']:.2f} points on average on {metrics['held_out']} "
+        f"shows it hadn't seen (MAL alone: {metrics['community']:.2f})."
+    )
+
+
+def accuracy_tip(metrics: dict) -> str:
     if metrics.get("model") is None:
         return (
-            "Accuracy check: not enough scored shows yet. It holds back about a fifth of "
-            "your scored shows and needs at least 5 of them, so about 25 scored shows."
+            "The check holds back about a fifth of your scored shows and needs at least 5 "
+            "of them, so about 25 scored shows."
         )
     return (
-        f"Accuracy check: on {metrics['held_out']} of your scored shows the model never saw, "
-        f"its predictions were off by {metrics['model']:.2f} points on average. The MAL score "
-        f"alone was off by {metrics['community']:.2f}, and the MAL score plus your usual "
-        f"difference by {metrics['overall']:.2f}. Lower is better."
+        f"On {metrics['held_out']} of your scored shows the model never saw, its predictions "
+        f"were off by {metrics['model']:.2f} points on average. The MAL score alone was off "
+        f"by {metrics['community']:.2f}, and the MAL score plus your usual difference by "
+        f"{metrics['overall']:.2f}. Lower is better."
     )

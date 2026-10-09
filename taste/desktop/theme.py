@@ -227,6 +227,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 QAbstractScrollArea::corner {{ background: transparent; }}
 
 QStatusBar {{ background: {PANEL}; color: {MUTED}; border-top: 1px solid {LINE}; }}
+QStatusBar::item {{ border: none; }}
 QToolTip {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {LINE}; }}
 QMessageBox {{ background: {BG}; }}
 """

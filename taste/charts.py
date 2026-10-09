@@ -6,13 +6,19 @@ which the page exports as CSV (taste.reports).
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from statistics import mean, quantiles
+from zoneinfo import ZoneInfo
 
 from taste import overview, settings
 
 MONTHS_SHOWN = 24
 TOP_SHOWN = 10
+BAND_WIDTH = 0.5  # MAL mean points per band of the score chart
+MIDDLE_MIN_SHOWS = 4  # fewer than this and a band's middle half says nothing
 
 
 @dataclass(frozen=True)
@@ -22,10 +28,22 @@ class Tile:
     kind: str  # "anime" or "music": which accent color
 
 
+@dataclass(frozen=True)
+class Band:
+    """My scores for shows whose MAL mean falls in [mal_from, mal_to)."""
+
+    mal_from: float
+    mal_to: float
+    shows: int
+    average: float
+    middle: tuple[float, float] | None  # 25th to 75th percentile of my scores
+
+
 @dataclass
 class ReportData:
     tiles: list[Tile]
-    scatter: list[tuple[float, float]]  # (MAL mean, my score) per scored show
+    bands: list[Band]
+    usual: float | None  # my average difference from the MAL mean
     generous: list[overview.GenreLean]
     harsh: list[overview.GenreLean]
     drops: list[int]  # dropped shows by how far in I stopped: 0 to 9%, 10 to 19%, ...
@@ -34,12 +52,30 @@ class ReportData:
     top_tracks: list[tuple[str, str, int]]  # track, artist, plays
     hours: list[int]  # 24, local time
     weekdays: list[tuple[str, int]]  # Sunday first
+    partial_month: bool = False  # the last month is the one in progress
     scope_note: str = ""
     mixed_scopes: bool = False
     tz_name: str = ""
 
 
-def load(conn: sqlite3.Connection) -> ReportData:
+def score_bands(points: list[tuple[float, float]]) -> list[Band]:
+    """(MAL mean, my score) pairs, averaged per BAND_WIDTH of the MAL mean."""
+    groups: dict[float, list[float]] = {}
+    for community, mine in points:
+        start = math.floor(community / BAND_WIDTH) * BAND_WIDTH
+        groups.setdefault(start, []).append(mine)
+    bands = []
+    for start in sorted(groups):
+        scores = groups[start]
+        middle = None
+        if len(scores) >= MIDDLE_MIN_SHOWS:
+            q1, _, q3 = quantiles(scores, n=4, method="inclusive")
+            middle = (round(q1, 2), round(q3, 2))
+        bands.append(Band(start, start + BAND_WIDTH, len(scores), round(mean(scores), 2), middle))
+    return bands
+
+
+def load(conn: sqlite3.Connection, now: datetime | None = None) -> ReportData:
     summary = conn.execute("SELECT * FROM rpt_mal_critic_summary").fetchone()
     scored = summary["shows_scored"] if summary else 0
     plays = conn.execute(
@@ -72,16 +108,25 @@ def load(conn: sqlite3.Connection) -> ReportData:
 
     generous, harsh = overview.genre_lean(conn, n=TOP_SHOWN)
     scope = conn.execute("SELECT * FROM rpt_lastfm_scope").fetchone()
+    tz_name = settings.get(conn, "timezone")
+    months = _months(conn)
+    this_month = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(tz_name))
     return ReportData(
         tiles=tiles,
-        scatter=[
-            (r[0], r[1])
-            for r in conn.execute("SELECT community_mean, my_score FROM rpt_mal_score_vs_community")
-        ],
+        bands=score_bands(
+            [
+                (r[0], r[1])
+                for r in conn.execute(
+                    "SELECT community_mean, my_score FROM rpt_mal_score_vs_community"
+                )
+            ]
+        ),
+        usual=summary["avg_diff"] + 0.0 if scored else None,
         generous=generous,
         harsh=harsh,
         drops=drops,
-        months=_months(conn),
+        months=months,
+        partial_month=bool(months) and months[-1][0] == f"{this_month:%Y-%m}",
         top_artists=[
             (r[0], r[1])
             for r in conn.execute(
@@ -104,7 +149,7 @@ def load(conn: sqlite3.Connection) -> ReportData:
         weekdays=[(d[:3], p) for d, p in weekdays],
         scope_note=settings.lastfm_scope_note(conn),
         mixed_scopes=bool(scope and scope["capture_scopes"] == "mixed"),
-        tz_name=settings.get(conn, "timezone"),
+        tz_name=tz_name,
     )
 
 

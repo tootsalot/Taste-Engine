@@ -5,11 +5,20 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
+from PySide6.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
 
-from taste import overview
+from taste import charts, overview
 from taste.desktop import theme
 
 
@@ -42,6 +51,52 @@ def section(text: str) -> QLabel:
     return widget
 
 
+def elided(text: str, font: QFont, width: int) -> str:
+    """`text` on one line of `width` pixels, ending in an ellipsis if it had to be cut."""
+    return QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, width)
+
+
+def elided_lines(text: str, font: QFont, width: int, lines: int) -> str:
+    """`text` if it fits in `lines` word-wrapped lines of `width`; otherwise cut to fit,
+    with the last line ending in an ellipsis and lines joined by newlines (so a
+    word-wrapping label shows exactly these).
+    """
+    metrics = QFontMetrics(font)
+    wrapped: list[str] = []
+    for word in text.split():
+        trial = f"{wrapped[-1]} {word}" if wrapped else word
+        if wrapped and metrics.horizontalAdvance(trial) <= width:
+            wrapped[-1] = trial
+        else:
+            wrapped.append(word)
+    fits = all(metrics.horizontalAdvance(line) <= width for line in wrapped)
+    if len(wrapped) <= lines and fits:
+        return text
+    if len(wrapped) > lines:
+        wrapped = wrapped[: lines - 1] + [" ".join(wrapped[lines - 1 :])]
+    return "\n".join(elided(line, font, width) for line in wrapped)
+
+
+def small_font(widget: QWidget, size: int = 11) -> QFont:
+    font = QFont(widget.font())
+    font.setPixelSize(size)
+    return font
+
+
+def nice_ticks(top: float) -> list[int]:
+    """Two or three round values up to `top`, for faint scale lines: 250 and 500 for 550."""
+    if top <= 0:
+        return []
+    raw = top / 2
+    magnitude = 10 ** math.floor(math.log10(raw)) if raw >= 1 else 1
+    step = 1
+    for multiple in (1, 2, 2.5, 5, 10):
+        candidate = multiple * magnitude
+        if candidate <= raw and candidate == int(candidate):
+            step = int(candidate)
+    return list(range(step, int(top) + 1, step))
+
+
 class Card(QFrame):
     """A rounded surface panel."""
 
@@ -54,55 +109,145 @@ class Card(QFrame):
 
 
 class BarChart(QWidget):
-    """Plain vertical bars with a few axis labels. Painted directly, no chart library."""
+    """Vertical bars with a few axis labels. Painted directly, no chart library.
+
+    `value_labels` writes each bar's number above it (for short charts); `scale` draws
+    faint lines at round numbers, labeled on the left (for long ones).
+    """
+
+    LABEL_H = 18  # axis labels under the bars
+    VALUE_ROOM = 16  # numbers (or "so far") above the bars
+    SCALE_ROOM = 34  # scale numbers left of the bars
+    GAP = 3
 
     def __init__(
         self,
         color: str = theme.CORAL,
         parent: QWidget | None = None,
         empty_text: str = "No plays yet",
+        *,
+        value_labels: bool = False,
+        scale: bool = False,
     ) -> None:
         super().__init__(parent)
         self.color = QColor(color)
         self.empty_text = empty_text
+        self.value_labels = value_labels
+        self.scale = scale
         self.values: list[float] = []
         self.labels: list[str] = []
+        self.partial_last = False
         self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def set_data(self, values: Sequence[float], labels: Sequence[str]) -> None:
+    def set_data(
+        self,
+        values: Sequence[float],
+        labels: Sequence[str],
+        *,
+        unit: str = "",
+        partial_last: bool = False,
+    ) -> None:
+        """`partial_last`: the last bar is still filling up (this month so far)."""
         self.values = list(values)
         self.labels = list(labels)
-        tips = [f"{lbl}: {v:,.0f}" for lbl, v in zip(self.labels, self.values, strict=False)]
+        self.partial_last = partial_last and bool(self.values)
+        suffix = f" {unit}" if unit else ""
+        tips = [
+            f"{lbl}: {v:,.0f}{suffix}" for lbl, v in zip(self.labels, self.values, strict=False)
+        ]
+        if self.partial_last and tips:
+            tips[-1] += " so far"
         self.setToolTip("\n".join(tips))
         self.update()
+
+    def _plot(self) -> QRectF:
+        left = self.SCALE_ROOM if self.scale else 0
+        top = 8 if self.scale else 0  # room for the top scale number
+        if self.value_labels or self.partial_last:
+            top = self.VALUE_ROOM
+        height = self.height() - self.LABEL_H - 4 - top
+        return QRectF(left, top, max(self.width() - left, 1), max(height, 0))
+
+    def bar_rects(self) -> list[QRectF]:
+        plot = self._plot()
+        n = len(self.values)
+        if n == 0 or plot.height() <= 0:
+            return []
+        top = max(self.values) or 1
+        bar_w = max((plot.width() - self.GAP * (n - 1)) / n, 1)
+        rects = []
+        for i, value in enumerate(self.values):
+            h = max(plot.height() * value / top, 1 if value else 0)
+            rects.append(QRectF(plot.left() + i * (bar_w + self.GAP), plot.bottom() - h, bar_w, h))
+        return rects
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        label_h = 18
-        chart_h = self.height() - label_h - 4
-        n = len(self.values)
-        if n == 0 or chart_h <= 0:
-            painter.setPen(QColor(theme.MUTED))
+        rects = self.bar_rects()
+        muted = QColor(theme.MUTED)
+        if not rects:
+            painter.setPen(muted)
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_text)
             return
+        plot = self._plot()
         top = max(self.values) or 1
-        gap = 3
-        bar_w = max((self.width() - gap * (n - 1)) / n, 1)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self.color)
-        for i, value in enumerate(self.values):
-            h = max(chart_h * value / top, 1 if value else 0)
-            x = i * (bar_w + gap)
-            painter.drawRoundedRect(QRectF(x, chart_h - h, bar_w, h), 3, 3)
-        painter.setPen(QColor(theme.MUTED))
+        painter.setFont(small_font(self))
+        if self.scale:
+            for tick in nice_ticks(top):
+                y = plot.bottom() - plot.height() * tick / top
+                painter.fillRect(QRectF(plot.left(), y, plot.width(), 1), QColor(theme.LINE))
+                painter.setPen(muted)
+                painter.drawText(
+                    QRectF(0, y - 8, self.SCALE_ROOM - 6, 16),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    f"{tick:,}",
+                )
+        last = len(rects) - 1
+        for i, rect in enumerate(rects):
+            if self.partial_last and i == last:
+                faded = QColor(self.color)
+                faded.setAlpha(90)
+                pen = QPen(self.color, 1, Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                painter.setBrush(faded)
+                painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, 0), 3, 3)
+            else:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(self.color)
+                painter.drawRoundedRect(rect, 3, 3)
+        above = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom
+        if self.value_labels:
+            painter.setPen(QColor(theme.TEXT))
+            for rect, value in zip(rects, self.values, strict=True):
+                if value:
+                    painter.drawText(
+                        QRectF(rect.center().x() - 30, rect.top() - 16, 60, 14),
+                        above,
+                        f"{value:,.0f}",
+                    )
+        if self.partial_last:
+            rect = rects[last]
+            painter.setPen(muted)
+            painter.drawText(
+                QRectF(rect.right() - 60, rect.top() - 16, 60, 14),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
+                "so far",
+            )
+        painter.setFont(self.font())
+        painter.setPen(muted)
+        n = len(rects)
         step = max(n // 6, 1)
         # A label for every bar sits under its bar; sparser labels start at theirs.
         align = Qt.AlignmentFlag.AlignHCenter if step == 1 else Qt.AlignmentFlag.AlignLeft
         for i in range(0, n, step):
-            x = i * (bar_w + gap)
-            painter.drawText(QRectF(x, chart_h + 4, bar_w * step, label_h), align, self.labels[i])
+            rect = rects[i]
+            painter.drawText(
+                QRectF(rect.left(), plot.bottom() + 4, rect.width() * step, self.LABEL_H),
+                align,
+                self.labels[i],
+            )
 
 
 class LeanBar(QWidget):
@@ -110,18 +255,27 @@ class LeanBar(QWidget):
 
     Bars in a group share `low` and `high` (the group's range, including 0), so zero
     sits where the data needs it: at the right edge when every value is negative.
+    `usual`, when given, is marked with a dashed line (my usual difference from MAL).
     """
 
     MARGIN = 2
 
-    def __init__(self, value: float, low: float, high: float, color: str = theme.LILAC) -> None:
+    def __init__(
+        self,
+        value: float,
+        low: float,
+        high: float,
+        color: str = theme.LILAC,
+        usual: float | None = None,
+    ) -> None:
         super().__init__()
         self.value = value
-        self.low = min(low, 0.0)
-        self.high = max(high, 0.0)
+        self.usual = usual
+        self.low = min(low, 0.0, usual if usual is not None else 0.0)
+        self.high = max(high, 0.0, usual if usual is not None else 0.0)
         self.color = QColor(color)
         self.setMinimumWidth(60)
-        self.setFixedHeight(14)
+        self.setFixedHeight(16)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def _x(self, value: float) -> float:
@@ -139,8 +293,12 @@ class LeanBar(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self.high == self.low:
             return
-        zero = self._x(0.0)
-        painter.fillRect(QRectF(zero - 0.5, 0, 1, self.height()), QColor(theme.LINE))
+        edge = QColor(theme.EDGE)
+        painter.fillRect(QRectF(self._x(0.0) - 0.5, 0, 1, self.height()), edge)
+        if self.usual is not None:
+            painter.setPen(QPen(edge, 1, Qt.PenStyle.DashLine))
+            x = self._x(self.usual)
+            painter.drawLine(QPointF(x, 0), QPointF(x, self.height()))
         rect = self.bar_rect()
         if rect.width() >= 1:
             painter.setPen(Qt.PenStyle.NoPen)
@@ -148,45 +306,127 @@ class LeanBar(QWidget):
             painter.drawRoundedRect(rect, 4, 4)
 
 
-class GenreCard(Card):
-    """Most generous and harshest genres against the MAL community, as bars from zero."""
+class LeanAxis(LeanBar):
+    """The labels over a column of LeanBars: "MAL" at zero and "usual" at the dashed line."""
 
-    def __init__(self, title: str = "Genres vs the MAL crowd") -> None:
+    def __init__(self, low: float, high: float, usual: float | None = None) -> None:
+        super().__init__(0.0, low, high, usual=usual)
+
+    BOX = 60  # each label's box, in pixels
+
+    def label_boxes(self) -> list[tuple[QRectF, Qt.AlignmentFlag, str]]:
+        """Where "MAL" and "usual" go: on their lines, but never past either edge."""
+        if self.high == self.low:
+            return []
+        labels = [(self._x(0.0), "MAL")]
+        if self.usual is not None:
+            labels.append((self._x(self.usual), "usual"))
+        if len(labels) == 2 and abs(labels[0][0] - labels[1][0]) < 44:
+            # Too close to center both: each label moves to the outer side of its line.
+            (x0, t0), (x1, t1) = sorted(labels)
+            labels = [(x0 - self.BOX / 2, t0), (x1 + self.BOX / 2, t1)]
+        boxes = []
+        for x, text in labels:
+            left = min(max(x - self.BOX / 2, 0), self.width() - self.BOX)
+            # Text keeps to the side of its box nearest its line (zero is often at an edge).
+            offset = x - left
+            if offset < self.BOX / 4:
+                align = Qt.AlignmentFlag.AlignLeft
+            elif offset > self.BOX * 3 / 4:
+                align = Qt.AlignmentFlag.AlignRight
+            else:
+                align = Qt.AlignmentFlag.AlignHCenter
+            boxes.append((QRectF(left, 0, self.BOX, 16), align, text))
+        return boxes
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        painter = QPainter(self)
+        painter.setFont(small_font(self))
+        painter.setPen(QColor(theme.MUTED))
+        for box, align, text in self.label_boxes():
+            painter.drawText(box, align | Qt.AlignmentFlag.AlignVCenter, text)
+
+
+def lean_heading(kind: str, genres: list[overview.GenreLean]) -> str:
+    """Headings that match the numbers: a harsh critic's "generous" end may still be below MAL."""
+    values = [g.avg_diff for g in genres]
+    if kind == "generous":
+        return "Furthest above MAL" if all(v > 0 for v in values) else "Closest to MAL"
+    return "Furthest below MAL" if all(v < 0 for v in values) else "Lowest against MAL"
+
+
+class GenreCard(Card):
+    """Genres against the MAL community: bars from a MAL line, with my usual marked.
+
+    One column stacks the two lists (the Dashboard); two put them side by side.
+    """
+
+    NAME_W = 130
+
+    def __init__(self, title: str = "Genres vs the MAL crowd", columns: int = 1) -> None:
         super().__init__()
         self.body.setSpacing(6)
         self.body.addWidget(section(title))
-        self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(10)
-        self.grid.setVerticalSpacing(3)
-        self.grid.setColumnStretch(1, 1)
-        self.body.addLayout(self.grid)
+        self.note = label("", role="muted", wrap=True)
+        self.body.addWidget(self.note)
+        self.note.setVisible(False)
+        row = QHBoxLayout()
+        row.setSpacing(32)
+        self.grids: list[QGridLayout] = []
+        for _ in range(columns):
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(3)
+            grid.setColumnStretch(1, 1)
+            row.addLayout(grid, 1)
+            self.grids.append(grid)
+        self.body.addLayout(row)
         self.empty = label("", role="muted", wrap=True)
         self.body.addWidget(self.empty)
         self.body.addStretch()
         self._rows: dict[str, list[tuple[str, str]]] = {"generous": [], "harsh": []}
+        self._headings: list[str] = []
+        self.scale = (0.0, 0.0)
+        self.usual: float | None = None
 
     def rows(self, kind: str) -> list[tuple[str, str]]:
         """(genre, value text) as shown, for tests."""
         return list(self._rows[kind])
 
+    def headings(self) -> list[str]:
+        return list(self._headings)
+
     def set_genres(
-        self, generous: list[overview.GenreLean], harsh: list[overview.GenreLean], empty: str
+        self,
+        generous: list[overview.GenreLean],
+        harsh: list[overview.GenreLean],
+        empty: str,
+        usual: float | None = None,
     ) -> None:
-        while self.grid.count():
-            widget = self.grid.takeAt(0).widget()
-            if widget is not None:
-                widget.deleteLater()
+        for grid in self.grids:
+            while grid.count():
+                widget = grid.takeAt(0).widget()
+                if widget is not None:
+                    widget.deleteLater()
         self._rows = {"generous": [], "harsh": []}
-        values = [g.avg_diff for g in generous + harsh]
-        low, high = min(values, default=0.0), max(values, default=0.0)
-        line = 0
-        for kind, title, genres in (
-            ("generous", "Most generous", generous),
-            ("harsh", "Harshest", harsh),
-        ):
-            if not genres:
-                continue
-            self.grid.addWidget(label(title, role="muted"), line, 0, 1, 3)
+        self._headings = []
+        self.usual = usual
+        ends = [g.avg_diff for g in generous + harsh] + [0.0]
+        if usual is not None:
+            ends.append(usual)
+        low, high = min(ends), max(ends)
+        self.scale = (low, high)
+        lines = [0] * len(self.grids)
+        groups = [(k, g) for k, g in (("generous", generous), ("harsh", harsh)) if g]
+        for index, (kind, genres) in enumerate(groups):
+            column = min(index, len(self.grids) - 1)
+            grid = self.grids[column]
+            line = lines[column]
+            title = lean_heading(kind, genres)
+            self._headings.append(title)
+            grid.addWidget(label(title, role="muted"), line, 0)
+            if line == 0:  # the MAL and usual labels, once per column
+                grid.addWidget(LeanAxis(low, high, usual), line, 1)
             line += 1
             for g in genres:
                 value = f"{g.avg_diff:+.2f}"
@@ -194,23 +434,33 @@ class GenreCard(Card):
                     f"{g.genre}: you average {g.my_avg_score:.2f}, the MAL community "
                     f"{g.community_avg_score:.2f}, across {g.shows_scored} scored shows."
                 )
-                name = label(g.genre)
-                name.setFixedWidth(120)
-                bar = LeanBar(g.avg_diff, low, high)
+                name = label()
+                name.setFixedWidth(self.NAME_W)
+                name.setText(elided(g.genre, name.font(), self.NAME_W))
+                bar = LeanBar(g.avg_diff, low, high, usual=usual)
                 number = label(value)
                 number.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 number.setFixedWidth(48)
-                for column, widget in enumerate((name, bar, number)):
+                for col, widget in enumerate((name, bar, number)):
                     widget.setToolTip(tip)
-                    self.grid.addWidget(widget, line, column)
+                    grid.addWidget(widget, line, col)
                 self._rows[kind].append((g.genre, value))
                 line += 1
+            lines[column] = line
+        if usual is not None:
+            self.note.setText(
+                f"Points above or below the MAL average. The dashed line is your usual, "
+                f"{usual:+.2f}."
+            )
+        self.note.setVisible(usual is not None and bool(generous or harsh))
         self.empty.setText(empty)
         self.empty.setVisible(not (generous or harsh))
 
 
 class RankList(QWidget):
     """A ranked list as bars from zero: name, bar, number. Used for top artists and tracks."""
+
+    NAME_W = 150
 
     def __init__(self, color: str = theme.CORAL, empty_text: str = "Nothing yet") -> None:
         super().__init__()
@@ -224,7 +474,7 @@ class RankList(QWidget):
         self._rows: list[tuple[str, str]] = []
 
     def rows(self) -> list[tuple[str, str]]:
-        """(name, number) as shown, for tests."""
+        """(name, number) as shown, for tests. Names are the full ones."""
         return list(self._rows)
 
     def set_rows(self, rows: Sequence[tuple[str, int]], tips: Sequence[str] = ()) -> None:
@@ -238,8 +488,9 @@ class RankList(QWidget):
             return
         top = max(value for _, value in rows) or 1
         for line, (name, value) in enumerate(rows):
-            text = label(name)
-            text.setFixedWidth(150)
+            text = label()
+            text.setFixedWidth(self.NAME_W)
+            text.setText(elided(name, text.font(), self.NAME_W))
             text.setToolTip(tips[line] if line < len(tips) else name)
             bar = LeanBar(value, 0.0, float(top), self.color)
             number = label(f"{value:,}")
@@ -250,76 +501,128 @@ class RankList(QWidget):
             self._rows.append((name, f"{value:,}"))
 
 
-class ScatterChart(QWidget):
-    """My score against the MAL mean, one dot per scored show, with the 'same as MAL' line."""
+def band_tip(band: charts.Band) -> str:
+    shows = "1 show" if band.shows == 1 else f"{band.shows} shows"
+    text = f"MAL {band.mal_from:.1f} to {band.mal_to:.1f}: {shows}. You average {band.average:.2f}"
+    if band.middle:
+        low, high = band.middle
+        return f"{text}, and the middle half of your scores is {low:g} to {high:g}."
+    return text + "."
+
+
+class BandChart(QWidget):
+    """My average score for each band of the MAL mean, against the "same as MAL" line.
+
+    The bar behind each dot covers the middle half of my scores in that band. Dots for
+    bands with few shows are smaller. Hovering a band explains it in words.
+    """
+
+    LEFT, BOTTOM, TOP, RIGHT = 30, 40, 24, 10
+    Y_LO, Y_HI = 0.5, 10.5  # half a point of room so 1 and 10 aren't cut off
 
     def __init__(self, color: str = theme.LILAC, empty_text: str = "No scores yet") -> None:
         super().__init__()
         self.color = QColor(color)
         self.empty_text = empty_text
-        self.points: list[tuple[float, float]] = []
+        self.bands: list[charts.Band] = []
         self.setMinimumHeight(250)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def set_points(self, points: Sequence[tuple[float, float]]) -> None:
-        self.points = list(points)
+    def set_bands(self, bands: Sequence[charts.Band]) -> None:
+        self.bands = list(bands)
         self.update()
 
     def x_range(self) -> tuple[float, float]:
-        """The MAL means shown: the data's range with a little room, never past 1 to 10."""
-        x_lo = max(min(x for x, _ in self.points) - 0.25, 1.0)
-        x_hi = min(max(x for x, _ in self.points) + 0.25, 10.0)
-        return x_lo, max(x_hi, x_lo + 0.5)
+        return min(b.mal_from for b in self.bands), max(b.mal_to for b in self.bands)
+
+    def point(self, mal: float, score: float) -> tuple[float, float]:
+        """Widget coordinates for a MAL mean and a score."""
+        lo, hi = self.x_range()
+        width = max(self.width() - self.LEFT - self.RIGHT, 1)
+        height = max(self.height() - self.BOTTOM - self.TOP, 1)
+        x = self.LEFT + (mal - lo) / (hi - lo) * width
+        y = self.TOP + (self.Y_HI - score) / (self.Y_HI - self.Y_LO) * height
+        return x, y
+
+    def _center(self, band: charts.Band) -> tuple[float, float]:
+        return self.point((band.mal_from + band.mal_to) / 2, band.average)
+
+    def tip_at(self, x: float) -> str:
+        if not self.bands:
+            return ""
+        return band_tip(min(self.bands, key=lambda b: abs(self._center(b)[0] - x)))
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.ToolTip:
+            text = self.tip_at(event.pos().x())
+            if text:
+                QToolTip.showText(event.globalPos(), text, self)
+            else:
+                QToolTip.hideText()
+            return True
+        return super().event(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         muted = QColor(theme.MUTED)
-        if not self.points:
+        if not self.bands:
             painter.setPen(muted)
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_text)
             return
-        left, bottom, top_pad, right_pad = 30, 40, 24, 8
-        width = max(self.width() - left - right_pad, 1)
-        height = max(self.height() - bottom - top_pad, 1)
-        x_lo, x_hi = self.x_range()
-        y_lo, y_hi = 0.5, 10.5  # half a point of room so dots on 1 and 10 aren't cut off
-
-        def at(x: float, y: float) -> tuple[float, float]:
-            px = left + (x - x_lo) / (x_hi - x_lo) * width
-            py = top_pad + (y_hi - y) / (y_hi - y_lo) * height
-            return px, py
-
+        lo, hi = self.x_range()
+        left, right = self.LEFT, self.width() - self.RIGHT
+        top, bottom = self.point(lo, self.Y_HI)[1], self.point(lo, self.Y_LO)[1]
         grid = QColor(theme.LINE)
-        right_align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        for y in (2, 4, 6, 8, 10):
-            _, py = at(x_lo, y)
-            painter.setPen(grid)
-            painter.drawLine(QPointF(left, py), QPointF(left + width, py))
-            painter.setPen(muted)
-            painter.drawText(QRectF(0, py - 8, left - 6, 16), right_align, str(y))
-        for x in range(math.ceil(x_lo), math.floor(x_hi) + 1):
-            px, _ = at(x, y_lo)
-            painter.setPen(grid)
-            painter.drawLine(QPointF(px, top_pad), QPointF(px, top_pad + height))
+        painter.setFont(small_font(self, 12))
+        for score in (2, 4, 6, 8, 10):
+            _, y = self.point(lo, score)
+            painter.fillRect(QRectF(left, y, right - left, 1), grid)
             painter.setPen(muted)
             painter.drawText(
-                QRectF(px - 12, top_pad + height + 4, 24, 16), Qt.AlignmentFlag.AlignHCenter, str(x)
+                QRectF(0, y - 8, left - 6, 16),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                str(score),
             )
-        painter.drawText(QRectF(0, 0, width, 16), Qt.AlignmentFlag.AlignLeft, "Your score")
+        for mal in range(math.ceil(lo), math.floor(hi) + 1):
+            x, _ = self.point(mal, self.Y_LO)
+            painter.setPen(muted)
+            painter.drawText(
+                QRectF(x - 12, bottom + 4, 24, 16), Qt.AlignmentFlag.AlignHCenter, str(mal)
+            )
+        painter.drawText(QRectF(0, 0, 200, 16), Qt.AlignmentFlag.AlignLeft, "Your score")
         painter.drawText(
-            QRectF(left, self.height() - 16, width, 16), Qt.AlignmentFlag.AlignHCenter, "MAL mean"
+            QRectF(left, self.height() - 16, right - left, 16),
+            Qt.AlignmentFlag.AlignHCenter,
+            "MAL mean",
         )
-        # Where my score would equal MAL's.
-        painter.setPen(QColor(theme.EDGE))
-        x0, y0 = at(x_lo, x_lo)
-        x1, y1 = at(x_hi, x_hi)
-        painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
-        # See-through dots, so shows stacked on the same score read as a brighter spot.
-        dot = QColor(self.color)
-        dot.setAlpha(130)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(dot)
-        for x, y in self.points:
-            px, py = at(x, y)
-            painter.drawEllipse(QPointF(px, py), 3.2, 3.2)
+        # Where my score would equal MAL's, dashed so it reads as a guide, not data.
+        edge = QColor(theme.EDGE)
+        painter.setPen(QPen(edge, 1.5, Qt.PenStyle.DashLine))
+        start, end = max(lo, self.Y_LO), min(hi, self.Y_HI)
+        painter.drawLine(QPointF(*self.point(start, start)), QPointF(*self.point(end, end)))
+        painter.setPen(muted)
+        ex, ey = self.point(end, end)
+        painter.drawText(
+            QRectF(ex - 90, max(ey - 18, top - 20), 88, 16),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            "same as MAL",
+        )
+        # The middle half of my scores per band, then my average as a line and dots.
+        spread = QColor(self.color)
+        spread.setAlpha(110)
+        painter.setPen(QPen(spread, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for band in self.bands:
+            if band.middle:
+                x, _ = self._center(band)
+                _, y_low = self.point(lo, band.middle[0])
+                _, y_high = self.point(lo, band.middle[1])
+                painter.drawLine(QPointF(x, y_low), QPointF(x, y_high))
+        centers = [QPointF(*self._center(b)) for b in self.bands]
+        painter.setPen(QPen(self.color, 2))
+        painter.drawPolyline(QPolygonF(centers))
+        painter.setPen(QPen(QColor(theme.SURFACE), 2))
+        painter.setBrush(self.color)
+        for band, center in zip(self.bands, centers, strict=True):
+            radius = 4.5 if band.shows >= charts.MIDDLE_MIN_SHOWS else 3.0
+            painter.drawEllipse(center, radius, radius)
