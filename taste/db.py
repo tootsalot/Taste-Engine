@@ -61,7 +61,10 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     _add_missing_columns(conn)
     settings.ensure_defaults(conn)
     settings.apply_source_notes(conn)
-    conn.executescript((SQL_DIR / "views.sql").read_text(encoding="utf-8"))
+    # One transaction, so another connection reading a report while this one starts
+    # sees the old views or the new ones, never a moment with the view missing.
+    views = (SQL_DIR / "views.sql").read_text(encoding="utf-8")
+    conn.executescript("BEGIN;\n" + views + "\nCOMMIT;")
     local_time.refresh(conn)
 
 

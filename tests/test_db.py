@@ -67,3 +67,37 @@ def test_time_helpers():
     assert db.iso_to_utc("2025-03-14T08:54:27+00:00") == "2025-03-14 08:54:27"
     assert db.iso_to_utc("2025-03-14T01:54:27-07:00") == "2025-03-14 08:54:27"
     assert db.unix_to_utc(0) == "1970-01-01 00:00:00"
+
+
+def test_views_never_vanish_while_another_connection_sets_up(tmp_path):
+    import threading
+
+    from taste import db
+
+    path = tmp_path / "race.db"
+    db.connect(path).close()
+    errors = []
+    stop = threading.Event()
+
+    def reapply():
+        conn = db.connect(path, setup=False)
+        try:
+            while not stop.is_set():
+                db.apply_schema(conn)
+        finally:
+            conn.close()
+
+    worker = threading.Thread(target=reapply)
+    worker.start()
+    reader = db.connect(path, setup=False)
+    try:
+        for _ in range(300):
+            try:
+                reader.execute("SELECT COUNT(*) FROM rpt_lastfm_by_hour").fetchone()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(str(exc))
+    finally:
+        stop.set()
+        worker.join()
+        reader.close()
+    assert errors == []
