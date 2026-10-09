@@ -37,6 +37,7 @@ def test_license_texts_are_included_not_just_named(text):
 def test_credits_and_source_links(text):
     assert text.startswith("Taste Engine 9.9.9")
     assert "MyAnimeList" in text and "Last.fm" in text and "isn't affiliated" in text
+    assert "Deezer" in text
     assert "can be replaced with modified, compatible versions" in text  # LGPL relinking
     assert "https://download.qt.io/official_releases/QtForPython/" in text
     assert "https://pypi.org/project/requests/" in text

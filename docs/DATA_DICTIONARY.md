@@ -7,12 +7,14 @@ Conventions used throughout:
 - **Timestamps** are UTC text in the form `YYYY-MM-DD HH:MM:SS`.
 - **Dates** are text `YYYY-MM-DD`. MAL sometimes gives partial dates (`YYYY` or `YYYY-MM`), and those are kept as sent.
 - **Booleans** are INTEGER 0 or 1.
-- **`source`** is a code from `core_sources` (`mal`, `lastfm`).
+- **`source`** is a code from `core_sources` (`mal`, `lastfm`, `deezer`).
 - Columns inside unique keys use `''` for "empty" instead of NULL, so the keys behave the same in SQLite and SQL Server.
 
 Table prefixes: `sync_` bookkeeping, `raw_` API pages as fetched, `stg_` per-source staging, `core_` source-agnostic model, `rec_` saved recommendations, `rpt_` report views.
 
 Posters and album covers aren't stored in the database. Only their URLs are (`core_item_images`); the pictures themselves are cached as files in `<data folder>/cache/images`, capped at 100 MB.
+
+Window preferences shared by every profile (for now, whether the sidebar is collapsed) live in `<data folder>/ui_state.json`, not in any database. A missing or unreadable file means the defaults.
 
 ---
 
@@ -24,7 +26,7 @@ One row per sync attempt.
 | Column | Type | Description |
 |---|---|---|
 | sync_run_id | INTEGER PK | Surrogate key. |
-| source | TEXT | Which source was synced. |
+| source | TEXT | Which source was synced: `mal`, `lastfm`, or `deezer` (artist photo lookups, always mode `enrich`). |
 | mode | TEXT | `full` (whole history or whole list), `incremental` (Last.fm, new window only), `resume` (Last.fm, finishing an interrupted window first), or `enrich` (fetching details for recommendations; not shown as a sync in the app). |
 | started_at | TEXT | When the run started (UTC). |
 | ended_at | TEXT | When it finished. NULL while running. |
@@ -60,7 +62,7 @@ Every successful API response page, unchanged. Identical repeats aren't stored t
 | raw_page_id | INTEGER PK | Surrogate key. |
 | sync_run_id | INTEGER FK sync_runs | The run that fetched it. |
 | source | TEXT | Source code. |
-| endpoint | TEXT | `/users/{username}/animelist` or `/anime/{id}` (details) for MAL. `user.getrecenttracks`, `artist.getsimilar`, `artist.gettoptags`, or `artist.gettopalbums` for Last.fm. |
+| endpoint | TEXT | `/users/{username}/animelist` or `/anime/{id}` (details) for MAL. `user.getrecenttracks`, `artist.getsimilar`, `artist.gettoptags`, or `artist.gettopalbums` for Last.fm. `search/artist` for Deezer. |
 | request_params | TEXT | JSON of the query parameters, with `api_key` and other secrets removed. The MAL client ID is a header, so it's never here. |
 | page_number | INTEGER | Page number within the run (MAL) or window fetch (Last.fm), starting at 1. |
 | http_status | INTEGER | HTTP status of the response. |
@@ -229,7 +231,7 @@ Last.fm's top tags for an artist.
 | tag_count | INTEGER | Last.fm's relative weight for the tag (0 to 100). |
 
 ### `stg_lastfm_artist_top_album`
-The top album of a suggested artist I've never played, fetched only so the suggestion has a cover. Last.fm has no artist photos (it returns the same placeholder for every artist), so an artist's picture is always an album cover.
+The top album of a suggested artist I've never played, fetched only so the suggestion has a cover. Last.fm has no artist photos (it returns the same placeholder for every artist), so an artist's picture is an album cover, or a Deezer photo (below) when there's no cover.
 
 | Column | Type | Description |
 |---|---|---|
@@ -237,6 +239,17 @@ The top album of a suggested artist I've never played, fetched only so the sugge
 | album_name | TEXT | The album's title. |
 | image_url | TEXT | Cover URL. NULL when Last.fm has none. |
 | fetched_at | TEXT | When it was fetched (UTC). |
+
+### `stg_deezer_artists`
+Deezer's artist search, used only for photos of suggested artists. Every suggested artist is looked up and cached for 30 days, misses included, so a miss isn't asked again on every refresh. The photo is the picture when Last.fm has no cover, and otherwise a backup the card switches to when the cover can't be downloaded.
+
+| Column | Type | Description |
+|---|---|---|
+| artist_key | TEXT PK | The artist, keyed like the Last.fm tables. |
+| deezer_id | INTEGER | Deezer's artist ID. NULL when there was no match. |
+| name | TEXT | The name Deezer matched. Only an exact (case-insensitive) match counts, so a wrong photo is never used. `''` when there was no match. |
+| picture_url | TEXT | Photo URL. NULL when there was no exact match, or Deezer only had its blank placeholder. |
+| fetched_at | TEXT | When it was looked up (UTC). |
 
 ---
 
@@ -249,7 +262,7 @@ Reference list of data sources, seeded by `schema.sql`.
 |---|---|---|
 | source | TEXT PK | Source code. |
 | display_name | TEXT | Human-readable name. |
-| default_capture_scope | TEXT | How complete this source's data is. MAL: `self_reported`. Last.fm: copied from the profile's `lastfm_capture_scope` setting (`desktop_only`, `mobile_only`, `all_devices`, `unknown`). |
+| default_capture_scope | TEXT | How complete this source's data is. MAL: `self_reported`. Last.fm: copied from the profile's `lastfm_capture_scope` setting (`desktop_only`, `mobile_only`, `all_devices`, `unknown`). Deezer: `not_applicable`, since it supplies photos, not taste data. |
 | scope_note | TEXT | A plain-English caveat. The Last.fm note comes from the profile's `lastfm_scope_note` setting (or a standard note for the scope) and is copied into every Last.fm report as `data_scope`. |
 
 ### `core_items`
@@ -470,7 +483,7 @@ One row per computed list.
 | kind | TEXT | `anime`, `music_discover` (artists I've never played), or `music_rediscover` (artists I played a lot who have gone quiet). |
 | created_at | TEXT | When it was computed (UTC). |
 | params_json | TEXT | The recommendation settings used, as JSON. |
-| metrics_json | TEXT | For `anime`, the holdout check: `held_out` (scored shows hidden from the model), and the average error in MAL points of `model`, `community` (the MAL mean alone), and `overall` (the MAL mean plus my usual difference). `{}` for music. |
+| metrics_json | TEXT | For `anime`: `model_overall_bias` (my usual difference from the MAL mean), and the holdout check: `held_out` (scored shows hidden from the model), and the average error in MAL points of `model`, `community` (the MAL mean alone), and `overall` (the MAL mean plus my usual difference). `{}` for music. |
 
 ### `rec_items`
 The suggestions in a run, best first.
@@ -481,13 +494,14 @@ The suggestions in a run, best first.
 | rank | INTEGER PK | Position in the list, from 1. |
 | item_key | TEXT | MAL anime ID, or the Last.fm artist key. |
 | title | TEXT | Display title (the English title for anime when MAL has one). |
-| subtitle | TEXT | Short facts line, for example type, year, episodes, and MAL mean. |
-| score | REAL | `anime`: predicted score for me (1 to 10). `music_discover`: match strength, the sum of weighted similarities, so it can pass 1. `music_rediscover`: all-time plays. |
+| subtitle | TEXT | Short facts line. `anime`: type, year, and episodes ("TV · 2019 · 24 eps"); the MAL mean is in `facts_json`. `music_discover`: "Sounds like 3 artists you play". `music_rediscover`: when I last played them ("Last played Mar 4, 2025"). |
+| score | REAL | `anime`: predicted score for me (1 to 10). `music_discover`: match strength, the sum of weighted similarities, so it can pass 1. The card shows a match label instead (see `facts_json`). `music_rediscover`: all-time plays. |
 | support | REAL | `anime`: how strongly shows I liked point at it, the tiebreaker. Each liked show adds (my score minus my average) times log(1 + users recommending), and a sequel or other related show adds (my score minus my average). 0 for Plan to Watch shows nothing points at, and for music. |
 | badge | TEXT | A label such as "On your Plan to Watch". `''` when none. |
 | image_url | TEXT | Poster or cover URL. NULL when there's none. |
 | url | TEXT | Link to the show on MyAnimeList or the artist on Last.fm. |
 | reasons_json | TEXT | JSON array of the plain-English reasons shown on the card. |
+| facts_json | TEXT | JSON object of extra numbers for the card, `{}` for runs saved before it existed. `mal_mean`: the show's MAL mean, shown next to the prediction. `chance_8_plus`: the chance (0 to 1) that I'd give it an 8 or more, from how far my real scores landed from predictions made without them (5 folds); missing under 20 scored shows. `match_label`: "Strong match", "Good match", or "Worth a try", by thirds of the `music_discover` list. `fallback_image`: a Deezer photo the card switches to if the cover can't be downloaded. `details`: the numbers behind the reasons (vote counts, genre leans, match strength), shown as the card's tooltip. |
 
 ### `rec_dismissed`
 "Not interested". These are never suggested again. App state, not a taste signal (yet).

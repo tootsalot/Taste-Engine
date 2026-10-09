@@ -5,7 +5,7 @@ run each refresh is a few dozen calls:
 - MAL show details (community recommendations, related shows, genres, studios)
   for shows I scored above my own average, then for the strongest candidates.
 - Last.fm similar artists and top tags for the artists I play most.
-- Deezer photos for suggested artists that still have no picture.
+- Deezer photos for suggested artists: the picture when Last.fm has none, else a backup.
 
 Every response is stored in the raw layer like any sync, and each item commits
 on its own, so an interrupted run picks up where it stopped.
@@ -503,7 +503,7 @@ def fetch_deezer_pictures(
     names: Iterable[str],
     now: datetime | None = None,
 ) -> int:
-    """Deezer photos for artists with no Last.fm picture. Cached 30 days, misses too.
+    """Deezer photos for suggested artists. Cached 30 days, misses too.
 
     Returns how many artists were looked up. An error (a quota, an outage) stops the
     run quietly: whatever was stored stays, and the rest is tried next time.

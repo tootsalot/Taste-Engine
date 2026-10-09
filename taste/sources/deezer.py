@@ -1,7 +1,8 @@
-"""Deezer: artist photos, only for suggested artists that Last.fm has no picture for.
+"""Deezer: photos of suggested artists, nothing else.
 
 Last.fm returns the same blank image for every artist, and a few artists have no
-album cover either. Deezer's artist search needs no key. Only an exact name match
+album cover either, so the photo is the picture when there's no cover and a backup
+when the cover can't be downloaded. Deezer's artist search needs no key. Only an exact name match
 (ignoring case) counts, so a wrong photo is never shown; anything else means no
 photo. Checked against the live API on 2026-10-09: results are in `data`, an
 unknown name gives `{"data": [], "total": 0}`, and photos are on cdn-images.dzcdn.net.

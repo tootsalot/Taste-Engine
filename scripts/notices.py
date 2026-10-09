@@ -142,9 +142,9 @@ def build(version: str) -> str:
     out = [
         f"Taste Engine {version}\n"
         "Copyright (c) 2026 Tootsalot. Released under the MIT License (see LICENSE.txt).\n\n"
-        "Anime data comes from MyAnimeList (myanimelist.net) and music data from Last.fm\n"
-        "(last.fm), through their public APIs. Taste Engine isn't affiliated with or\n"
-        "endorsed by either.\n\n"
+        "Anime data comes from MyAnimeList (myanimelist.net), music data from Last.fm\n"
+        "(last.fm), and some artist photos from Deezer (deezer.com), through their public\n"
+        "APIs. Taste Engine isn't affiliated with or endorsed by any of them.\n\n"
         "Taste Engine includes the software below. Thank you to everyone who made it.\n\n"
         + "\n".join(f"  - {line}" for line in contents)
     ]

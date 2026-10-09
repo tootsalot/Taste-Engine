@@ -38,8 +38,8 @@ LABEL_WIDTH = 290
 CREDITS = (
     "Built with Python and Qt for Python (PySide6, used under the LGPL 3.0), plus requests, "
     "keyring, python-dotenv, and tzdata. Fonts: Space Grotesk and Inter (SIL Open Font "
-    "License). Anime data comes from MyAnimeList and music data from Last.fm; Taste Engine "
-    "isn't affiliated with either."
+    "License). Anime data comes from MyAnimeList, music data from Last.fm, and some artist "
+    "photos from Deezer; Taste Engine isn't affiliated with any of them."
 )
 STATUS_TEXT = {
     "keyring": ("Saved in Windows Credential Manager", "ok"),
