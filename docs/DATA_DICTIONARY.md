@@ -10,7 +10,9 @@ Conventions used throughout:
 - **`source`** is a code from `core_sources` (`mal`, `lastfm`).
 - Columns inside unique keys use `''` for "empty" instead of NULL, so the keys behave the same in SQLite and SQL Server.
 
-Table prefixes: `sync_` bookkeeping, `raw_` API pages as fetched, `stg_` per-source staging, `core_` source-agnostic model, `rpt_` report views.
+Table prefixes: `sync_` bookkeeping, `raw_` API pages as fetched, `stg_` per-source staging, `core_` source-agnostic model, `rec_` saved recommendations, `rpt_` report views.
+
+Posters and album covers aren't stored in the database. Only their URLs are (`core_item_images`); the pictures themselves are cached as files in `<data folder>/cache/images`, capped at 100 MB.
 
 ---
 
@@ -23,7 +25,7 @@ One row per sync attempt.
 |---|---|---|
 | sync_run_id | INTEGER PK | Surrogate key. |
 | source | TEXT | Which source was synced. |
-| mode | TEXT | `full` (whole history or whole list), `incremental` (Last.fm, new window only), or `resume` (Last.fm, finishing an interrupted window first). |
+| mode | TEXT | `full` (whole history or whole list), `incremental` (Last.fm, new window only), `resume` (Last.fm, finishing an interrupted window first), or `enrich` (fetching details for recommendations; not shown as a sync in the app). |
 | started_at | TEXT | When the run started (UTC). |
 | ended_at | TEXT | When it finished. NULL while running. |
 | status | TEXT | `running`, `success`, or `failed`. A run left `running` by a killed process is marked `failed` with the message "interrupted" the next time that source syncs. |
@@ -58,7 +60,7 @@ Every successful API response page, unchanged. Identical repeats aren't stored t
 | raw_page_id | INTEGER PK | Surrogate key. |
 | sync_run_id | INTEGER FK sync_runs | The run that fetched it. |
 | source | TEXT | Source code. |
-| endpoint | TEXT | `/users/{username}/animelist` for MAL, `user.getrecenttracks` for Last.fm. |
+| endpoint | TEXT | `/users/{username}/animelist` or `/anime/{id}` (details) for MAL. `user.getrecenttracks`, `artist.getsimilar`, `artist.gettoptags`, or `artist.gettopalbums` for Last.fm. |
 | request_params | TEXT | JSON of the query parameters, with `api_key` and other secrets removed. The MAL client ID is a header, so it's never here. |
 | page_number | INTEGER | Page number within the run (MAL) or window fetch (Last.fm), starting at 1. |
 | http_status | INTEGER | HTTP status of the response. |
@@ -70,7 +72,7 @@ Every successful API response page, unchanged. Identical repeats aren't stored t
 ## Staging: MyAnimeList
 
 ### `stg_mal_anime`
-One row per anime that has appeared on my list. These fields describe the show itself, not my opinion of it.
+One row per anime that has appeared on my list or was fetched as a recommendation candidate. These fields describe the show itself, not my opinion of it.
 
 | Column | Type | Description |
 |---|---|---|
@@ -91,6 +93,8 @@ One row per anime that has appeared on my list. These fields describe the show i
 | avg_episode_seconds | INTEGER | Average episode length in seconds. |
 | community_mean | REAL | MAL community mean score (1 to 10). NULL when MAL has too few ratings. |
 | num_scoring_users | INTEGER | How many MAL users scored it. |
+| main_picture_url | TEXT | Poster URL on MAL's image server (`main_picture.medium`). Kept when a later response leaves it out. |
+| nsfw_rating | TEXT | MAL's `nsfw` value: `white` (safe), `gray`, or `black` (adult). Recommendations leave out `black` shows unless the profile includes NSFW anime. |
 | last_raw_page_id | INTEGER FK raw_api_pages | The raw page this row was last loaded from. |
 | loaded_at | TEXT | When this row was last written. |
 
@@ -154,10 +158,85 @@ One row per completed scrobble. **Desktop listening only.**
 | album_name | TEXT | Album title, `''` if none. |
 | album_mbid | TEXT | MusicBrainz release ID, `''` if empty. |
 | track_url | TEXT | Last.fm page for the track. |
+| image_url | TEXT | Album cover URL from the scrobble (the 300 px `extralarge` size when Last.fm sent one). NULL when there's none or it's Last.fm's blank placeholder. Older rows were filled in from the raw pages, without new API calls. |
 | raw_page_id | INTEGER FK raw_api_pages | The raw page it came from. |
 | loaded_at | TEXT | When it was inserted. |
 
 Unique on `(played_at_unix, artist_name, track_name)`. That's the dedupe key, since MBIDs are often empty.
+
+---
+
+## Staging: enrichment
+
+Extra details fetched for recommendations and art, cached and refreshed about every 30 days. Last.fm artist keys are the lowercased artist name, the same as `lastfm_artist_key` in `core_creator_external_ids`.
+
+### `stg_mal_anime_details`
+Which anime have had their MAL details fetched (`/anime/{id}`), and when. The details themselves land in `stg_mal_anime` and the two tables below.
+
+| Column | Type | Description |
+|---|---|---|
+| mal_anime_id | INTEGER PK | The anime. |
+| fetched_at | TEXT | When the details were last fetched (UTC). |
+| raw_page_id | INTEGER FK raw_api_pages | The raw response. |
+
+### `stg_mal_anime_recommendations`
+MAL's "users who liked this also recommend" list for a show.
+
+| Column | Type | Description |
+|---|---|---|
+| mal_anime_id | INTEGER PK | The show the recommendation is from. |
+| recommended_id | INTEGER PK | The recommended show. |
+| recommended_title | TEXT | Its title as MAL sent it. |
+| num_recommendations | INTEGER | How many MAL users made this recommendation. |
+
+### `stg_mal_related_anime`
+Sequels, prequels, side stories, and other relations.
+
+| Column | Type | Description |
+|---|---|---|
+| mal_anime_id | INTEGER PK | The show. |
+| related_id | INTEGER PK | The related show. |
+| related_title | TEXT | Its title as MAL sent it. |
+| relation_type | TEXT | MAL's relation, for example `sequel`, `prequel`, `side_story`, `summary`. `other` when MAL sends none. |
+
+### `stg_lastfm_artist_fetches`
+When each Last.fm artist method was last called for an artist, so refreshes only fetch what's stale.
+
+| Column | Type | Description |
+|---|---|---|
+| artist_key | TEXT PK | The artist. |
+| method | TEXT PK | `artist.getsimilar` or `artist.gettoptags`. |
+| fetched_at | TEXT | When it was last fetched (UTC). |
+
+### `stg_lastfm_similar_artists`
+Last.fm's similar artists for each artist I play a lot.
+
+| Column | Type | Description |
+|---|---|---|
+| artist_key | TEXT PK | The artist I play. |
+| similar_key | TEXT PK | The similar artist. |
+| similar_name | TEXT | Its name as Last.fm sent it. |
+| similar_mbid | TEXT | MusicBrainz artist ID, `''` if empty. |
+| match | REAL | Last.fm's similarity, 0 to 1. |
+
+### `stg_lastfm_artist_tags`
+Last.fm's top tags for an artist.
+
+| Column | Type | Description |
+|---|---|---|
+| artist_key | TEXT PK | The artist. |
+| tag | TEXT PK | Tag name, as Last.fm sent it. |
+| tag_count | INTEGER | Last.fm's relative weight for the tag (0 to 100). |
+
+### `stg_lastfm_artist_top_album`
+The top album of a suggested artist I've never played, fetched only so the suggestion has a cover. Last.fm has no artist photos (it returns the same placeholder for every artist), so an artist's picture is always an album cover.
+
+| Column | Type | Description |
+|---|---|---|
+| artist_key | TEXT PK | The artist. |
+| album_name | TEXT | The album's title. |
+| image_url | TEXT | Cover URL. NULL when Last.fm has none. |
+| fetched_at | TEXT | When it was fetched (UTC). |
 
 ---
 
@@ -174,7 +253,7 @@ Reference list of data sources, seeded by `schema.sql`.
 | scope_note | TEXT | A plain-English caveat. The Last.fm note comes from the profile's `lastfm_scope_note` setting (or a standard note for the scope) and is copied into every Last.fm report as `data_scope`. |
 
 ### `core_items`
-One row per piece of media, whatever the type.
+One row per piece of media, whatever the type. Anime that only appear as recommendation candidates get a row too, so they can carry a poster and similarity links.
 
 | Column | Type | Description |
 |---|---|---|
@@ -208,6 +287,29 @@ Relations between items.
 | child_item_id | INTEGER PK, FK | For `appears_on`, the track. |
 | link_type | TEXT PK | `appears_on` in Phase 1. |
 | source | TEXT | Source of the link. |
+
+### `core_item_images`
+Picture URLs for items. The pictures are downloaded when first shown and cached as files, only from MAL's and Last.fm's image servers.
+
+| Column | Type | Description |
+|---|---|---|
+| item_id | INTEGER PK, FK | The item. |
+| source | TEXT PK | Where the URL came from. |
+| kind | TEXT PK | `poster` (MAL anime) or `cover` (Last.fm album, the newest cover seen on a scrobble). |
+| url | TEXT | The image URL. |
+
+### `core_item_similarity`
+Links between items that a source considers alike. Only MAL fills it so far: Last.fm's similar artists are creators, not items, and stay in `stg_lastfm_similar_artists`.
+
+| Column | Type | Description |
+|---|---|---|
+| item_id | INTEGER PK, FK | The item the link is from. |
+| similar_item_id | INTEGER PK, FK | The item it points to. |
+| source | TEXT PK | Who says they're alike. |
+| kind | TEXT PK | `user_recommended` (MAL user recommendations) or `related_<relation>`, for example `related_sequel`. |
+| score | REAL | For `user_recommended`, the number of users who recommended it. 1.0 for related shows. |
+
+Rewritten for a show each time its details are fetched.
 
 ### `core_creators`
 Artists, studios, and later authors and directors.
@@ -349,9 +451,52 @@ One row per setting. Types, defaults, and validation live in `taste/settings.py`
 
 | Column | Type | Description |
 |---|---|---|
-| setting_key | TEXT PK | `display_name`, `mal_username`, `lastfm_username`, `timezone`, `lastfm_capture_scope`, `lastfm_scope_note`, `include_nsfw`, `genre_min_sample`, `in_line_threshold`, `top_n_all_time`, `top_n_per_year`, `top_n_per_month`, `lastfm_lookback_days`. |
-| setting_value | TEXT | The value as text (booleans are `1` / `0`). Views `CAST` the numeric ones. |
+| setting_key | TEXT PK | Profile: `display_name`, `mal_username`, `lastfm_username`, `timezone`, `include_nsfw`. Last.fm: `lastfm_capture_scope`, `lastfm_scope_note`. Reports: `genre_min_sample`, `in_line_threshold`, `top_n_all_time`, `top_n_per_year`, `top_n_per_month`. Recommendations: `rec_count`, `rec_min_raters`, `rec_media_types`, `rec_include_plan_to_watch`, `rec_seed_artists`. Syncing and storage: `lastfm_lookback_days`, `raw_retention_days`. |
+| setting_value | TEXT | The value as text (booleans are `1` / `0`, `rec_media_types` is a comma-separated list such as `tv,movie,ona,ova`). Views `CAST` the numeric ones. |
 | updated_at | TEXT | When it was last changed (UTC). |
+
+---
+
+## Recommendations
+
+Every recommendation run is saved with its settings, scores, and reasons, so a list can be explained later and compared with older runs. The For You page shows the newest run of each kind.
+
+### `rec_runs`
+One row per computed list.
+
+| Column | Type | Description |
+|---|---|---|
+| rec_run_id | INTEGER PK | Surrogate key. |
+| kind | TEXT | `anime`, `music_discover` (artists I've never played), or `music_rediscover` (artists I played a lot who have gone quiet). |
+| created_at | TEXT | When it was computed (UTC). |
+| params_json | TEXT | The recommendation settings used, as JSON. |
+| metrics_json | TEXT | For `anime`, the holdout check: `held_out` (scored shows hidden from the model), and the average error in MAL points of `model`, `community` (the MAL mean alone), and `overall` (the MAL mean plus my usual difference). `{}` for music. |
+
+### `rec_items`
+The suggestions in a run, best first.
+
+| Column | Type | Description |
+|---|---|---|
+| rec_run_id | INTEGER PK, FK rec_runs | The run. Deleted with it. |
+| rank | INTEGER PK | Position in the list, from 1. |
+| item_key | TEXT | MAL anime ID, or the Last.fm artist key. |
+| title | TEXT | Display title (the English title for anime when MAL has one). |
+| subtitle | TEXT | Short facts line, for example type, year, episodes, and MAL mean. |
+| score | REAL | `anime`: predicted score for me (1 to 10). `music_discover`: match strength, the sum of weighted similarities, so it can pass 1. `music_rediscover`: all-time plays. |
+| support | REAL | `anime`: how strongly shows I liked point at it, the tiebreaker. Each liked show adds (my score minus my average) times log(1 + users recommending), and a sequel or other related show adds (my score minus my average). 0 for Plan to Watch shows nothing points at, and for music. |
+| badge | TEXT | A label such as "On your Plan to Watch". `''` when none. |
+| image_url | TEXT | Poster or cover URL. NULL when there's none. |
+| url | TEXT | Link to the show on MyAnimeList or the artist on Last.fm. |
+| reasons_json | TEXT | JSON array of the plain-English reasons shown on the card. |
+
+### `rec_dismissed`
+"Not interested". These are never suggested again. App state, not a taste signal (yet).
+
+| Column | Type | Description |
+|---|---|---|
+| kind | TEXT PK | `anime` or `artist`. |
+| item_key | TEXT PK | MAL anime ID or Last.fm artist key. |
+| dismissed_at | TEXT | When it was dismissed (UTC). |
 
 ---
 
