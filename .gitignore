@@ -33,3 +33,7 @@ Thumbs.db
 # Local app: profile databases and fallback key files live under data/ (already ignored above)
 data/profiles/
 data/.secret_key
+
+# Release builds
+build/
+dist/

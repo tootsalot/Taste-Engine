@@ -91,6 +91,18 @@ def create_app(
     return app
 
 
+def _already_running(url: str) -> bool:
+    """True if a Taste Engine app already answers at this URL."""
+    import urllib.request
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via a proxy
+    try:
+        with opener.open(url, timeout=1) as resp:
+            return b"Taste Engine" in resp.read(4096)
+    except OSError:
+        return False
+
+
 def serve(port: int = 8765, open_browser: bool = True) -> None:
     """Run the app until Ctrl+C or the console window is closed."""
     import threading
@@ -102,8 +114,26 @@ def serve(port: int = 8765, open_browser: bool = True) -> None:
 
     if profiles.migrate_legacy():
         print("Moved data/taste.db to the 'default' profile.")
+    existing = f"http://127.0.0.1:{port}/"
+    if _already_running(existing):
+        # Double-clicking the exe again shouldn't start a second copy on the same data.
+        print(f"Taste Engine is already running at {existing}. Opening it.")
+        if open_browser:
+            webbrowser.open(existing)
+        return
+
     app = create_app()
-    server = make_server("127.0.0.1", port, app, threaded=True)
+    server = None
+    # If the port is taken by something else, try the next few.
+    for candidate in range(port, port + 10):
+        try:
+            server = make_server("127.0.0.1", candidate, app, threaded=True)
+            port = candidate
+            break
+        except OSError:
+            continue
+    if server is None:
+        raise SystemExit(f"Ports {port} to {port + 9} are all in use. Close other copies first.")
     url = f"http://127.0.0.1:{port}/"
     print(f"Taste Engine {__version__} is running at {url}")
     print(f"Data folder: {Path(data_dir()).resolve()}")

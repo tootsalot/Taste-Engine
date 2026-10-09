@@ -1,6 +1,6 @@
 # Data Dictionary
 
-Every table and view in `data/taste.db`. The DDL lives in `taste/sql/schema.sql` and `taste/sql/views.sql`.
+Every table and view in a profile database (`data/profiles/<profile_id>.db` from source, `%LOCALAPPDATA%\taste-engine\profiles\` in the packaged app). Each profile has its own file with the same schema. The DDL lives in `taste/sql/schema.sql` and `taste/sql/views.sql`.
 
 Conventions used throughout:
 
@@ -170,8 +170,8 @@ Reference list of data sources, seeded by `schema.sql`.
 |---|---|---|
 | source | TEXT PK | Source code. |
 | display_name | TEXT | Human-readable name. |
-| default_capture_scope | TEXT | How complete this source's data is: `self_reported` (MAL) or `desktop_only` (Last.fm). |
-| scope_note | TEXT | A plain-English caveat. The Last.fm note is copied into every Last.fm report as `data_scope`. |
+| default_capture_scope | TEXT | How complete this source's data is. MAL: `self_reported`. Last.fm: copied from the profile's `lastfm_capture_scope` setting (`desktop_only`, `mobile_only`, `all_devices`, `unknown`). |
+| scope_note | TEXT | A plain-English caveat. The Last.fm note comes from the profile's `lastfm_scope_note` setting (or a standard note for the scope) and is copied into every Last.fm report as `data_scope`. |
 
 ### `core_items`
 One row per piece of media, whatever the type.
@@ -301,7 +301,7 @@ Tags on items.
 | occurred_at_unix | INTEGER | Unix seconds when the exact moment is known. NULL for date-only events. |
 | time_precision | TEXT | `second`, `day`, `month`, or `year`. |
 | time_basis | TEXT | Where the time came from: `source_timestamp` (Last.fm scrobble time), `user_entered` (a MAL date I typed), or `fallback_list_updated_at` (see below). |
-| capture_scope | TEXT | `desktop_only` for every Last.fm row. `self_reported` for MAL. |
+| capture_scope | TEXT | Last.fm: the profile's capture scope at the time the play was synced. Changing the setting later doesn't relabel old plays. MAL: `self_reported`. |
 | source_event_key | TEXT | Dedupe key, unique per source. Last.fm: `uts\|artist\|track`. MAL: `{anime_id}:started` or `{anime_id}:finished`. |
 
 **About `fallback_list_updated_at`:** when a completed MAL entry has no finish date, its `watch_finished` event uses the last time I edited the entry. That's an upper bound, not the real finish date. Most of these stand-in dates land on one bulk-edit day, so for timelines, filter to `user_entered` or treat fallbacks as "finished on or before." Fallbacks are never skipped. Start dates have no fallback.
@@ -325,26 +325,56 @@ Tags on items.
 
 Unique on `(source, item_id, curation_type, list_name)`.
 
+### `core_event_local_times`
+Event times converted to the profile's time zone by Python (`taste/local_time.py`, using `zoneinfo`, so daylight saving is handled). Rebuilt when the time zone setting changes. Only events with an exact time (`occurred_at_unix` not NULL) get a row.
+
+| Column | Type | Description |
+|---|---|---|
+| event_id | INTEGER PK, FK | The event. Deleted with it (`ON DELETE CASCADE`). |
+| occurred_at_unix | INTEGER | Copy of the event's time, used to spot events whose time changed. |
+| tz_name | TEXT | IANA time zone used, for example `America/Phoenix`. |
+| local_ts | TEXT | Local timestamp `YYYY-MM-DD HH:MM:SS`. |
+| local_date | TEXT | Local date. |
+| local_year | INTEGER | Local year. |
+| local_month | TEXT | Local month `YYYY-MM`. |
+| local_hour | INTEGER | Local hour, 0 to 23. |
+| local_weekday_num | INTEGER | 0 = Sunday through 6 = Saturday. |
+
+---
+
+## Profile settings
+
+### `app_settings`
+One row per setting. Types, defaults, and validation live in `taste/settings.py`. API keys are never stored here.
+
+| Column | Type | Description |
+|---|---|---|
+| setting_key | TEXT PK | `display_name`, `mal_username`, `lastfm_username`, `timezone`, `lastfm_capture_scope`, `lastfm_scope_note`, `include_nsfw`, `genre_min_sample`, `in_line_threshold`, `top_n_all_time`, `top_n_per_year`, `top_n_per_month`, `lastfm_lookback_days`. |
+| setting_value | TEXT | The value as text (booleans are `1` / `0`). Views `CAST` the numeric ones. |
+| updated_at | TEXT | When it was last changed (UTC). |
+
 ---
 
 ## Report views
 
-All views read from core. Every Last.fm view includes **`data_scope`**, the desktop-only note from `core_sources`.
+All views read from core, plus `app_settings` through `rpt_settings`. Every Last.fm view includes **`data_scope`** (the profile's scope note) and **`capture_scopes`** (the scope stored on the rows, or `mixed` if plays were captured under different settings).
 
 | View | Columns |
 |---|---|
+| `rpt_settings` | Helper. One row: genre_min_sample, in_line_threshold, top_n_all_time, top_n_per_year, top_n_per_month, timezone. |
+| `rpt_lastfm_scope` | Helper. One row: data_scope, capture_scopes. |
 | `rpt_mal_score_vs_community` | item_id, title, title_english, release_year, list_status, my_score, community_mean, score_diff (mine minus community), normalized_diff, community_raters |
 | `rpt_mal_critic_summary` | shows_scored, my_avg_score, community_avg_score, avg_diff, share_scored_below, share_scored_above |
-| `rpt_mal_genre_vs_community` | genre, shows_scored, my_avg_score, community_avg_score, avg_diff, diff_vs_my_norm (genre avg_diff minus my overall avg_diff), vs_community (`above` if avg_diff >= 0.25, `below` if <= -0.25, else `in_line`), min_sample_size (5) |
+| `rpt_mal_genre_vs_community` | genre, shows_scored, my_avg_score, community_avg_score, avg_diff, diff_vs_my_norm (genre avg_diff minus my overall avg_diff), vs_community (`above` if avg_diff >= the `in_line_threshold` setting, `below` if <= minus it, else `in_line`), min_sample_size (the `genre_min_sample` setting). Genres with fewer scored shows are left out. |
 | `rpt_mal_dropped_on_hold` | item_id, title, title_english, list_status, episodes_watched, total_episodes, pct_complete (NULL when total unknown), my_score, last_updated_utc |
-| `rpt_lastfm_plays_local` | Helper. event_id, track_item_id, track, artist_id, artist, occurred_at_utc, occurred_at_local, local_year, local_month, local_hour, local_weekday_num (0 = Sunday), capture_scope, data_scope. Local means America/Phoenix (UTC-7, no daylight saving). |
-| `rpt_lastfm_top_artists_all_time` | play_rank (top 50), artist, plays, distinct_tracks, first_play_local, last_play_local, data_scope |
-| `rpt_lastfm_top_artists_by_year` | local_year, play_rank (top 25), artist, plays, data_scope |
-| `rpt_lastfm_top_artists_by_month` | local_month, play_rank (top 10), artist, plays, data_scope |
-| `rpt_lastfm_top_tracks_all_time` | play_rank (top 50), track, artist, plays, first_play_local, last_play_local, data_scope |
-| `rpt_lastfm_top_tracks_by_year` | local_year, play_rank (top 25), track, artist, plays, data_scope |
-| `rpt_lastfm_top_tracks_by_month` | local_month, play_rank (top 10), track, artist, plays, data_scope |
-| `rpt_lastfm_by_hour` | local_hour (all 24), plays, pct_of_plays, data_scope |
-| `rpt_lastfm_by_weekday` | local_weekday_num, weekday (all 7), plays, pct_of_plays, data_scope |
+| `rpt_lastfm_plays_local` | Helper. event_id, track_item_id, track, artist_id, artist, occurred_at_utc, occurred_at_local, local_year, local_month, local_hour, local_weekday_num (0 = Sunday), tz_name, capture_scope, data_scope. Local means the profile's time zone setting, from `core_event_local_times`. |
+| `rpt_lastfm_top_artists_all_time` | play_rank (`top_n_all_time`, default 50), artist, plays, distinct_tracks, first_play_local, last_play_local, data_scope, capture_scopes |
+| `rpt_lastfm_top_artists_by_year` | local_year, play_rank (`top_n_per_year`, default 25), artist, plays, data_scope, capture_scopes |
+| `rpt_lastfm_top_artists_by_month` | local_month, play_rank (`top_n_per_month`, default 10), artist, plays, data_scope, capture_scopes |
+| `rpt_lastfm_top_tracks_all_time` | play_rank (`top_n_all_time`, default 50), track, artist, plays, first_play_local, last_play_local, data_scope, capture_scopes |
+| `rpt_lastfm_top_tracks_by_year` | local_year, play_rank (`top_n_per_year`, default 25), track, artist, plays, data_scope, capture_scopes |
+| `rpt_lastfm_top_tracks_by_month` | local_month, play_rank (`top_n_per_month`, default 10), track, artist, plays, data_scope, capture_scopes |
+| `rpt_lastfm_by_hour` | local_hour (all 24), plays, pct_of_plays, data_scope, capture_scopes |
+| `rpt_lastfm_by_weekday` | local_weekday_num, weekday (all 7), plays, pct_of_plays, data_scope, capture_scopes |
 
 Ties in the ranked views are broken alphabetically, so the order is stable.

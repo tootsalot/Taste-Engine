@@ -162,7 +162,8 @@ class _readonly:
         self.path = path
 
     def __enter__(self) -> sqlite3.Connection:
-        self.conn = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True)
+        # as_uri() gives file:///C:/... on Windows and file:///home/... elsewhere.
+        self.conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
         return self.conn
 
     def __exit__(self, *exc) -> None:
