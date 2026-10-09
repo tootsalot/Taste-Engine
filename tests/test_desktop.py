@@ -3,6 +3,7 @@
 import csv
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit
 
 from taste import profiles, settings
@@ -105,6 +106,28 @@ def test_status_messages_fade_and_the_version_stays(window, qtbot, monkeypatch):
     assert bar.currentMessage().startswith("Created me.")
     qtbot.waitUntil(lambda: bar.currentMessage() == "", timeout=3000)
     assert "Your data stays on this computer" in window.version_label.text()
+
+
+def test_sidebar_collapses_to_icons_and_remembers(window, qtbot):
+    window.new_profile(("me", "Me"))
+    nav = window.sidebar
+    assert not window.nav_collapsed
+    assert [nav.item(i).text() for i in range(nav.count())] == list(PAGES)
+    assert all(not nav.item(i).icon().isNull() for i in range(nav.count()))
+
+    qtbot.mouseClick(window.nav_toggle, Qt.MouseButton.LeftButton)
+    assert window.nav_collapsed
+    assert window.nav.maximumWidth() < 80
+    assert [nav.item(i).text() for i in range(nav.count())] == [""] * len(PAGES)
+    assert [nav.item(i).toolTip() for i in range(nav.count())] == list(PAGES)
+    nav.setCurrentRow(PAGES.index("Reports"))  # still navigates
+    assert window.stack.currentWidget() is window.reports
+
+    again = MainWindow(window.ctx)  # the next launch opens the way it was left
+    qtbot.addWidget(again)
+    assert again.nav_collapsed
+    qtbot.mouseClick(again.nav_toggle, Qt.MouseButton.LeftButton)
+    assert not again.nav_collapsed and nav.count() == len(PAGES)
 
 
 def test_bad_profile_id_is_refused(window, monkeypatch):

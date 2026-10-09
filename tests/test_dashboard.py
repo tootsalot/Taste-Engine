@@ -139,3 +139,10 @@ def test_stylesheet_shows_keyboard_focus_and_draws_control_arrows():
         "QComboBox::drop-down",
     ):
         assert rule in theme.STYLESHEET
+
+
+def test_scroll_bars_are_thin_with_no_default_groove():
+    sheet = theme.STYLESHEET
+    # Unstyled, Qt fills the track around the handle with a gray dotted pattern.
+    assert "QScrollBar::add-page" in sheet and "QScrollBar::sub-page" in sheet
+    assert "QScrollBar::handle:vertical:hover" in sheet

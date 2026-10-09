@@ -3,22 +3,26 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from taste import __version__, profiles, recommend
-from taste.desktop import theme
+from taste.desktop import theme, ui_state
 from taste.desktop.context import AppContext
 from taste.desktop.dashboard import DashboardPage
 from taste.desktop.dialogs import NewProfileDialog
@@ -30,7 +34,15 @@ from taste.profiles import ProfileError
 from taste.settings import SettingError
 
 PAGES = ("Dashboard", "For You", "Reports", "Settings")
+PAGE_ICONS = {
+    "Dashboard": "dashboard",
+    "For You": "for-you",
+    "Reports": "reports",
+    "Settings": "settings",
+}
 STATUS_MS = 8000  # how long a status bar message stays
+NAV_WIDTH = 200
+NAV_COLLAPSED_WIDTH = 60  # icons only
 
 
 class MainWindow(QMainWindow):
@@ -68,19 +80,35 @@ class MainWindow(QMainWindow):
         bar_layout.addWidget(new_button)
         outer.addWidget(bar)
 
-        # Sidebar and pages
+        # Sidebar (collapses to an icon rail) and pages
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
+        self.nav = QFrame()
+        self.nav.setObjectName("NavPanel")
+        nav_layout = QVBoxLayout(self.nav)
+        nav_layout.setContentsMargins(8, 10, 8, 10)
+        nav_layout.setSpacing(8)
+        self.nav_toggle = QToolButton()
+        self.nav_toggle.setObjectName("NavToggle")
+        self.nav_toggle.setIcon(theme.icon("sidebar"))
+        self.nav_toggle.setIconSize(QSize(20, 20))
+        self.nav_toggle.clicked.connect(lambda: self.toggle_nav())
+        nav_layout.addWidget(self.nav_toggle)
         self.sidebar = QListWidget()
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(190)
-        self.sidebar.addItems(PAGES)
+        self.sidebar.setIconSize(QSize(20, 20))
         self.sidebar.setSpacing(2)
-        for i in range(self.sidebar.count()):
-            self.sidebar.item(i).setSizeHint(QSize(0, 40))
+        self.sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        for page in PAGES:
+            item = QListWidgetItem(theme.icon(PAGE_ICONS[page]), page)
+            item.setSizeHint(QSize(0, 40))
+            self.sidebar.addItem(item)
         self.sidebar.currentRowChanged.connect(self._on_page_changed)
-        body.addWidget(self.sidebar)
+        nav_layout.addWidget(self.sidebar, 1)
+        body.addWidget(self.nav)
+        QShortcut(QKeySequence("Ctrl+B"), self, self.toggle_nav)
 
         self.stack = QStackedWidget()
         self.dashboard = DashboardPage(self.ctx)
@@ -116,6 +144,8 @@ class MainWindow(QMainWindow):
             f"Taste Engine {__version__}. Your data stays on this computer.", role="muted"
         )
         self.statusBar().addWidget(self.version_label)
+        self.nav_collapsed = False
+        self.set_nav_collapsed(bool(ui_state.load().get("nav_collapsed")), remember=False)
         self.reload_profiles()
         # Start keyboard focus on the page list, not on whichever button comes first
         # (a focus ring on "New profile" at launch looks like a pending action).
@@ -140,6 +170,25 @@ class MainWindow(QMainWindow):
         button.clicked.connect(lambda: self.new_profile())
         layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
         return page
+
+    # -- sidebar ------------------------------------------------------------
+
+    def toggle_nav(self) -> None:
+        self.set_nav_collapsed(not self.nav_collapsed)
+
+    def set_nav_collapsed(self, collapsed: bool, remember: bool = True) -> None:
+        """Icons only (with tooltips) or icons and labels. Ctrl+B toggles it."""
+        self.nav_collapsed = collapsed
+        self.nav.setFixedWidth(NAV_COLLAPSED_WIDTH if collapsed else NAV_WIDTH)
+        for i, page in enumerate(PAGES):
+            item = self.sidebar.item(i)
+            item.setText("" if collapsed else page)
+            item.setToolTip(page if collapsed else "")
+        self.nav_toggle.setToolTip(
+            "Show page names (Ctrl+B)" if collapsed else "Collapse the sidebar (Ctrl+B)"
+        )
+        if remember:
+            ui_state.save(nav_collapsed=collapsed)
 
     # -- profiles -----------------------------------------------------------
 

@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPalette
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QSize
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QImageReader, QPalette, QPixmap
 from PySide6.QtWidgets import QApplication
 
 ASSETS = Path(__file__).resolve().parent / "assets"
@@ -37,6 +38,26 @@ def load_fonts() -> None:
 
 def app_icon() -> QIcon:
     return QIcon(str(ASSETS / "logo.svg"))
+
+
+def _svg_pixmap(name: str, color: str, size: int) -> QPixmap:
+    """A line icon from assets/icons, drawn in `color` (the SVGs use currentColor)."""
+    text = (ASSETS / "icons" / f"{name}.svg").read_text(encoding="utf-8")
+    buffer = QBuffer()
+    buffer.setData(QByteArray(text.replace("currentColor", color).encode("utf-8")))
+    buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    reader = QImageReader(buffer, b"svg")
+    reader.setScaledSize(QSize(size, size))
+    return QPixmap.fromImage(reader.read())
+
+
+def icon(name: str, color: str = MUTED, selected: str = LILAC) -> QIcon:
+    """Muted normally, lilac when its sidebar row is selected. Drawn at 2x for sharp edges."""
+    result = QIcon()
+    result.addPixmap(_svg_pixmap(name, color, 48), QIcon.Mode.Normal)
+    result.addPixmap(_svg_pixmap(name, selected, 48), QIcon.Mode.Selected)
+    result.addPixmap(_svg_pixmap(name, TEXT, 48), QIcon.Mode.Active)
+    return result
 
 
 def number_font(size: int) -> QFont:
@@ -100,11 +121,14 @@ QLabel[role="ok"] {{ color: {GOOD}; }}
 QLabel[role="big"] {{ font-size: 30px; font-weight: 800; }}
 
 #TopBar {{ background: {PANEL}; border-bottom: 1px solid {LINE}; }}
-#Sidebar {{ background: {PANEL}; border: none; border-right: 1px solid {LINE};
-            padding: 12px 8px; outline: 0; }}
-#Sidebar::item {{ padding-left: 12px; border-radius: 8px; color: {MUTED}; }}
+#NavPanel {{ background: {PANEL}; border: none; border-right: 1px solid {LINE}; }}
+#Sidebar {{ background: transparent; border: none; outline: 0; }}
+#Sidebar::item {{ padding-left: 10px; border-radius: 8px; color: {MUTED}; }}
 #Sidebar::item:selected {{ background: {RAISED}; color: {TEXT}; font-weight: 700; }}
-#Sidebar::item:hover:!selected {{ background: {SURFACE}; }}
+#Sidebar::item:hover:!selected {{ background: {SURFACE}; color: {TEXT}; }}
+#Sidebar:focus {{ border: none; }}
+QToolButton#NavToggle {{ background: transparent; border: none; border-radius: 8px; padding: 8px; }}
+QToolButton#NavToggle:hover, QToolButton#NavToggle:focus {{ background: {SURFACE}; }}
 
 QFrame[role="card"] {{ background: {SURFACE}; border-radius: 14px; }}
 QLabel[role="badge"] {{ background: {RAISED}; color: {LILAC}; border-radius: 9px;
@@ -181,11 +205,19 @@ QTableView {{ background: {SURFACE}; alternate-background-color: #1F1D2F; border
 QHeaderView::section {{ background: {PANEL}; color: {MUTED}; border: none;
                         border-bottom: 1px solid {LINE}; padding: 6px 8px; font-weight: 700; }}
 
-QScrollBar:vertical {{ background: transparent; width: 10px; }}
-QScrollBar::handle:vertical {{ background: {LINE}; border-radius: 5px; min-height: 24px; }}
-QScrollBar:horizontal {{ background: transparent; height: 10px; }}
-QScrollBar::handle:horizontal {{ background: {LINE}; border-radius: 5px; min-width: 24px; }}
-QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px 2px 4px 0; border: none; }}
+QScrollBar::handle:vertical {{ background: {LINE}; border-radius: 3px; min-height: 32px;
+                               margin: 0 2px; }}
+QScrollBar::handle:vertical:hover, QScrollBar::handle:vertical:pressed {{ background: {EDGE}; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 0 4px 2px 4px;
+                         border: none; }}
+QScrollBar::handle:horizontal {{ background: {LINE}; border-radius: 3px; min-width: 32px;
+                                 margin: 2px 0; }}
+QScrollBar::handle:horizontal:hover, QScrollBar::handle:horizontal:pressed {{ background: {EDGE}; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; border: none;
+                                              background: none; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
+QAbstractScrollArea::corner {{ background: transparent; }}
 
 QStatusBar {{ background: {PANEL}; color: {MUTED}; border-top: 1px solid {LINE}; }}
 QToolTip {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {LINE}; }}
