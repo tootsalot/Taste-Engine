@@ -2,9 +2,11 @@
 requests==2.34.2
 python-dotenv==1.2.3
 keyring==25.7.0
+PySide6==6.12.0
 # IANA time zone data, needed on Windows where zoneinfo has no system database
 tzdata==2026.5
 
 # Development (tests and linting)
 pytest==9.1.1
+pytest-qt==4.5.0
 ruff==0.16.8

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,9 @@ import requests
 
 from taste import db
 from taste.http_client import HttpClient
+
+# Qt draws to memory in tests, so they run without a screen (CI, cloud sessions).
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
