@@ -13,6 +13,7 @@ from pathlib import Path
 class Report:
     view: str
     order_by: str
+    title: str
     uses_lastfm: bool = False
 
     @property
@@ -29,18 +30,31 @@ SCOPE_PHRASES = {
 }
 
 REPORTS = [
-    Report("rpt_mal_critic_summary", "shows_scored"),
-    Report("rpt_mal_score_vs_community", "score_diff, title"),
-    Report("rpt_mal_genre_vs_community", "avg_diff DESC, genre"),
-    Report("rpt_mal_dropped_on_hold", "list_status, pct_complete DESC, title"),
-    Report("rpt_lastfm_top_artists_all_time", "play_rank", True),
-    Report("rpt_lastfm_top_artists_by_year", "local_year DESC, play_rank", True),
-    Report("rpt_lastfm_top_artists_by_month", "local_month DESC, play_rank", True),
-    Report("rpt_lastfm_top_tracks_all_time", "play_rank", True),
-    Report("rpt_lastfm_top_tracks_by_year", "local_year DESC, play_rank", True),
-    Report("rpt_lastfm_top_tracks_by_month", "local_month DESC, play_rank", True),
-    Report("rpt_lastfm_by_hour", "local_hour", True),
-    Report("rpt_lastfm_by_weekday", "local_weekday_num", True),
+    Report("rpt_mal_critic_summary", "shows_scored", "How critical am I?"),
+    Report("rpt_mal_score_vs_community", "score_diff, title", "My score vs the community"),
+    Report("rpt_mal_genre_vs_community", "avg_diff DESC, genre", "Genres vs the community"),
+    Report(
+        "rpt_mal_dropped_on_hold", "list_status, pct_complete DESC, title", "Dropped and on hold"
+    ),
+    Report("rpt_lastfm_top_artists_all_time", "play_rank", "Top artists, all time", True),
+    Report(
+        "rpt_lastfm_top_artists_by_year", "local_year DESC, play_rank", "Top artists by year", True
+    ),
+    Report(
+        "rpt_lastfm_top_artists_by_month",
+        "local_month DESC, play_rank",
+        "Top artists by month",
+        True,
+    ),
+    Report("rpt_lastfm_top_tracks_all_time", "play_rank", "Top tracks, all time", True),
+    Report(
+        "rpt_lastfm_top_tracks_by_year", "local_year DESC, play_rank", "Top tracks by year", True
+    ),
+    Report(
+        "rpt_lastfm_top_tracks_by_month", "local_month DESC, play_rank", "Top tracks by month", True
+    ),
+    Report("rpt_lastfm_by_hour", "local_hour", "Plays by hour of day", True),
+    Report("rpt_lastfm_by_weekday", "local_weekday_num", "Plays by day of week", True),
 ]
 
 

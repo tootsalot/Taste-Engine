@@ -63,7 +63,8 @@ class SyncResult:
     error: str | None = None
 
 
-def check_response(status: int, data: Any) -> None:
+def check_error(status: int, data: Any) -> None:
+    """Raise for Last.fm errors. Shared by every Last.fm call."""
     # Last.fm can return an error body with HTTP 200, so check the body first.
     if isinstance(data, dict) and "error" in data:
         code = data.get("error")
@@ -77,6 +78,10 @@ def check_response(status: int, data: Any) -> None:
         raise ApiError(f"Last.fm HTTP {status}", retryable=True, status=status)
     if status >= 400:
         raise ApiError(f"Last.fm HTTP {status}", retryable=False, status=status)
+
+
+def check_response(status: int, data: Any) -> None:
+    check_error(status, data)
     if not isinstance(data, dict) or "recenttracks" not in data:
         # Seen once during API probing: a response without the expected key that
         # worked on the next try.

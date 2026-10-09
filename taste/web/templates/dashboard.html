@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}{{ name }}: Dashboard{% endblock %}
+{% block content %}
+<h1>{{ name }}</h1>
+
+<div class="cards">
+  {% for label, value in counts.items() %}
+  <div class="card"><div class="big">{{ "{:,}".format(value) }}</div><div class="muted">{{ label }}</div></div>
+  {% endfor %}
+</div>
+
+<h2>Sync</h2>
+{% if running %}
+<p>A sync is running. <a href="{{ url_for('web.sync_page', profile_id=profile_id) }}">Watch its progress</a>.</p>
+{% else %}
+{% if open_windows %}
+<p class="flash error">A Last.fm sync was interrupted. The next Last.fm sync picks up where it stopped.</p>
+{% endif %}
+<form method="post" action="{{ url_for('web.start_sync', profile_id=profile_id) }}" class="row">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button name="source" value="all">Sync everything</button>
+  <button name="source" value="mal" class="secondary">MyAnimeList only</button>
+  <button name="source" value="lastfm" class="secondary">Last.fm only</button>
+</form>
+{% endif %}
+
+<h2>Status</h2>
+<pre class="status">{% for line in status %}{{ line }}
+{% endfor %}</pre>
+{% endblock %}

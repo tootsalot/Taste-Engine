@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Something's not right</h1>
+<p>{{ message }}</p>
+<p><a href="{{ url_for('web.home') }}">Back to profiles</a></p>
+{% endblock %}

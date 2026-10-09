@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}{{ name }}: Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<h2 id="keys">API keys</h2>
+{% if not secure %}
+<p class="flash error">This computer has no system credential store, so keys you save here are kept
+in an <strong>unencrypted</strong> file in the data folder, readable by anything running as your user.
+On Windows and macOS this never happens; keys go to the system's credential store.</p>
+{% endif %}
+<p class="muted">Saved keys are never shown again. To change one, enter the new value. Get a MAL client ID at
+<code>myanimelist.net/apiconfig</code> and a Last.fm key at <code>last.fm/api/account/create</code>.</p>
+<table class="keys">
+  <thead><tr><th>Key</th><th>Status</th><th>Set a new value</th><th></th></tr></thead>
+  <tbody>
+  {% for k in keys %}
+  <tr>
+    <td>{{ k.label }}</td>
+    <td>
+      {% if k.error %}<span class="bad">{{ k.error }}</span>
+      {% elif k.source == "keyring" %}<span class="good">Saved in the system credential store</span>
+      {% elif k.source == "file" %}<span class="warn">Saved in an unencrypted local file</span>
+      {% elif k.source == "env" %}<span class="good">Using the {{ k.name }} environment variable</span>
+      {% else %}<span class="bad">Not set</span>{% endif %}
+    </td>
+    <td>
+      <form method="post" action="{{ url_for('web.save_key', profile_id=profile_id, name=k.name) }}" class="row tight">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="password" name="value" autocomplete="off" spellcheck="false" placeholder="paste key" required>
+        <button name="action" value="save">Save</button>
+      </form>
+    </td>
+    <td class="row tight">
+      {% if k.stored %}
+      <form method="post" action="{{ url_for('web.save_key', profile_id=profile_id, name=k.name) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button name="action" value="remove" class="secondary">Remove</button>
+      </form>
+      {% endif %}
+      <form method="post" action="{{ url_for('web.test_source', profile_id=profile_id, source=k.test_source) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="secondary">Test connection</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Profile settings</h2>
+<form method="post" action="{{ url_for('web.save_settings', profile_id=profile_id) }}" class="stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% for f in fields %}
+    {% if f.kind == "bool" %}
+    <label class="check"><input type="checkbox" name="{{ f.key }}" {% if values[f.key] %}checked{% endif %}> {{ f.label }}
+      {% if f.help %}<small>{{ f.help }}</small>{% endif %}</label>
+    {% else %}
+    <label>{{ f.label }}
+      {% if f.kind == "choice" %}
+      <select name="{{ f.key }}">
+        {% for value, label in f.choices.items() %}
+        <option value="{{ value }}" {% if values[f.key] == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% elif f.kind == "timezone" %}
+      <input name="{{ f.key }}" value="{{ values[f.key] }}" list="timezones" required>
+      {% elif f.kind in ("int", "float") %}
+      <input name="{{ f.key }}" value="{{ values[f.key] }}" type="number" {% if f.kind == "float" %}step="0.01"{% endif %}
+        {% if f.minimum is not none %}min="{{ f.minimum }}"{% endif %} {% if f.maximum is not none %}max="{{ f.maximum }}"{% endif %} required>
+      {% elif f.key == "lastfm_scope_note" %}
+      <textarea name="{{ f.key }}" maxlength="{{ f.max_length }}" rows="2">{{ values[f.key] }}</textarea>
+      {% else %}
+      <input name="{{ f.key }}" value="{{ values[f.key] }}" maxlength="{{ f.max_length }}">
+      {% endif %}
+      {% if f.help %}<small>{{ f.help }}</small>{% endif %}
+    </label>
+    {% endif %}
+  {% endfor %}
+  <datalist id="timezones">{% for tz in timezones %}<option value="{{ tz }}">{% endfor %}</datalist>
+  <button type="submit">Save settings</button>
+</form>
+
+<h2>Data folder</h2>
+<p>Everything for every profile is stored in <code>{{ data_folder }}</code>.</p>
+<form method="post" action="{{ url_for('web.open_data_folder') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="next" value="{{ url_for('web.settings_page', profile_id=profile_id) }}">
+  <button class="secondary">Open data folder</button>
+</form>
+
+<h2>Delete this profile</h2>
+<p>This permanently deletes the profile's database and its stored keys. It can't be undone.</p>
+<form method="post" action="{{ url_for('web.delete_profile', profile_id=profile_id) }}" class="row">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input name="confirm" placeholder="type {{ profile_id }} to confirm" autocomplete="off" required>
+  <button class="danger" {% if running %}disabled{% endif %}>Delete profile</button>
+</form>
+{% endblock %}

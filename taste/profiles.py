@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from taste import db, settings
 from taste.config import data_dir
@@ -117,15 +118,18 @@ def create(profile_id: str, name: str = "", root: Path | None = None) -> Profile
     return Profile(profile_id, name or profile_id, path)
 
 
-def delete(profile_id: str, root: Path | None = None) -> None:
-    """Delete a profile's database and its stored API keys. Can't be undone."""
-    root = root or profiles_dir()
+def delete(profile_id: str, root: Path | None = None, store: Any = None) -> None:
+    """Delete a profile's database and its stored API keys. Can't be undone.
+
+    `store` is the SecretStore holding the keys. The app passes its own.
+    """
     from taste.secrets_store import SecretStore  # local import: secrets_store imports this module
 
+    root = root or profiles_dir()
     path = db_path(profile_id, root)
     if not path.exists():
         raise ProfileError(f"No profile named {profile_id!r}.")
-    SecretStore(root).delete_all(profile_id)
+    (store or SecretStore(root)).delete_all(profile_id)
     for suffix in ("", "-journal", "-wal", "-shm"):
         Path(f"{path}{suffix}").unlink(missing_ok=True)
 

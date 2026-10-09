@@ -5,10 +5,11 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote
 
 from taste import credentials
 from taste.config import ConfigError
-from taste.http_client import HttpClient
+from taste.http_client import ApiError, HttpClient
 from taste.secrets_store import SecretStore
 from taste.sources import lastfm, mal
 
@@ -54,3 +55,44 @@ def sync_sources(
             out(f"{SOURCE_LABELS[name]}: {exc}")
             results[name] = False
     return results
+
+
+def check_connection(
+    conn: sqlite3.Connection,
+    profile_id: str,
+    source: str,
+    *,
+    store: SecretStore | None = None,
+    client_factory: ClientFactory = _default_client,
+) -> tuple[bool, str]:
+    """Make one cheap API call to check the key and username. Returns (ok, message)."""
+    store = store or SecretStore()
+    label = SOURCE_LABELS[source]
+    try:
+        if source == "mal":
+            cfg = credentials.mal(conn, profile_id, store)
+            client = client_factory([cfg.client_id])
+            client.max_retries = 1
+            client.get_json(
+                f"{mal.API_BASE}/users/{quote(cfg.username)}/animelist",
+                params={"limit": 1},
+                headers={"X-MAL-CLIENT-ID": cfg.client_id},
+                checker=mal.check_response,
+            )
+        else:
+            cfg = credentials.lastfm(conn, profile_id, store)
+            client = client_factory([cfg.api_key])
+            client.max_retries = 1
+            client.get_json(
+                lastfm.API_URL,
+                params={
+                    "method": "user.getinfo",
+                    "user": cfg.username,
+                    "api_key": cfg.api_key,
+                    "format": "json",
+                },
+                checker=lastfm.check_error,
+            )
+    except (ConfigError, ApiError) as exc:
+        return False, f"{label}: {exc}"
+    return True, f"{label}: connected as {cfg.username}."

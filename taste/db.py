@@ -13,20 +13,26 @@ SQL_DIR = Path(__file__).resolve().parent / "sql"
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def connect(path: str | Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
+def connect(path: str | Path, *, setup: bool = True) -> sqlite3.Connection:
     """Open a profile database, creating the file, tables, settings, and views if needed.
 
-    The connection runs in autocommit mode. Use `transaction()` to group writes.
+    `setup=False` skips the schema work, for connections opened after it's known
+    to be done (the web app opens one per request). The connection runs in
+    autocommit mode. Use `transaction()` to group writes.
     """
     path = Path(path)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None, check_same_thread=check_same_thread)
+    conn = sqlite3.connect(path, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    # Lets the web app read while a sync thread writes.
-    conn.execute("PRAGMA busy_timeout = 5000")
-    apply_schema(conn)
+    # Wait instead of failing when another connection holds the write lock, and use
+    # WAL so the web app can read while a sync thread writes.
+    conn.execute("PRAGMA busy_timeout = 10000")
+    if str(path) != ":memory:":
+        conn.execute("PRAGMA journal_mode = WAL")
+    if setup:
+        apply_schema(conn)
     return conn
 
 

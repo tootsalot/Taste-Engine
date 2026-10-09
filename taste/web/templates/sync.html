@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ name }}: Sync{% endblock %}
+{% block content %}
+<h1>Sync</h1>
+{% if not job %}
+<p>No sync has run since the app started. Start one from the <a href="{{ url_for('web.dashboard', profile_id=profile_id) }}">dashboard</a>.</p>
+{% else %}
+<p id="sync-state" class="muted">
+  {% if job.running %}Running. You can leave this page; the sync keeps going.{% else %}Finished.{% endif %}
+</p>
+<pre id="sync-log" class="status" data-status-url="{{ url_for('web.sync_status', profile_id=profile_id) }}" data-running="{{ 'true' if job.running else 'false' }}">{% for m in job.messages %}{{ m }}
+{% endfor %}</pre>
+<p><a href="{{ url_for('web.dashboard', profile_id=profile_id) }}">Back to the dashboard</a> · <a href="{{ url_for('web.reports_page', profile_id=profile_id) }}">See reports</a></p>
+{% endif %}
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='sync.js') }}"></script>{% endblock %}

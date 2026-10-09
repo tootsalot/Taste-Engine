@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Taste Engine{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('web.home') }}">Taste Engine</a>
+    {% if profile_id %}
+    <nav>
+      <span class="profile-name">{{ name }}</span>
+      <a href="{{ url_for('web.dashboard', profile_id=profile_id) }}">Dashboard</a>
+      <a href="{{ url_for('web.reports_page', profile_id=profile_id) }}">Reports</a>
+      <a href="{{ url_for('web.settings_page', profile_id=profile_id) }}">Settings</a>
+    </nav>
+    {% endif %}
+  </header>
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <p class="flash {{ category }}">{{ message }}</p>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Taste Engine {{ version }}. Runs on this computer only. Your data never leaves it except for the API calls you start.</footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

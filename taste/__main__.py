@@ -7,7 +7,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from taste import db, profiles, reports, runner
+from taste import __version__, db, profiles, reports, runner
 from taste.config import load_env, reports_dir
 from taste.profiles import DEFAULT_PROFILE, ProfileError
 
@@ -99,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m taste", description="Personal taste engine: sync, report, status."
     )
+    parser.add_argument("--version", action="version", version=f"taste-engine {__version__}")
     parser.add_argument(
         "--profile",
         default=DEFAULT_PROFILE,
@@ -113,6 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("report", help="print a summary and write CSV files")
     rep.add_argument("--out", type=Path, help="folder for CSV files (default reports/<profile>)")
     sub.add_parser("status", help="row counts and last sync per source")
+    app = sub.add_parser("app", help="start the local web app and open it in the browser")
+    app.add_argument("--port", type=int, default=8765)
+    app.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
     prof = sub.add_parser("profiles", help="list or create profiles")
     prof_sub = prof.add_subparsers(dest="action")
     create = prof_sub.add_parser("create", help="create a profile")
@@ -145,6 +149,11 @@ def main(argv: list[str] | None = None) -> int:
     load_env()
     if profiles.migrate_legacy():
         print("Moved data/taste.db to the 'default' profile.")
+    if args.command == "app":
+        from taste.web import serve  # Flask loads only when the app is used
+
+        serve(port=args.port, open_browser=not args.no_browser)
+        return 0
     try:
         if args.command == "profiles":
             return cmd_profiles(args)

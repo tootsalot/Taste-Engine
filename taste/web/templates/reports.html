@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ name }}: Reports{% endblock %}
+
+{% macro bars(rows, label_suffix="") %}
+<table class="bars">
+  {% for r in rows %}
+  <tr>
+    <th>{{ r.label }}{{ label_suffix }}</th>
+    <td>
+      <svg viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true">
+        <rect x="0" y="0" height="10" width="{{ r.width }}"></rect>
+      </svg>
+    </td>
+    <td class="num">{{ "{:,}".format(r.plays) }} ({{ r.pct_of_plays or 0 }}%)</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endmacro %}
+
+{% block content %}
+<h1>Reports</h1>
+<p><a href="{{ url_for('web.reports_zip', profile_id=profile_id) }}">Download all as CSV (zip)</a></p>
+
+<h2>Summary</h2>
+<pre class="status">{% for line in summary %}{{ line }}
+{% endfor %}</pre>
+
+<h2>When I listen ({{ tz_name }})</h2>
+<p class="scope">{{ scope.data_scope }}{% if scope.capture_scopes == "mixed" %} Plays were captured under more than one scope setting.{% endif %}</p>
+<div class="two-col">
+  <div><h3>Hour of day</h3>{{ bars(hours, ":00") }}</div>
+  <div><h3>Day of week</h3>{{ bars(days) }}</div>
+</div>
+
+<h2>All reports</h2>
+{% for t in tables %}
+<details>
+  <summary>{{ t.title }} <span class="muted">({{ t.rows|length }} rows)</span>
+    · <a href="{{ url_for('web.report_csv', profile_id=profile_id, name=t.name) }}">CSV</a></summary>
+  {% if t.lastfm %}<p class="scope">{{ scope.data_scope }}</p>{% endif %}
+  {% if t.rows %}
+  <div class="scroll">
+  <table>
+    <thead><tr>{% for c in t.columns if c not in ("data_scope", "item_id") %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for row in t.rows %}
+      <tr>{% for c in t.columns if c not in ("data_scope", "item_id") %}<td>{{ row[c] if row[c] is not none else "" }}</td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Nothing here yet. Run a sync first.</p>
+  {% endif %}
+</details>
+{% endfor %}
+{% endblock %}
