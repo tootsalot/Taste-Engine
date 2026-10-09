@@ -123,6 +123,23 @@ def test_on_repeat_ranks_albums_by_plays_in_the_window(music_world):
     assert later == []
 
 
+def query_plan(conn, sql, params=()):
+    return " | ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params))
+
+
+def test_dashboard_queries_use_indexes_not_full_scans(conn):
+    # On a real library a full scan per play froze the window for seconds (the
+    # Dashboard refreshes on the UI thread). Small test data can't show the time,
+    # so check the plan instead.
+    plan = query_plan(conn, overview.ON_REPEAT_SQL, (0, 0, 4))
+    # Start from the plays, then follow each track to its album: one pass, no
+    # nested scan of every play per artist link.
+    assert plan.startswith("SEARCH e "), plan
+    assert "SCAN" not in plan, plan
+    plan = query_plan(conn, overview.RECENTLY_FINISHED_SQL, (8,))
+    assert "SCAN s" not in plan, plan
+
+
 @pytest.mark.parametrize(
     ("utc_text", "expected"),
     [

@@ -201,6 +201,9 @@ CREATE TABLE IF NOT EXISTS core_item_links (
     PRIMARY KEY (parent_item_id, child_item_id, link_type)
 );
 
+-- Track to album lookups (the Dashboard's "On repeat" goes from plays to albums).
+CREATE INDEX IF NOT EXISTS ix_core_item_links_child ON core_item_links (child_item_id);
+
 CREATE TABLE IF NOT EXISTS core_creators (
     creator_id INTEGER PRIMARY KEY,
     name       TEXT NOT NULL,

@@ -12,6 +12,37 @@ from datetime import datetime, timedelta
 
 ON_REPEAT_DAYS = 30
 
+# The Dashboard runs these on the UI thread, so they must stay index lookups
+# (tests/test_overview.py checks the plans).
+RECENTLY_FINISHED_SQL = (
+    "SELECT i.title, e.occurred_at_utc, r.raw_score, cr.mean_score, img.url, "
+    "  s.nsfw_rating, i.title_alt "
+    "FROM core_behavior_events e "
+    "JOIN core_items i ON i.item_id = e.item_id "
+    "LEFT JOIN core_ratings r ON r.item_id = e.item_id AND r.source = e.source "
+    "LEFT JOIN core_community_ratings cr ON cr.item_id = e.item_id AND cr.source = e.source "
+    "LEFT JOIN core_item_images img "
+    "  ON img.item_id = e.item_id AND img.source = e.source AND img.kind = 'poster' "
+    "LEFT JOIN core_item_external_ids x "
+    "  ON x.item_id = e.item_id AND x.source = e.source AND x.id_type = 'mal_anime_id' "
+    "LEFT JOIN stg_mal_anime s ON s.mal_anime_id = CAST(x.external_id AS INTEGER) "
+    "WHERE e.source = 'mal' AND e.event_type = 'watch_finished' "
+    "ORDER BY e.occurred_at_utc DESC, i.title LIMIT ?"
+)
+ON_REPEAT_SQL = (
+    "SELECT al.title, c.name, COUNT(*) AS plays, img.url "
+    "FROM core_behavior_events e "
+    "JOIN core_item_links ln ON ln.child_item_id = e.item_id AND ln.link_type = 'appears_on' "
+    "JOIN core_items al ON al.item_id = ln.parent_item_id AND al.media_type = 'album' "
+    "JOIN core_item_creators ic ON ic.item_id = al.item_id AND ic.role = 'artist' "
+    "JOIN core_creators c ON c.creator_id = ic.creator_id "
+    "LEFT JOIN core_item_images img ON img.item_id = al.item_id AND img.kind = 'cover' "
+    "WHERE e.source = 'lastfm' AND e.event_type = 'play' "
+    "  AND e.occurred_at_unix > ? AND e.occurred_at_unix <= ? "
+    "GROUP BY al.item_id, al.title, c.name, img.url "
+    "ORDER BY plays DESC, al.title LIMIT ?"
+)
+
 
 @dataclass(frozen=True)
 class FinishedShow:
@@ -46,22 +77,7 @@ def recently_finished(conn: sqlite3.Connection, limit: int = 6) -> list[Finished
     A completed show without a finish date uses its last list edit instead (the
     fallback the MAL sync already stores on the watch_finished event).
     """
-    rows = conn.execute(
-        "SELECT i.title, e.occurred_at_utc, r.raw_score, cr.mean_score, img.url, "
-        "  s.nsfw_rating, i.title_alt "
-        "FROM core_behavior_events e "
-        "JOIN core_items i ON i.item_id = e.item_id "
-        "LEFT JOIN core_ratings r ON r.item_id = e.item_id AND r.source = e.source "
-        "LEFT JOIN core_community_ratings cr ON cr.item_id = e.item_id AND cr.source = e.source "
-        "LEFT JOIN core_item_images img "
-        "  ON img.item_id = e.item_id AND img.source = e.source AND img.kind = 'poster' "
-        "LEFT JOIN core_item_external_ids x "
-        "  ON x.item_id = e.item_id AND x.source = e.source AND x.id_type = 'mal_anime_id' "
-        "LEFT JOIN stg_mal_anime s ON CAST(s.mal_anime_id AS TEXT) = x.external_id "
-        "WHERE e.source = 'mal' AND e.event_type = 'watch_finished' "
-        "ORDER BY e.occurred_at_utc DESC, i.title LIMIT ?",
-        (limit,),
-    ).fetchall()
+    rows = conn.execute(RECENTLY_FINISHED_SQL, (limit,)).fetchall()
     return [
         FinishedShow(
             title=row[6] or row[0],
@@ -95,22 +111,9 @@ def on_repeat(
     A play counts for every album its track is linked to, and plays without an
     album aren't counted. `now` must be timezone-aware.
     """
-    since = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    until = now.strftime("%Y-%m-%d %H:%M:%S")
-    rows = conn.execute(
-        "SELECT al.title, c.name, COUNT(*) AS plays, img.url "
-        "FROM core_behavior_events e "
-        "JOIN core_item_links ln ON ln.child_item_id = e.item_id AND ln.link_type = 'appears_on' "
-        "JOIN core_items al ON al.item_id = ln.parent_item_id AND al.media_type = 'album' "
-        "JOIN core_item_creators ic ON ic.item_id = al.item_id AND ic.role = 'artist' "
-        "JOIN core_creators c ON c.creator_id = ic.creator_id "
-        "LEFT JOIN core_item_images img ON img.item_id = al.item_id AND img.kind = 'cover' "
-        "WHERE e.source = 'lastfm' AND e.event_type = 'play' "
-        "  AND e.occurred_at_utc > ? AND e.occurred_at_utc <= ? "
-        "GROUP BY al.item_id, al.title, c.name, img.url "
-        "ORDER BY plays DESC, al.title LIMIT ?",
-        (since, until, limit),
-    ).fetchall()
+    until = int(now.timestamp())
+    since = int((now - timedelta(days=days)).timestamp())
+    rows = conn.execute(ON_REPEAT_SQL, (since, until, limit)).fetchall()
     return [Album(title=r[0], artist=r[1], plays=r[2], cover_url=r[3]) for r in rows]
 
 
