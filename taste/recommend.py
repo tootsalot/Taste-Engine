@@ -229,12 +229,13 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
         if anime_id in related:
             kind, title, score = related[anime_id]
             rec.reasons.append(
-                f"{kind.replace('_', ' ').capitalize()} of {title}, which you gave a {score}."
+                f"{kind.replace('_', ' ').capitalize()} of {title}, which you gave {_a(score)}."
             )
         for _, title, score, votes in sorted(sources.get(anime_id, []), reverse=True)[
             :MAX_REASON_SEEDS
         ]:
-            rec.reasons.append(f"You gave {title} a {score}; {votes} users recommend this from it.")
+            who = "1 user recommends" if votes == 1 else f"{votes} users recommend"
+            rec.reasons.append(f"You gave {title} {_a(score)}; {who} this from it.")
         rec.reasons.extend(_genre_reasons(model, f["genres"]))
         recs.append(rec)
 
@@ -243,6 +244,11 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
     recs = recs[: cfg["rec_count"]]
     metrics = {"model_overall_bias": round(model.overall, 3), **evaluate(conn)}
     return recs, metrics
+
+
+def _a(score: int) -> str:
+    """'a 9', 'an 8'."""
+    return f"an {score}" if score in (8, 11, 18) else f"a {score}"
 
 
 def _genre_reasons(model: TasteModel, genres: list[str]) -> list[str]:
@@ -454,15 +460,24 @@ REC_SETTINGS = [
 ]
 
 
-def compute_all(conn: sqlite3.Connection, now: datetime | None = None) -> dict[str, int]:
-    """Recompute and save every list. No network. Returns counts per list."""
-    anime, metrics = anime_recommendations(conn)
-    discover, rediscover = music_recommendations(conn, now)
-    save_run(conn, "anime", anime, metrics)
-    save_run(conn, "music_discover", discover)
-    save_run(conn, "music_rediscover", rediscover)
-    return {
-        "anime": len(anime),
-        "music_discover": len(discover),
-        "music_rediscover": len(rediscover),
-    }
+def compute_all(
+    conn: sqlite3.Connection,
+    now: datetime | None = None,
+    kinds: tuple[str, ...] = ("anime", "music"),
+) -> dict[str, int]:
+    """Recompute and save the lists (anime, music, or both). No network.
+
+    Returns counts per list. Lists that weren't recomputed are counted from
+    their latest saved run.
+    """
+    if "anime" in kinds:
+        anime, metrics = anime_recommendations(conn)
+        save_run(conn, "anime", anime, metrics)
+    if "music" in kinds:
+        discover, rediscover = music_recommendations(conn, now)
+        save_run(conn, "music_discover", discover)
+        save_run(conn, "music_rediscover", rediscover)
+    return {kind: len(latest(conn, kind)[0]) for kind in LIST_KINDS}
+
+
+LIST_KINDS = ("anime", "music_discover", "music_rediscover")

@@ -17,18 +17,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import __version__, profiles
+from taste import __version__, profiles, recommend
 from taste.desktop import theme
 from taste.desktop.context import AppContext
 from taste.desktop.dashboard import DashboardPage
 from taste.desktop.dialogs import NewProfileDialog
+from taste.desktop.for_you import ForYouPage
 from taste.desktop.reports_page import ReportsPage
 from taste.desktop.settings_page import SettingsPage
 from taste.desktop.widgets import heading, label
 from taste.profiles import ProfileError
 from taste.settings import SettingError
 
-PAGES = ("Dashboard", "Reports", "Settings")
+PAGES = ("Dashboard", "For You", "Reports", "Settings")
 
 
 class MainWindow(QMainWindow):
@@ -82,10 +83,11 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.dashboard = DashboardPage(self.ctx)
+        self.for_you = ForYouPage(self.ctx)
         self.reports = ReportsPage(self.ctx)
         self.settings = SettingsPage(self.ctx)
         self.empty = self._empty_state()
-        for page in (self.dashboard, self.reports, self.settings, self.empty):
+        for page in (self.dashboard, self.for_you, self.reports, self.settings, self.empty):
             self.stack.addWidget(page)
         body.addWidget(self.stack, 1)
         outer.addLayout(body, 1)
@@ -93,7 +95,18 @@ class MainWindow(QMainWindow):
         self.dashboard.sync_finished.connect(lambda _: self.reports.refresh())
         self.settings.settings_saved.connect(self._after_settings_saved)
         self.settings.profile_deleted.connect(self._after_profile_deleted)
-        self.settings.is_busy = self.dashboard.is_syncing
+        # A sync and a recommendations refresh never run at the same time: both write
+        # the run log, and a new run marks any other running one as interrupted.
+        self.settings.is_busy = self.is_busy
+        self.dashboard.is_blocked = self.for_you.is_refreshing
+        self.for_you.is_blocked = self.dashboard.is_syncing
+        for signal in (
+            self.dashboard.sync_started,
+            self.dashboard.sync_finished,
+            self.for_you.refresh_started,
+            self.for_you.refresh_finished,
+        ):
+            signal.connect(self._update_busy)
 
         self.statusBar().showMessage(
             f"Taste Engine {__version__}. Your data stays on this computer."
@@ -141,11 +154,11 @@ class MainWindow(QMainWindow):
         pid = self.current_profile()
         has_profile = pid is not None
         self.sidebar.setEnabled(has_profile)
-        self.profile_picker.setEnabled(has_profile and not self.dashboard.is_syncing())
+        self.profile_picker.setEnabled(has_profile and not self.is_busy())
         if not has_profile:
             self.stack.setCurrentWidget(self.empty)
             return
-        for page in (self.dashboard, self.reports, self.settings):
+        for page in (self.dashboard, self.for_you, self.reports, self.settings):
             page.set_profile(pid)
         if self.sidebar.currentRow() < 0:
             self.sidebar.setCurrentRow(0)
@@ -156,6 +169,14 @@ class MainWindow(QMainWindow):
         if self.current_profile() is None or row < 0:
             return
         self.stack.setCurrentIndex(row)
+
+    def is_busy(self) -> bool:
+        return self.dashboard.is_syncing() or self.for_you.is_refreshing()
+
+    def _update_busy(self, *_args) -> None:
+        self.dashboard.set_blocked(self.for_you.is_refreshing())
+        self.for_you.set_blocked(self.dashboard.is_syncing())
+        self.profile_picker.setEnabled(self.current_profile() is not None and not self.is_busy())
 
     def _ask_new_profile(self) -> tuple[str, str] | None:
         dialog = NewProfileDialog(self)
@@ -178,12 +199,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Created {profile_id}. Add your usernames and API keys.")
         return True
 
-    def _after_settings_saved(self) -> None:
+    def _after_settings_saved(self, changed: list[str]) -> None:
         pid = self.current_profile()
         index = self.profile_picker.currentIndex()
         self.profile_picker.setItemText(index, profiles.display_name(pid))
         self.dashboard.refresh()
         self.reports.refresh()
+        if set(changed) & set(recommend.REC_SETTINGS):
+            # Plan to Watch, minimum raters, and so on change the lists: recompute from
+            # what's cached (no network, about a second, in the background).
+            self.for_you.start_refresh(fetch=False)
 
     def _after_profile_deleted(self, profile_id: str) -> None:
         self.statusBar().showMessage(f"Deleted profile {profile_id}.")
@@ -199,20 +224,24 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def _confirm_quit_during_sync(self) -> bool:
+        what = "A sync" if self.dashboard.is_syncing() else "A recommendations refresh"
         answer = QMessageBox.question(
             self,
-            "A sync is running",
-            "Quit anyway? The sync stops, and the next sync picks up where it left off.",
+            f"{what} is running",
+            "Quit anyway? It stops, and the next one picks up where it left off.",
         )
         return answer == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        if self.dashboard.is_syncing():
-            if not self._confirm_quit_during_sync():
-                event.ignore()
-                return
-            # Stops after the page in flight; committed pages stay and the next sync resumes.
-            self.dashboard.worker.cancel()
-            self.dashboard.worker.wait(15000)
+        # Only long work is worth asking about; a recompute from the cache takes a second.
+        long_work = self.dashboard.is_syncing() or self.for_you.is_fetching()
+        if long_work and not self._confirm_quit_during_sync():
+            event.ignore()
+            return
+        # Stops after the page in flight; committed pages stay and the next run resumes.
+        for worker in (self.dashboard.worker, self.for_you.worker):
+            if worker is not None and worker.isRunning():
+                worker.cancel()
+                worker.wait(15000)
         self.ctx.shutdown()
         event.accept()

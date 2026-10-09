@@ -244,5 +244,5 @@ def test_smoke_test_report(qapp, tmp_path):
     path = tmp_path / "smoke.txt"
     assert smoke_test(qapp, str(path)) == 0
     report = dict(line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines())
-    assert report["pages"] == "4"
+    assert report["pages"] == "5"
     assert report["webp"] == "True" and report["jpeg"] == "True"

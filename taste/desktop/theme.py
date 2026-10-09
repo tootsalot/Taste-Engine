@@ -46,6 +46,11 @@ def number_font(size: int) -> QFont:
     return font
 
 
+def title_font(size: int) -> QFont:
+    """Card titles: bold Manrope, because Syne is too wide for names in a narrow column."""
+    return number_font(size)
+
+
 def heading_font(size: int, weight: QFont.Weight = QFont.Weight.ExtraBold) -> QFont:
     font = QFont(HEADING_FAMILY)
     font.setPixelSize(size)
@@ -98,6 +103,15 @@ QLabel[role="big"] {{ font-size: 30px; font-weight: 800; }}
 #Sidebar::item:hover:!selected {{ background: {SURFACE}; }}
 
 QFrame[role="card"] {{ background: {SURFACE}; border-radius: 14px; }}
+QLabel[role="badge"] {{ background: {RAISED}; color: {LILAC}; border-radius: 9px;
+                        padding: 2px 10px; font-size: 12px; font-weight: 700; }}
+QLabel[role="reason"] {{ color: {TEXT}; font-size: 13px; }}
+QLabel[role="section"] {{ color: {MUTED}; font-size: 12px; font-weight: 700;
+                          letter-spacing: 1px; }}
+QPushButton[role="link"] {{ background: transparent; border: none; color: {LILAC};
+                            padding: 4px 0; font-weight: 700; }}
+QPushButton[role="link"]:hover {{ color: #C7B3FF; text-decoration: underline; }}
+QPushButton[role="link"]:disabled {{ color: {MUTED}; }}
 
 QPushButton {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: 18px;
                padding: 8px 16px; min-height: 20px; }}

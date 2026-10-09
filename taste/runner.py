@@ -112,19 +112,33 @@ def refresh_recommendations(
     client_factory: ClientFactory = _default_client,
     fetch: bool = True,
     now: datetime | None = None,
+    on_update: Callable[[], None] | None = None,
 ) -> dict[str, int]:
     """Fetch what's missing (unless fetch=False), then recompute every list.
 
     A source without a key or username is skipped; its list just uses what's cached.
+    The anime list is saved as soon as the MAL part is done, so it can be shown
+    while Last.fm is still fetching. `on_update` is called after each save.
     """
+
+    def compute(*kinds: str) -> dict[str, int]:
+        with transaction(conn):
+            result = recommend.compute_all(conn, now, kinds)
+        if on_update is not None:
+            on_update()
+        return result
+
     store = store or SecretStore()
     lastfm_cfg = None
+    pending = ["anime", "music"]
     if fetch:
         try:
             mal_cfg = credentials.mal(conn, profile_id, store)
-            enrich.enrich_mal(conn, client_factory([mal_cfg.client_id]), mal_cfg, out, now=now)
         except ConfigError:
             out("Recommendations: skipping MyAnimeList (no key or username).")
+        else:
+            enrich.enrich_mal(conn, client_factory([mal_cfg.client_id]), mal_cfg, out, now=now)
+            compute(pending.pop(0))
         try:
             lastfm_cfg = credentials.lastfm(conn, profile_id, store)
             enrich.enrich_lastfm(
@@ -137,8 +151,7 @@ def refresh_recommendations(
             )
         except ConfigError:
             out("Recommendations: skipping Last.fm (no key or username).")
-    with transaction(conn):
-        counts = recommend.compute_all(conn, now)
+    counts = compute(*pending)
     if lastfm_cfg is not None:
         # Covers for suggested artists I've never played, then recompute so they show.
         discover, _, _ = recommend.latest(conn, "music_discover")
@@ -146,8 +159,7 @@ def refresh_recommendations(
         if missing and enrich.fetch_artist_covers(
             conn, client_factory([lastfm_cfg.api_key]), lastfm_cfg, missing, now
         ):
-            with transaction(conn):
-                counts = recommend.compute_all(conn, now)
+            counts = compute("music")
     out(
         f"Recommendations ready: {counts['anime']} anime, {counts['music_discover']} new "
         f"artists, {counts['music_rediscover']} to rediscover."

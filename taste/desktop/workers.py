@@ -74,6 +74,64 @@ class SyncWorker(QThread):
         self.done.emit(results)
 
 
+class RecsWorker(QThread):
+    """Fetch what recommendations need, then recompute them (runner.refresh_recommendations)."""
+
+    message = Signal(str)
+    updated = Signal()  # a list was saved; the page can redraw while the rest runs
+    done = Signal(dict)  # counts per list, empty if it failed
+
+    def __init__(
+        self,
+        profile_id: str,
+        store: SecretStore,
+        client_factory: Any = None,
+        recs_kwargs: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__()
+        self.profile_id = profile_id
+        self.store = store
+        self.client_factory = client_factory
+        self.recs_kwargs = recs_kwargs or {}
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def _out(self, message: str) -> None:
+        if self._cancelled:
+            raise SyncCancelled("Stopped because the app was closed.")
+        self.message.emit(message)
+
+    def run(self) -> None:
+        counts: dict[str, int] = {}
+        conn = None
+        try:
+            conn = db.connect(profiles.db_path(self.profile_id))
+            kwargs: dict[str, Any] = dict(self.recs_kwargs)
+            if self.client_factory is not None:
+                kwargs["client_factory"] = self.client_factory
+            counts = runner.refresh_recommendations(
+                conn,
+                self.profile_id,
+                store=self.store,
+                out=self._out,
+                on_update=self.updated.emit,
+                **kwargs,
+            )
+        except SyncCancelled:
+            pass  # everything fetched so far is committed; the next refresh continues
+        except Exception as exc:
+            self.message.emit(
+                f"Recommendations stopped on an unexpected error ({type(exc).__name__})."
+            )
+            traceback.print_exc()
+        finally:
+            if conn is not None:
+                conn.close()
+        self.done.emit(counts)
+
+
 class ConnectionTestWorker(QThread):
     done = Signal(bool, str)
 

@@ -25,6 +25,7 @@ PAGE_PROGRESS = re.compile(r"page (\d+) of (\d+)")
 
 
 class DashboardPage(QWidget):
+    sync_started = Signal()
     sync_finished = Signal(dict)
 
     def __init__(self, ctx: AppContext) -> None:
@@ -32,6 +33,7 @@ class DashboardPage(QWidget):
         self.ctx = ctx
         self.profile_id: str | None = None
         self.worker: SyncWorker | None = None
+        self.is_blocked = lambda: False  # the main window points this at "are recs refreshing?"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
@@ -145,8 +147,13 @@ class DashboardPage(QWidget):
     def is_syncing(self) -> bool:
         return self.worker is not None and self.worker.isRunning()
 
+    def set_blocked(self, blocked: bool) -> None:
+        for button in self.sync_buttons.values():
+            button.setEnabled(not blocked and not self.is_syncing())
+            button.setToolTip("Wait for the recommendations to finish." if blocked else "")
+
     def start_sync(self, source: str) -> None:
-        if not self.profile_id or self.is_syncing():
+        if not self.profile_id or self.is_syncing() or self.is_blocked():
             return
         self.log.clear()
         self.progress.setRange(0, 0)  # busy until a page count arrives
@@ -159,6 +166,7 @@ class DashboardPage(QWidget):
         self.worker.message.connect(self._on_message)
         self.worker.done.connect(self._on_done)
         self.worker.start()
+        self.sync_started.emit()
 
     def _on_message(self, message: str) -> None:
         self.log.appendPlainText(message)
@@ -172,7 +180,7 @@ class DashboardPage(QWidget):
         self.worker.wait()
         self.progress.setVisible(False)
         for button in self.sync_buttons.values():
-            button.setEnabled(True)
+            button.setEnabled(not self.is_blocked())
         ok = bool(results) and all(results.values())
         self.log.appendPlainText("Done." if ok else "Finished with problems. See above.")
         self.refresh()

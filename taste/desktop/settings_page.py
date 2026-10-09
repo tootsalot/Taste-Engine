@@ -41,7 +41,7 @@ STATUS_TEXT = {
 
 class SettingsPage(QWidget):
     profile_deleted = Signal(str)
-    settings_saved = Signal()
+    settings_saved = Signal(list)  # keys that changed
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -257,6 +257,7 @@ class SettingsPage(QWidget):
 
     def save_settings(self) -> bool:
         errors = []
+        changed = []
         conn = self.ctx.connect(self.profile_id)
         try:
             for field in settings.SETTINGS:
@@ -264,6 +265,7 @@ class SettingsPage(QWidget):
                 try:
                     if value != settings.get(conn, field.key):
                         settings.set_value(conn, field.key, value)
+                        changed.append(field.key)
                 except SettingError as exc:
                     errors.append(str(exc))
         finally:
@@ -273,7 +275,7 @@ class SettingsPage(QWidget):
         else:
             self._message(self.settings_message, "Settings saved.", ok=True)
         self.refresh()
-        self.settings_saved.emit()
+        self.settings_saved.emit(changed)
         return not errors
 
     def save_key(self, name: str) -> None:

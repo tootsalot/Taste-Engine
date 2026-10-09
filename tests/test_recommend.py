@@ -186,7 +186,7 @@ def test_cards_explain_themselves(conn, anime_world):
     # The show I liked most comes first.
     assert one.reasons[:2] == [
         "You gave Example Drama A a 9; 20 users recommend this from it.",
-        "You gave Example Action F a 8; 7 users recommend this from it.",
+        "You gave Example Action F an 8; 7 users recommend this from it.",
     ]
     assert recs[203].reasons[0] == "Sequel of Example Drama A, which you gave a 9."
 
@@ -372,3 +372,8 @@ def test_refresh_without_data_is_empty_not_an_error(conn):
         now=datetime(2026, 10, 1, tzinfo=timezone.utc),
     )  # fmt: skip
     assert counts == {"anime": 0, "music_discover": 0, "music_rediscover": 0}
+
+
+def test_reasons_read_like_sentences(conn, anime_world):
+    _, recs = anime_keys(conn)
+    assert "You gave Example Action F an 8; 1 user recommends this from it." in recs[206].reasons

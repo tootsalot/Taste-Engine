@@ -15,6 +15,7 @@ class AppContext:
     store: SecretStore = field(default_factory=SecretStore)
     client_factory: Any = None  # tests pass fake HTTP clients
     sync_kwargs: dict[str, Any] = field(default_factory=dict)
+    recs_kwargs: dict[str, Any] = field(default_factory=dict)  # tests pin "now"
     image_session: Any = None  # tests pass a fake download session
     _prepared: set[str] = field(default_factory=set)
     _art: Any = None

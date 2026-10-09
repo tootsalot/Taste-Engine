@@ -107,7 +107,7 @@ def smoke_test(exe: Path, expected_version: str) -> None:
         "syne": "True",
         "manrope": "True",
         "icon": "True",
-        "pages": "4",
+        "pages": "5",
         "webp": "True",
         "jpeg": "True",
     }
