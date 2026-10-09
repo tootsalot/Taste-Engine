@@ -164,6 +164,32 @@ def set_item_tags(
         )
 
 
+def set_item_image(
+    conn: sqlite3.Connection, item_id: int, source: str, kind: str, url: str
+) -> None:
+    conn.execute(
+        "INSERT INTO core_item_images (item_id, source, kind, url) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (item_id, source, kind) DO UPDATE SET url = excluded.url",
+        (item_id, source, kind, url),
+    )
+
+
+def set_similarity(
+    conn: sqlite3.Connection,
+    item_id: int,
+    similar_item_id: int,
+    source: str,
+    kind: str,
+    score: float,
+) -> None:
+    conn.execute(
+        "INSERT INTO core_item_similarity (item_id, similar_item_id, source, kind, score) "
+        "VALUES (?, ?, ?, ?, ?) ON CONFLICT (item_id, similar_item_id, source, kind) "
+        "DO UPDATE SET score = excluded.score",
+        (item_id, similar_item_id, source, kind, score),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Signals
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ API behavior this relies on (checked against the live API): `from` is inclusive,
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from collections.abc import Callable
@@ -40,6 +41,21 @@ PAGE_LIMIT = 200
 # Dedupe makes the overlap harmless.
 DAY_SECONDS = 24 * 60 * 60
 KEY_SEPARATOR = "\x1f"  # joins names into identity keys; can't appear in a title
+# Last.fm returns this image for anything it has no picture for (all artists, some albums).
+PLACEHOLDER_IMAGE = "2a96cbd8b46e442fc41c2b86b821562f"
+
+
+def image_url(images: Any) -> str | None:
+    """Best real image from a Last.fm image list, or None for missing or placeholder."""
+    if not isinstance(images, list):
+        return None
+    by_size = {i.get("size"): i.get("#text") for i in images if isinstance(i, dict)}
+    for size in ("extralarge", "large", "mega", "medium"):
+        url = by_size.get(size)
+        if url and PLACEHOLDER_IMAGE not in url:
+            return url
+    return None
+
 
 # Last.fm error codes that mean "try again later".
 RETRYABLE_ERRORS = {
@@ -269,6 +285,7 @@ def parse_tracks(tracks: Any) -> list[dict[str, Any]]:
                 "album_name": album.get("#text") or "",
                 "album_mbid": album.get("mbid") or "",
                 "track_url": track.get("url"),
+                "image_url": image_url(track.get("image")),
             }
         )
     return scrobbles
@@ -280,8 +297,8 @@ def _insert_scrobbles(conn: sqlite3.Connection, scrobbles: list[dict[str, Any]],
     for s in scrobbles:
         cursor = conn.execute(
             "INSERT INTO stg_lastfm_scrobbles (played_at_unix, played_at_utc, artist_name, "
-            "artist_mbid, track_name, track_mbid, album_name, album_mbid, track_url, "
-            "raw_page_id, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "artist_mbid, track_name, track_mbid, album_name, album_mbid, track_url, image_url, "
+            "raw_page_id, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (played_at_unix, artist_name, track_name) DO NOTHING",
             (
                 s["played_at_unix"],
@@ -293,6 +310,7 @@ def _insert_scrobbles(conn: sqlite3.Connection, scrobbles: list[dict[str, Any]],
                 s["album_name"],
                 s["album_mbid"],
                 s["track_url"],
+                s["image_url"],
                 raw_id,
                 now,
             ),
@@ -388,6 +406,8 @@ def load_core(conn: sqlite3.Connection, capture_scope: str) -> int:
                 core.add_item_external_id(
                     conn, album_id, SOURCE, "musicbrainz_release", row["album_mbid"]
                 )
+            if row["image_url"]:
+                core.set_item_image(conn, album_id, SOURCE, "cover", row["image_url"])
 
         added += core.upsert_event(
             conn,
@@ -404,3 +424,40 @@ def load_core(conn: sqlite3.Connection, capture_scope: str) -> int:
             ),
         )
     return added
+
+
+def backfill_images(conn: sqlite3.Connection) -> int:
+    """Fill in cover art for scrobbles stored before covers were kept, from raw pages.
+
+    No API calls: the raw layer already holds every page as fetched. Returns how
+    many album covers were set.
+    """
+    pages = conn.execute(
+        "SELECT DISTINCT p.raw_page_id, p.payload FROM raw_api_pages p "
+        "JOIN stg_lastfm_scrobbles s ON s.raw_page_id = p.raw_page_id "
+        "WHERE s.image_url IS NULL"
+    ).fetchall()
+    for page in pages:
+        recent = json.loads(page["payload"]).get("recenttracks") or {}
+        for s in parse_tracks(recent.get("track")):
+            if s["image_url"]:
+                conn.execute(
+                    "UPDATE stg_lastfm_scrobbles SET image_url = ? WHERE played_at_unix = ? "
+                    "AND artist_name = ? AND track_name = ? AND image_url IS NULL",
+                    (s["image_url"], s["played_at_unix"], s["artist_name"], s["track_name"]),
+                )
+    covers = conn.execute(
+        "SELECT artist_name, album_name, image_url FROM stg_lastfm_scrobbles "
+        "WHERE album_name <> '' AND image_url IS NOT NULL ORDER BY played_at_unix"
+    ).fetchall()
+    latest: dict[str, str] = {}
+    for row in covers:  # newest wins
+        key = f"{row['artist_name'].lower()}{KEY_SEPARATOR}{row['album_name'].lower()}"
+        latest[key] = row["image_url"]
+    count = 0
+    for key, url in latest.items():
+        item_id = core.find_item(conn, SOURCE, "lastfm_album_key", key)
+        if item_id is not None:
+            core.set_item_image(conn, item_id, SOURCE, "cover", url)
+            count += 1
+    return count

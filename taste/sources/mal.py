@@ -66,6 +66,8 @@ ANIME_FIELDS = [
     "rating",
     "source",
     "average_episode_duration",
+    "main_picture",
+    "nsfw",
 ]
 FIELDS = f"list_status{{{','.join(LIST_STATUS_FIELDS)}}},{','.join(ANIME_FIELDS)}"
 
@@ -194,7 +196,7 @@ def _load(conn: sqlite3.Connection, run: SyncRun, pages: list[tuple[int, dict[st
     for raw_id, payload in pages:
         for entry in payload["data"]:
             node, list_status = entry["node"], entry["list_status"]
-            _upsert_stg_anime(conn, node, raw_id, now)
+            upsert_stg_anime(conn, node, raw_id, now)
             change = _upsert_stg_list_entry(conn, node["id"], list_status, run.run_id, raw_id, now)
             if change == "inserted":
                 run.rows_inserted += 1
@@ -209,7 +211,13 @@ def _none_if_blank(value: Any) -> Any:
     return value if value not in ("", None) else None
 
 
-def _upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: int, now: str):
+def poster_url(node: dict[str, Any]) -> str | None:
+    picture = node.get("main_picture") or {}
+    return picture.get("medium") or picture.get("large")
+
+
+def upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: int, now: str):
+    """Upsert one anime from a list entry's node or a details response (same shape)."""
     alt = node.get("alternative_titles") or {}
     season = node.get("start_season") or {}
     anime_id = node["id"]
@@ -217,8 +225,8 @@ def _upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: in
         "INSERT INTO stg_mal_anime (mal_anime_id, title, title_en, title_ja, synonyms_json, "
         "media_type, num_episodes, start_season_year, start_season, airing_status, start_date, "
         "end_date, content_rating, source_material, avg_episode_seconds, community_mean, "
-        "num_scoring_users, last_raw_page_id, loaded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "num_scoring_users, main_picture_url, nsfw_rating, last_raw_page_id, loaded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (mal_anime_id) DO UPDATE SET title = excluded.title, "
         "title_en = excluded.title_en, title_ja = excluded.title_ja, "
         "synonyms_json = excluded.synonyms_json, media_type = excluded.media_type, "
@@ -229,6 +237,8 @@ def _upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: in
         "avg_episode_seconds = excluded.avg_episode_seconds, "
         "community_mean = excluded.community_mean, "
         "num_scoring_users = excluded.num_scoring_users, "
+        "main_picture_url = COALESCE(excluded.main_picture_url, stg_mal_anime.main_picture_url), "
+        "nsfw_rating = COALESCE(excluded.nsfw_rating, stg_mal_anime.nsfw_rating), "
         "last_raw_page_id = excluded.last_raw_page_id, loaded_at = excluded.loaded_at",
         (
             anime_id,
@@ -248,6 +258,8 @@ def _upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: in
             node.get("average_episode_duration") or None,
             node.get("mean"),
             node.get("num_scoring_users"),
+            poster_url(node),
+            node.get("nsfw"),
             raw_id,
             now,
         ),
@@ -350,15 +362,14 @@ def date_event_time(value: str | None) -> tuple[str, str] | None:
     return f"{value}-01-01 00:00:00", "year"
 
 
-def _load_core(conn: sqlite3.Connection, anime_id: int) -> None:
-    """Load one anime and my list entry for it from staging into core."""
+def load_anime_core(conn: sqlite3.Connection, anime_id: int) -> int:
+    """Load one anime's own facts (not my opinion of it) into core. Returns its item_id.
+
+    Used for shows on my list and for recommendation candidates that aren't.
+    """
     anime = conn.execute(
         "SELECT * FROM stg_mal_anime WHERE mal_anime_id = ?", (anime_id,)
     ).fetchone()
-    entry = conn.execute(
-        "SELECT * FROM stg_mal_list_entries WHERE mal_anime_id = ?", (anime_id,)
-    ).fetchone()
-
     release_year = anime["start_season_year"]
     if release_year is None and anime["start_date"]:
         release_year = int(anime["start_date"][:4])
@@ -396,19 +407,6 @@ def _load_core(conn: sqlite3.Connection, anime_id: int) -> None:
         conn, item_id, SOURCE, [core.tag_id(conn, g["genre_name"], "genre") for g in genres]
     )
 
-    if entry["score"] is not None:
-        core.upsert_rating(
-            conn,
-            item_id=item_id,
-            source=SOURCE,
-            raw_score=entry["score"],
-            scale_min=SCORE_MIN,
-            scale_max=SCORE_MAX,
-            source_updated_at=entry["mal_updated_at"],
-        )
-    else:
-        core.delete_rating(conn, item_id, SOURCE)
-
     if anime["community_mean"] is not None:
         core.upsert_community_rating(
             conn,
@@ -421,6 +419,33 @@ def _load_core(conn: sqlite3.Connection, anime_id: int) -> None:
         )
     else:
         core.delete_community_rating(conn, item_id, SOURCE)
+    if anime["main_picture_url"]:
+        core.set_item_image(conn, item_id, SOURCE, "poster", anime["main_picture_url"])
+    return item_id
+
+
+def _load_core(conn: sqlite3.Connection, anime_id: int) -> None:
+    """Load one anime and my list entry for it from staging into core."""
+    item_id = load_anime_core(conn, anime_id)
+    anime = conn.execute(
+        "SELECT num_episodes FROM stg_mal_anime WHERE mal_anime_id = ?", (anime_id,)
+    ).fetchone()
+    entry = conn.execute(
+        "SELECT * FROM stg_mal_list_entries WHERE mal_anime_id = ?", (anime_id,)
+    ).fetchone()
+
+    if entry["score"] is not None:
+        core.upsert_rating(
+            conn,
+            item_id=item_id,
+            source=SOURCE,
+            raw_score=entry["score"],
+            scale_min=SCORE_MIN,
+            scale_max=SCORE_MAX,
+            source_updated_at=entry["mal_updated_at"],
+        )
+    else:
+        core.delete_rating(conn, item_id, SOURCE)
 
     core.upsert_curation(
         conn,

@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS stg_mal_anime (
     avg_episode_seconds INTEGER,
     community_mean      REAL,
     num_scoring_users   INTEGER,
+    main_picture_url    TEXT,
+    nsfw_rating         TEXT,
     last_raw_page_id    INTEGER REFERENCES raw_api_pages (raw_page_id),
     loaded_at           TEXT NOT NULL
 );
@@ -158,6 +160,7 @@ CREATE TABLE IF NOT EXISTS stg_lastfm_scrobbles (
     album_name     TEXT NOT NULL DEFAULT '',
     album_mbid     TEXT NOT NULL DEFAULT '',
     track_url      TEXT,
+    image_url      TEXT,
     raw_page_id    INTEGER NOT NULL REFERENCES raw_api_pages (raw_page_id),
     loaded_at      TEXT NOT NULL,
     CONSTRAINT uq_stg_lastfm_scrobbles UNIQUE (played_at_unix, artist_name, track_name)
@@ -313,4 +316,112 @@ CREATE TABLE IF NOT EXISTS core_curation (
     repeat_count      INTEGER,
     source_updated_at TEXT,
     CONSTRAINT uq_core_curation UNIQUE (source, item_id, curation_type, list_name)
+);
+
+-- ---------------------------------------------------------------------------
+-- Enrichment (docs/PLAN_RECS.md): details fetched for recommendations and art
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS stg_mal_anime_details (
+    mal_anime_id INTEGER NOT NULL PRIMARY KEY,
+    fetched_at   TEXT NOT NULL,
+    raw_page_id  INTEGER REFERENCES raw_api_pages (raw_page_id)
+);
+
+CREATE TABLE IF NOT EXISTS stg_mal_anime_recommendations (
+    mal_anime_id        INTEGER NOT NULL,
+    recommended_id      INTEGER NOT NULL,
+    recommended_title   TEXT NOT NULL,
+    num_recommendations INTEGER NOT NULL,
+    PRIMARY KEY (mal_anime_id, recommended_id)
+);
+
+CREATE TABLE IF NOT EXISTS stg_mal_related_anime (
+    mal_anime_id  INTEGER NOT NULL,
+    related_id    INTEGER NOT NULL,
+    related_title TEXT NOT NULL,
+    relation_type TEXT NOT NULL,
+    PRIMARY KEY (mal_anime_id, related_id)
+);
+
+CREATE TABLE IF NOT EXISTS stg_lastfm_artist_fetches (
+    artist_key TEXT NOT NULL,
+    method     TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (artist_key, method)
+);
+
+CREATE TABLE IF NOT EXISTS stg_lastfm_similar_artists (
+    artist_key   TEXT NOT NULL,
+    similar_key  TEXT NOT NULL,
+    similar_name TEXT NOT NULL,
+    similar_mbid TEXT NOT NULL DEFAULT '',
+    match        REAL NOT NULL,
+    PRIMARY KEY (artist_key, similar_key)
+);
+
+CREATE TABLE IF NOT EXISTS stg_lastfm_artist_tags (
+    artist_key TEXT NOT NULL,
+    tag        TEXT NOT NULL,
+    tag_count  INTEGER NOT NULL,
+    PRIMARY KEY (artist_key, tag)
+);
+
+CREATE TABLE IF NOT EXISTS stg_lastfm_artist_top_album (
+    artist_key TEXT NOT NULL PRIMARY KEY,
+    album_name TEXT NOT NULL,
+    image_url  TEXT,
+    fetched_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS core_item_images (
+    item_id INTEGER NOT NULL REFERENCES core_items (item_id),
+    source  TEXT NOT NULL REFERENCES core_sources (source),
+    kind    TEXT NOT NULL,
+    url     TEXT NOT NULL,
+    PRIMARY KEY (item_id, source, kind)
+);
+
+CREATE TABLE IF NOT EXISTS core_item_similarity (
+    item_id         INTEGER NOT NULL REFERENCES core_items (item_id),
+    similar_item_id INTEGER NOT NULL REFERENCES core_items (item_id),
+    source          TEXT NOT NULL REFERENCES core_sources (source),
+    kind            TEXT NOT NULL,
+    score           REAL NOT NULL,
+    PRIMARY KEY (item_id, similar_item_id, source, kind)
+);
+
+-- ---------------------------------------------------------------------------
+-- Recommendations: every run is saved with its scores and reasons
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS rec_runs (
+    rec_run_id   INTEGER PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    params_json  TEXT NOT NULL,
+    metrics_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS rec_items (
+    rec_run_id   INTEGER NOT NULL REFERENCES rec_runs (rec_run_id) ON DELETE CASCADE,
+    rank         INTEGER NOT NULL,
+    item_key     TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    subtitle     TEXT NOT NULL DEFAULT '',
+    score        REAL,
+    support      REAL,
+    badge        TEXT NOT NULL DEFAULT '',
+    image_url    TEXT,
+    url          TEXT,
+    reasons_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (rec_run_id, rank)
+);
+
+-- "Not interested". App state, not a taste signal yet.
+CREATE TABLE IF NOT EXISTS rec_dismissed (
+    kind         TEXT NOT NULL,
+    item_key     TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL,
+    PRIMARY KEY (kind, item_key)
 );

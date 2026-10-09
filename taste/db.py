@@ -36,11 +36,29 @@ def connect(path: str | Path, *, setup: bool = True) -> sqlite3.Connection:
     return conn
 
 
+# Columns added after a table first shipped. CREATE TABLE IF NOT EXISTS won't add
+# them to an existing database, so they're added here. ALTER TABLE ... ADD ports to
+# SQL Server; reading PRAGMA table_info is SQLite-only and stays in Python.
+ADDED_COLUMNS = [
+    ("stg_mal_anime", "main_picture_url", "TEXT"),
+    ("stg_mal_anime", "nsfw_rating", "TEXT"),
+    ("stg_lastfm_scrobbles", "image_url", "TEXT"),
+]
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, column, decl in ADDED_COLUMNS:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
     # Local imports: both modules import this one.
     from taste import local_time, settings
 
     conn.executescript((SQL_DIR / "schema.sql").read_text(encoding="utf-8"))
+    _add_missing_columns(conn)
     settings.ensure_defaults(conn)
     settings.apply_source_notes(conn)
     conn.executescript((SQL_DIR / "views.sql").read_text(encoding="utf-8"))

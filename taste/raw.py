@@ -26,6 +26,7 @@ REFERENCES = [
     ("stg_lastfm_scrobbles", "raw_page_id"),
     ("stg_mal_anime", "last_raw_page_id"),
     ("stg_mal_list_entries", "last_raw_page_id"),
+    ("stg_mal_anime_details", "raw_page_id"),
 ]
 
 
