@@ -24,7 +24,7 @@ python -m taste.desktop
 3. On the **Dashboard**, click **Sync everything**. The first time, it also fetches what the recommendations need, which takes a few minutes for a big list. After that it's seconds.
 4. The **Dashboard** shows what I finished lately, the albums on repeat this month, how I score compared to the MAL crowd, and which genres I'm most generous or harshest with.
 5. **For You** has anime suggestions, each with a predicted score for me next to the MAL mean, the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, labeled Strong match, Good match, or Worth a try, and old favorites to rediscover.
-6. **Reports** is all charts: my score against MAL's for every show, where I tend to drop shows, genre leans, plays per month, top artists and tracks, and plays by hour and day. The numbers behind them are in **Export CSV**, one report at a time or all at once.
+6. **Reports** is all charts: my average score for shows at each level of the MAL mean, where I tend to drop shows, genres I rate closest to and furthest below MAL, plays per month, top artists and tracks, and plays by hour and day. Short charts show their counts and long ones a scale. The numbers behind them are in **Export CSV**, one report at a time or all at once.
 
 The sidebar collapses to icons with the button at its top or **Ctrl+B**, and the app remembers which way I left it.
 
