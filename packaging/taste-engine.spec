@@ -48,6 +48,12 @@ a = Analysis(  # noqa: F821
     excludes=excludes,
     noarchive=False,
 )
+# Qt's PDF image plugin drags in Qt PDF (Chromium's PDFium). The app never reads PDFs.
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if not Path(entry[0]).name.lower().startswith(("qt6pdf", "qpdf"))
+]
 pyz = PYZ(a.pure)  # noqa: F821
 exe = EXE(  # noqa: F821
     pyz,

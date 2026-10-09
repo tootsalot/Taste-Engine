@@ -5,7 +5,8 @@
     python scripts/build_release.py --check-tag v0.2.0   fail unless the tag matches __version__
     python scripts/build_release.py --notes v0.2.0       print that version's CHANGELOG section
 
-Output goes to dist/: taste-engine-<version>-<platform>.zip plus a .sha256 file.
+Output goes to dist/: taste-engine-<version>-<platform>.zip plus a .sha256 file. The zip
+holds the app folder with LICENSE.txt and THIRD_PARTY_NOTICES.txt (scripts/notices.py).
 The build is for the OS it runs on. Windows releases are built on GitHub Actions.
 Needs: pip install -r requirements-build.txt
 """
@@ -23,6 +24,8 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+
+import notices  # scripts/notices.py
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
@@ -104,8 +107,8 @@ def smoke_test(exe: Path, expected_version: str) -> None:
     expected = {
         "version": expected_version,
         "title": "Taste Engine",
-        "syne": "True",
-        "manrope": "True",
+        "heading_font": "True",
+        "body_font": "True",
         "icon": "True",
         "pages": "5",
         "webp": "True",
@@ -121,10 +124,16 @@ def package(exe: Path, ver: str) -> Path:
     DIST.mkdir(exist_ok=True)
     zip_path = DIST / f"{APP_NAME}-{ver}-{platform_tag()}.zip"
     app_dir = exe.parent
+    notices.write(app_dir, ver)  # THIRD_PARTY_NOTICES.txt and LICENSE.txt next to the exe
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(app_dir.rglob("*")):
             if path.is_file():
                 zf.write(path, Path(APP_NAME) / path.relative_to(app_dir))
+    with zipfile.ZipFile(zip_path) as zf:
+        names = set(zf.namelist())
+    for required in ("THIRD_PARTY_NOTICES.txt", "LICENSE.txt"):
+        if f"{APP_NAME}/{required}" not in names:
+            sys.exit(f"The release zip is missing {required}")
     digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
     zip_path.with_suffix(".zip.sha256").write_text(f"{digest}  {zip_path.name}\n", encoding="utf-8")
     return zip_path

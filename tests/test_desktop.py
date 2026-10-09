@@ -246,3 +246,23 @@ def test_smoke_test_report(qapp, tmp_path):
     report = dict(line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines())
     assert report["pages"] == "5"
     assert report["webp"] == "True" and report["jpeg"] == "True"
+
+
+def test_about_credits_and_notices(window, monkeypatch, tmp_path):
+    from taste.desktop import settings_page
+
+    window.new_profile(("me", "Me"))
+    page = window.settings
+    text = visible_text(window)
+    assert "MIT License" in text and "LGPL 3.0" in text and "Space Grotesk" in text
+    assert not page.notices_button.isEnabled()  # from source there's no notices file
+
+    (tmp_path / "THIRD_PARTY_NOTICES.txt").write_text("notices", encoding="utf-8")
+    monkeypatch.setattr(settings_page.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(settings_page.sys, "executable", str(tmp_path / "taste-engine.exe"))
+    opened = []
+    monkeypatch.setattr(
+        "taste.desktop.settings_page.QDesktopServices.openUrl", lambda url: opened.append(url)
+    )
+    assert page.open_notices()
+    assert opened[0].toLocalFile().endswith("THIRD_PARTY_NOTICES.txt")

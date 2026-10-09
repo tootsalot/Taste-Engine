@@ -72,8 +72,8 @@ def smoke_test(app: QApplication, out_path: str) -> int:
     report = {
         "version": __version__,
         "title": window.windowTitle(),
-        "syne": "Syne" in families,
-        "manrope": "Manrope" in families,
+        "heading_font": theme.HEADING_FAMILY in families,
+        "body_font": theme.BODY_FAMILY in families,
         "icon": not window.windowIcon().isNull(),
         "pages": window.stack.count(),
         "webp": "webp" in formats,  # MAL posters are often .webp

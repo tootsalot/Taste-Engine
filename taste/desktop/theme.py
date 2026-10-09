@@ -25,12 +25,12 @@ ON_ACCENT = "#120F1F"  # text on lilac or coral
 DANGER = "#FF8A8A"
 GOOD = "#86E0A8"
 
-HEADING_FAMILY = "Syne"
-BODY_FAMILY = "Manrope"
+HEADING_FAMILY = "Space Grotesk"
+BODY_FAMILY = "Inter"
 
 
 def load_fonts() -> None:
-    for name in ("Syne.ttf", "Manrope.ttf"):
+    for name in ("SpaceGrotesk.ttf", "Inter.ttf"):
         QFontDatabase.addApplicationFont(str(ASSETS / "fonts" / name))
 
 
@@ -39,7 +39,7 @@ def app_icon() -> QIcon:
 
 
 def number_font(size: int) -> QFont:
-    """Big numbers use Manrope: Syne's zero reads like the letter O."""
+    """Big numbers use Inter: its figures are clearer than Space Grotesk's at this size."""
     font = QFont(BODY_FAMILY)
     font.setPixelSize(size)
     font.setWeight(QFont.Weight.ExtraBold)
@@ -47,11 +47,11 @@ def number_font(size: int) -> QFont:
 
 
 def title_font(size: int) -> QFont:
-    """Card titles: bold Manrope, because Syne is too wide for names in a narrow column."""
+    """Card titles: bold Inter, which fits long names in a narrow column."""
     return number_font(size)
 
 
-def heading_font(size: int, weight: QFont.Weight = QFont.Weight.ExtraBold) -> QFont:
+def heading_font(size: int, weight: QFont.Weight = QFont.Weight.Bold) -> QFont:
     font = QFont(HEADING_FAMILY)
     font.setPixelSize(size)
     font.setWeight(weight)

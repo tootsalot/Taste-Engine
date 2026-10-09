@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -21,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import profiles, settings
+from taste import __version__, profiles, settings
 from taste.config import data_dir
 from taste.desktop.context import AppContext
 from taste.desktop.dialogs import ConfirmDeleteDialog
@@ -31,6 +34,12 @@ from taste.secrets_store import KEY_LABELS, KEY_NAMES, SecretStoreError
 from taste.settings import SettingError
 
 KEY_SOURCES = {"MAL_CLIENT_ID": "mal", "LASTFM_API_KEY": "lastfm"}
+CREDITS = (
+    "Built with Python and Qt for Python (PySide6, used under the LGPL 3.0), plus requests, "
+    "keyring, python-dotenv, and tzdata. Fonts: Space Grotesk and Inter (SIL Open Font "
+    "License). Anime data comes from MyAnimeList and music data from Last.fm; Taste Engine "
+    "isn't affiliated with either."
+)
 STATUS_TEXT = {
     "keyring": ("Saved in Windows Credential Manager", "ok"),
     "file": ("Saved in an unencrypted local file", "error"),
@@ -151,6 +160,25 @@ class SettingsPage(QWidget):
         row.addWidget(self.delete_button)
         data_card.body.addLayout(row)
         layout.addWidget(data_card)
+
+        # About and credits
+        about = Card()
+        about.body.addWidget(heading("About", 18))
+        about.body.addWidget(
+            label(f"Taste Engine {__version__}. Free and open source under the MIT License.")
+        )
+        about.body.addWidget(label(CREDITS, role="muted", wrap=True))
+        self.notices_button = QPushButton("Third-party notices")
+        self.notices_button.clicked.connect(self.open_notices)
+        found = notices_path()
+        self.notices_button.setEnabled(found is not None)
+        if found is None:
+            self.notices_button.setToolTip("Included with the downloadable app.")
+        about_row = QHBoxLayout()
+        about_row.addWidget(self.notices_button)
+        about_row.addStretch()
+        about.body.addLayout(about_row)
+        layout.addWidget(about)
         layout.addStretch()
 
     @staticmethod
@@ -312,6 +340,12 @@ class SettingsPage(QWidget):
         folder.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))
 
+    def open_notices(self) -> bool:
+        path = notices_path()
+        if path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        return path is not None
+
     def _confirm_delete(self) -> bool:
         return ConfirmDeleteDialog(self.profile_id, self).exec() == QDialog.DialogCode.Accepted
 
@@ -332,3 +366,11 @@ class SettingsPage(QWidget):
         profiles.delete(deleted, store=self.ctx.store)
         self.profile_deleted.emit(deleted)
         return True
+
+
+def notices_path() -> Path | None:
+    """THIRD_PARTY_NOTICES.txt next to the packaged exe. Running from source there's none."""
+    if not getattr(sys, "frozen", False):
+        return None
+    path = Path(sys.executable).resolve().parent / "THIRD_PARTY_NOTICES.txt"
+    return path if path.is_file() else None

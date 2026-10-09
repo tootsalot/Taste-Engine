@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 88 88">
-  <circle cx="44" cy="44" r="42" fill="#181626" stroke="#B69CFF" stroke-width="3"/>
-  <path d="M54 18 A28 28 0 1 0 70 56 A22 22 0 1 1 54 18 Z" fill="#B69CFF"/>
-  <rect x="30" y="46" width="5" height="14" rx="2.5" fill="#FF7A59"/>
-  <rect x="39" y="38" width="5" height="22" rx="2.5" fill="#FF7A59"/>
-  <rect x="48" y="50" width="5" height="10" rx="2.5" fill="#FF7A59"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <!-- Taste Engine: anime (lilac) and music (coral) overlap; the overlap is your taste. -->
+  <rect x="0" y="0" width="96" height="96" rx="22" fill="#14131F"/>
+  <circle cx="38" cy="48" r="22" fill="#B69CFF"/>
+  <circle cx="58" cy="48" r="22" fill="#FF7A59"/>
+  <path d="M 48 28.4 A 22 22 0 0 0 48 67.6 A 22 22 0 0 0 48 28.4 Z" fill="#FFE3F1"/>
 </svg>
