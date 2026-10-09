@@ -29,10 +29,19 @@ def finished(node, score, finish_date=None, status="completed"):
     return entry
 
 
+def english(node, title):
+    node["alternative_titles"]["en"] = title
+    return node
+
+
 ENTRIES = [
     finished(anime(101, "Example Drama A", 8.0, ["Drama"], []), 9, "2026-09-30"),
     finished(anime(102, "Example Comedy B", 7.0, ["Comedy"], []), 5, "2025-12-01"),
-    finished(anime(103, "Example Mixed C", 7.5, ["Drama", "Comedy"], []), 7, "2026-10-05"),
+    finished(
+        english(anime(103, "Example Mixed C", 7.5, ["Drama", "Comedy"], []), "Mixed C in English"),
+        7,
+        "2026-10-05",
+    ),
     finished(anime(106, "Example Action F", 7.6, ["Action"], []), 8),  # no date: last edit
     finished(anime(104, "Example Plan Show", 7.8, ["Drama"], []), 0, status="plan_to_watch"),
     finished(anime(206, "Example Adult Show", 7.5, ["Hentai"], [], nsfw="black"), 0, "2026-10-06"),
@@ -61,12 +70,14 @@ def test_recently_finished_is_newest_first_with_scores_and_posters(anime_world):
     shows = overview.recently_finished(anime_world, limit=5)
     assert [s.title for s in shows] == [
         "Example Adult Show",
-        "Example Mixed C",
+        "Mixed C in English",  # the English title when MAL has one, like For You
         "Example Drama A",
         "Example Action F",  # finish date unknown: the last edit (2026-01-01) stands in
         "Example Comedy B",
     ]
     mixed = shows[1]
+    assert mixed.main_title == "Example Mixed C"
+    assert shows[2].main_title == "Example Drama A"
     assert (mixed.my_score, mixed.community_mean) == (7, 7.5)
     assert mixed.poster_url == MAL_CDN.format(103)
     # Not scored, and MAL rates it NSFW: no score, and the placeholder instead of the poster.

@@ -1,11 +1,15 @@
 """The Dashboard: art, scores, genre lean, and the sync strip. Real widgets, fake APIs."""
 
+from dataclasses import replace
+
 import pytest
 from PySide6.QtCore import Qt
 
 from taste.desktop import theme
+from taste.desktop.dashboard import finished_tip
 from taste.desktop.main_window import PAGES
 from taste.desktop.widgets import LeanBar
+from taste.overview import FinishedShow
 from tests import test_for_you
 from tests.fake_images import image_bytes
 from tests.fake_recs import MAL_CDN
@@ -103,6 +107,12 @@ def test_the_log_stays_open_when_a_sync_has_problems(window, qtbot):
     assert "MyAnimeList:" in dash.log.toPlainText()
     assert dash.strip.dot.property("state") == "error"
     assert "problems" in dash.strip.text.text()
+
+
+def test_poster_tooltips_name_the_main_title_when_the_card_shows_english():
+    show = FinishedShow("In English", "Romaji Title", "2026-01-01 00:00:00", 8, 7.6, None)
+    assert finished_tip(show) == "In English\nRomaji Title\nYou 8 · MAL 7.60"
+    assert finished_tip(replace(show, title="Romaji Title")) == ""  # default tooltip
 
 
 def test_lean_bars_put_zero_where_the_data_needs_it(qtbot):

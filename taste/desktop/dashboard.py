@@ -139,11 +139,11 @@ class ShelfItem(QWidget):
         layout.addWidget(self.caption)
         layout.addStretch()
 
-    def set(self, url: str | None, title: str, caption: str) -> None:
+    def set(self, url: str | None, title: str, caption: str, tip: str = "") -> None:
         self.art.set_art(url, title)
         self.title.setText(title)
         self.caption.setText(caption)
-        self.setToolTip(f"{title}\n{caption}")
+        self.setToolTip(tip or f"{title}\n{caption}")
 
 
 class Shelf(Card):
@@ -170,15 +170,15 @@ class Shelf(Card):
         self.body.addWidget(self.empty)
         self.body.addStretch()  # a taller neighbor card leaves space below, not above
 
-    def set_items(self, entries: list[tuple[str | None, str, str]], empty_text: str) -> None:
-        """entries: (picture url, title, caption)."""
+    def set_items(self, entries: list[tuple[str | None, str, str, str]], empty_text: str) -> None:
+        """entries: (picture url, title, caption, tooltip; '' means title and caption)."""
         for item in self.items:
             self.row.removeWidget(item)
             item.deleteLater()
         self.items = []
-        for url, title, caption in entries:
+        for url, title, caption, tip in entries:
             item = ShelfItem(self.ctx, self.art_size, self.accent)
-            item.set(url, title, caption)
+            item.set(url, title, caption, tip)
             self.row.insertWidget(len(self.items), item, 0, Qt.AlignmentFlag.AlignTop)
             self.items.append(item)
         self.empty.setText(empty_text)
@@ -413,13 +413,13 @@ class DashboardPage(QWidget):
             self.score_chart.set_data([], [])  # draws "No scores yet"
 
         self.recent.set_items(
-            [(s.poster_url, s.title, finished_caption(s)) for s in finished],
+            [(s.poster_url, s.title, finished_caption(s), finished_tip(s)) for s in finished],
             "Sync MyAnimeList, and the shows you finish show up here."
             if not entries
             else "No finished shows on your list yet.",
         )
         self.repeat.set_items(
-            [(a.cover_url, a.title, f"{a.artist}\n{a.plays:,} plays") for a in albums],
+            [(a.cover_url, a.title, f"{a.artist}\n{a.plays:,} plays", "") for a in albums],
             "Sync Last.fm to see the albums you've played most lately."
             if not plays
             else f"No album plays on Last.fm in the last {overview.ON_REPEAT_DAYS} days.",
@@ -485,6 +485,13 @@ class DashboardPage(QWidget):
         self.strip.finish(self.outcome)
         self.refresh()
         self.sync_finished.emit(results)
+
+
+def finished_tip(show: overview.FinishedShow) -> str:
+    """The tooltip adds MAL's main title when the card shows the English one."""
+    if show.main_title == show.title:
+        return ""
+    return f"{show.title}\n{show.main_title}\n{finished_caption(show)}"
 
 
 def finished_caption(show: overview.FinishedShow) -> str:

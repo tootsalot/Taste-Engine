@@ -27,7 +27,11 @@ import requests
 
 from taste.config import data_dir
 
-ALLOWED_HOSTS = frozenset({"cdn.myanimelist.net", "lastfm.freetls.fastly.net"})
+# Real Last.fm responses put covers on lastfm-img.freetls.fastly.net; the other
+# Last.fm host is kept in case it serves them too.
+ALLOWED_HOSTS = frozenset(
+    {"cdn.myanimelist.net", "lastfm-img.freetls.fastly.net", "lastfm.freetls.fastly.net"}
+)
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 MAX_CACHE_BYTES = 100 * 1024 * 1024
 MAX_FILE_BYTES = 5 * 1024 * 1024

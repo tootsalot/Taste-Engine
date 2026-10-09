@@ -78,6 +78,7 @@ def smoke_test(app: QApplication, out_path: str) -> int:
         "pages": window.stack.count(),
         "webp": "webp" in formats,  # MAL posters are often .webp
         "jpeg": "jpeg" in formats,
+        "gif": "gif" in formats,  # some Last.fm covers are GIFs
     }
     with open(out_path, "w", encoding="utf-8") as handle:
         handle.writelines(f"{key}={value}\n" for key, value in report.items())

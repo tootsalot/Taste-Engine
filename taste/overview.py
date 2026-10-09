@@ -15,7 +15,8 @@ ON_REPEAT_DAYS = 30
 
 @dataclass(frozen=True)
 class FinishedShow:
-    title: str
+    title: str  # the English title when MAL has one, as on For You
+    main_title: str  # MAL's main title (usually romaji)
     finished_at: str  # UTC text; date-only finish dates read as midnight
     my_score: float | None
     community_mean: float | None
@@ -47,7 +48,7 @@ def recently_finished(conn: sqlite3.Connection, limit: int = 6) -> list[Finished
     """
     rows = conn.execute(
         "SELECT i.title, e.occurred_at_utc, r.raw_score, cr.mean_score, img.url, "
-        "  s.nsfw_rating "
+        "  s.nsfw_rating, i.title_alt "
         "FROM core_behavior_events e "
         "JOIN core_items i ON i.item_id = e.item_id "
         "LEFT JOIN core_ratings r ON r.item_id = e.item_id AND r.source = e.source "
@@ -63,7 +64,8 @@ def recently_finished(conn: sqlite3.Connection, limit: int = 6) -> list[Finished
     ).fetchall()
     return [
         FinishedShow(
-            title=row[0],
+            title=row[6] or row[0],
+            main_title=row[0],
             finished_at=row[1],
             my_score=row[2],
             community_mean=row[3],

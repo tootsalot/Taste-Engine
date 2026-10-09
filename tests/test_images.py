@@ -54,6 +54,8 @@ def set_last_used(path, seconds_ago):
         POSTER,
         COVER,
         "https://cdn.myanimelist.net:443/images/x.jpg",
+        # The host real Last.fm responses use for covers (seen in a live check).
+        "https://lastfm-img.freetls.fastly.net/i/u/300x300/0123456789abcdef.jpg",
     ],
 )
 def test_known_image_hosts_are_allowed(url):
@@ -73,6 +75,8 @@ def test_known_image_hosts_are_allowed(url):
         "https://cdn.myanimelist.net:8443/x.jpg",
         "file:///C:/Windows/win.ini",
         "https://lastfm.freetls.fastly.net:notaport/x.png",
+        "https://lastfm-img.freetls.fastly.net.example.com/x.png",
+        "https://lastfm-img2.freetls.fastly.net/x.png",
     ],
 )
 def test_everything_else_is_refused(url, cache, session):

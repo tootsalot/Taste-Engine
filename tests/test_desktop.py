@@ -259,6 +259,7 @@ def test_smoke_test_report(qapp, tmp_path):
     report = dict(line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines())
     assert report["pages"] == "5"
     assert report["webp"] == "True" and report["jpeg"] == "True"
+    assert report["gif"] == "True"  # some Last.fm covers are GIFs
 
 
 def test_about_credits_and_notices(window, monkeypatch, tmp_path):
