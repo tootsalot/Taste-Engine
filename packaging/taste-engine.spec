@@ -10,8 +10,6 @@ ROOT = Path(SPECPATH).parent  # noqa: F821 (SPECPATH is provided by PyInstaller)
 
 datas = [
     (str(ROOT / "taste" / "sql"), "taste/sql"),
-    (str(ROOT / "taste" / "web" / "templates"), "taste/web/templates"),
-    (str(ROOT / "taste" / "web" / "static"), "taste/web/static"),
 ]
 # IANA time zone data (Windows has none built in) and keyring's backend registry.
 datas += collect_data_files("tzdata")

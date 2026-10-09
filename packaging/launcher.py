@@ -1,7 +1,7 @@
 """Entry point for the packaged app (taste-engine.exe).
 
-Double-clicked with no arguments, it starts the web app and opens the browser.
-With arguments it behaves exactly like `python -m taste ...`.
+With arguments it behaves exactly like `python -m taste ...`. With none it shows
+the command help.
 """
 
 import sys
@@ -10,7 +10,7 @@ from taste.__main__ import main
 
 
 def run() -> int:
-    args = sys.argv[1:] or ["app"]
+    args = sys.argv[1:] or ["--help"]
     try:
         return main(args)
     except SystemExit as exc:

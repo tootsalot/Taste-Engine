@@ -17,7 +17,7 @@ def connect(path: str | Path, *, setup: bool = True) -> sqlite3.Connection:
     """Open a profile database, creating the file, tables, settings, and views if needed.
 
     `setup=False` skips the schema work, for connections opened after it's known
-    to be done (the web app opens one per request). The connection runs in
+    to be done (the desktop app opens many short-lived ones). The connection runs in
     autocommit mode. Use `transaction()` to group writes.
     """
     path = Path(path)
@@ -27,7 +27,7 @@ def connect(path: str | Path, *, setup: bool = True) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     # Wait instead of failing when another connection holds the write lock, and use
-    # WAL so the web app can read while a sync thread writes.
+    # WAL so the app can read while a sync thread writes.
     conn.execute("PRAGMA busy_timeout = 10000")
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode = WAL")

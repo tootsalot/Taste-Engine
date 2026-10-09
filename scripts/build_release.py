@@ -14,15 +14,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
-import time
-import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -87,44 +83,11 @@ def build() -> Path:
 
 
 def smoke_test(exe: Path, expected_version: str) -> None:
-    """Run the built app for real: --version, then start the server and load a page."""
+    """Run the built app for real and check it reports the right version."""
     out = subprocess.run([str(exe), "--version"], capture_output=True, text=True, check=True)
     if expected_version not in out.stdout:
         sys.exit(f"--version printed {out.stdout!r}, expected {expected_version}")
     print(f"smoke test: --version OK ({out.stdout.strip()})")
-
-    port = "8797"
-    with tempfile.TemporaryDirectory() as data:
-        env = {**os.environ, "TASTE_DATA_DIR": data}  # never touch real data
-        proc = subprocess.Popen(
-            [str(exe), "app", "--no-browser", "--port", port],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        try:
-            deadline = time.time() + 60
-            while True:
-                try:
-                    with opener.open(f"http://127.0.0.1:{port}/", timeout=2) as resp:
-                        body = resp.read().decode("utf-8")
-                    break
-                except OSError:
-                    if proc.poll() is not None or time.time() > deadline:
-                        output = proc.stdout.read() if proc.stdout else ""
-                        sys.exit(f"The built app didn't start:\n{output}")
-                    time.sleep(1)
-            if "Profiles" not in body:
-                sys.exit("The built app answered, but not with the profiles page")
-            print("smoke test: app started and served the profiles page")
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
 
 
 def package(exe: Path, ver: str) -> Path:

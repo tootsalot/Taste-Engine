@@ -4,17 +4,17 @@ A local app that pulls my anime list (MyAnimeList) and listening history (Last.f
 
 ```mermaid
 flowchart LR
-    APIs[MAL + Last.fm APIs] --> Raw[raw pages] --> Staging[per-source tables] --> Core[shared model] --> Reports[reports + web app]
+    APIs[MAL + Last.fm APIs] --> Raw[raw pages] --> Staging[per-source tables] --> Core[shared model] --> Reports[reports + desktop app]
 ```
 
 ## Run it
 
-**Windows:** download the latest zip from [Releases](../../releases), unzip it, and double-click `taste-engine.exe`. The app opens in your browser. Windows warns the first time because the exe isn't signed: click **More info**, then **Run anyway**.
+**The desktop app is being built** (see [docs/PLAN_DESKTOP.md](docs/PLAN_DESKTOP.md)). Until it lands, use the command line below.
 
 **From source** (Python 3.10+):
 ```
 pip install -r requirements.txt
-python -m taste app
+python -m taste profiles create me
 ```
 
 ## Use it

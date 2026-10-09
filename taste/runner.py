@@ -1,4 +1,4 @@
-"""Run syncs for a profile. Shared by the CLI and the web app."""
+"""Run syncs for a profile. Shared by the CLI and the desktop app."""
 
 from __future__ import annotations
 
