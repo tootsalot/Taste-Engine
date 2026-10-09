@@ -185,12 +185,20 @@ def test_cards_explain_themselves(conn, anime_world):
     assert one.url == "https://myanimelist.net/anime/201"
     assert one.image_url == "https://cdn.myanimelist.net/images/anime/1/201.jpg"
     # Plain words, the show I liked most first. The numbers go to the tooltip.
-    assert one.reasons == ["Because you loved Example Drama A and really liked Example Action F."]
+    # Drama's lean is +0.15 (worked out above), right at the cutoff for a mention.
+    assert one.reasons == [
+        "Because you loved Example Drama A and really liked Example Action F, and you tend "
+        "to enjoy drama anime."
+    ]
     assert one.facts["details"] == [
         "20 MAL users who liked Example Drama A recommend this.",
         "7 MAL users who liked Example Action F recommend this.",
+        "You rate Drama shows +0.15 vs your usual.",
     ]
-    assert recs[203].reasons == ["It's the sequel to Example Drama A, which you gave a 9."]
+    assert recs[203].reasons == [
+        "It's the sequel to Example Drama A, which you gave a 9.",
+        "You tend to enjoy drama anime.",
+    ]
     assert "chance_8_plus" not in one.facts  # four scored shows are too few to say
 
 
@@ -200,7 +208,23 @@ def test_reasons_use_english_titles(conn, anime_world):
     )
     _, recs = anime_keys(conn)
     assert recs[201].reasons[0].startswith("Because you loved Drama A in English and")
-    assert recs[203].reasons == ["It's the sequel to Drama A in English, which you gave a 9."]
+    assert recs[203].reasons[0] == "It's the sequel to Drama A in English, which you gave a 9."
+
+
+def test_model_scales_the_mal_mean_when_there_are_enough_shows():
+    # 40 made-up shows where I score 2 x MAL - 8: generous on the best, harsh on the rest.
+    means = [6.0 + 0.1 * i for i in range(40)]
+    scored = [(i, 2 * m - 8, m) for i, m in enumerate(means)]
+    facts = {i: {"genres": [], "studios": []} for i in range(40)}
+    model = build_model(scored, facts)
+    assert model.slope == pytest.approx(2.0)
+    assert model.intercept == pytest.approx(-8.0)
+    assert model.predict(8.5, [], []) == pytest.approx(9.0)
+
+    # With fewer shows a slope would swing wildly, so it stays a plain shift.
+    small = build_model(scored[:10], facts)
+    assert small.slope == 1.0
+    assert small.predict(8.5, [], []) == pytest.approx(8.5 + small.overall)
 
 
 def test_genre_leans():

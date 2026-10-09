@@ -29,6 +29,7 @@ from taste.db import utc_now
 GENRE_SHRINK = 5  # a genre's bias counts fully only after several shows
 STUDIO_SHRINK = 3
 STUDIO_WEIGHT = 0.5  # studios overlap with genres, so they count half
+SLOPE_MIN_SHOWS = 30  # fewer scored shows than this and a fitted slope swings wildly
 MAX_REASON_SEEDS = 2
 GENRE_MENTION = 0.15  # a genre lean this big is worth a word on the card
 GENRE_WARNING = -0.3
@@ -80,10 +81,18 @@ class Rec:
 
 @dataclass
 class TasteModel:
-    overall: float  # my average (score - community mean)
+    overall: float  # my average (score - community mean), "my usual difference"
     genre: dict[str, float]  # shrunk extra bias per genre
     genre_counts: dict[str, int]
     studio: dict[str, float]
+    # Base prediction: intercept + slope x community mean. A plain shift (slope 1,
+    # intercept = overall) until there are enough scored shows to fit a slope.
+    intercept: float | None = None
+    slope: float = 1.0
+
+    def base(self, community_mean: float) -> float:
+        intercept = self.overall if self.intercept is None else self.intercept
+        return intercept + self.slope * community_mean
 
     def adjustment(self, genres: list[str], studios: list[str]) -> float:
         g = mean(self.genre.get(x, 0.0) for x in genres) if genres else 0.0
@@ -91,7 +100,7 @@ class TasteModel:
         return g + STUDIO_WEIGHT * s
 
     def predict(self, community_mean: float, genres: list[str], studios: list[str]) -> float:
-        value = community_mean + self.overall + self.adjustment(genres, studios)
+        value = self.base(community_mean) + self.adjustment(genres, studios)
         return min(max(value, 1.0), 10.0)
 
 
@@ -124,20 +133,36 @@ def _scored(conn: sqlite3.Connection) -> list[tuple[int, float, float]]:
 
 
 def build_model(scored: list[tuple[int, float, float]], facts: dict[int, dict]) -> TasteModel:
+    """My score from the MAL mean, then shrunk genre and studio leans on what's left.
+
+    With enough scored shows the MAL mean is scaled, not just shifted: a harsh critic
+    is often harsher on weak shows than on strong ones (checked on held-out shows
+    before adopting it). Below SLOPE_MIN_SHOWS it's a plain shift.
+    """
     if not scored:
         return TasteModel(0.0, {}, {}, {})
     overall = mean(s - c for _, s, c in scored)
+    model = TasteModel(overall, {}, {}, {})
+    if len(scored) >= SLOPE_MIN_SHOWS:
+        xs = [c for _, _, c in scored]
+        ys = [s for _, s, _ in scored]
+        mx, my = mean(xs), mean(ys)
+        spread = sum((x - mx) ** 2 for x in xs)
+        if spread > 0:
+            model.slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / spread
+            model.intercept = my - model.slope * mx
     sums: dict[str, list[float]] = {}
     studio_sums: dict[str, list[float]] = {}
     for anime_id, score, community in scored:
-        extra = (score - community) - overall
+        extra = score - model.base(community)
         for g in facts.get(anime_id, {}).get("genres", []):
             sums.setdefault(g, []).append(extra)
         for s in facts.get(anime_id, {}).get("studios", []):
             studio_sums.setdefault(s, []).append(extra)
-    genre = {g: sum(v) / (len(v) + GENRE_SHRINK) for g, v in sums.items()}
-    studio = {s: sum(v) / (len(v) + STUDIO_SHRINK) for s, v in studio_sums.items()}
-    return TasteModel(overall, genre, {g: len(v) for g, v in sums.items()}, studio)
+    model.genre = {g: sum(v) / (len(v) + GENRE_SHRINK) for g, v in sums.items()}
+    model.genre_counts = {g: len(v) for g, v in sums.items()}
+    model.studio = {s: sum(v) / (len(v) + STUDIO_SHRINK) for s, v in studio_sums.items()}
+    return model
 
 
 def evaluate(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -283,7 +308,9 @@ def _a(score: int) -> str:
 
 def _genre_leans(model: TasteModel, genres: list[str]) -> tuple[str | None, str | None]:
     """(a genre of this show I lean toward, one I'm usually hard on), when worth a mention."""
-    scored = [(model.genre[g], g) for g in genres if g in model.genre]
+    # Rounded as shown, so a lean that is exactly at a cutoff doesn't depend on
+    # floating point noise in the last digit.
+    scored = [(round(model.genre[g], 2), g) for g in genres if g in model.genre]
     best = max(scored, default=None)
     worst = min(scored, default=None)
     return (

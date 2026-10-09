@@ -120,7 +120,10 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
     reasons = [
         w.text() for w in first.findChildren(type(first.title)) if w.property("role") == "reason"
     ]
-    assert reasons == ["Because you loved Example Drama A and really liked Example Action F."]
+    assert reasons == [
+        "Because you loved Example Drama A and really liked Example Action F, and you tend "
+        "to enjoy drama anime."
+    ]
     assert "20 MAL users who liked Example Drama A recommend this." in first.toolTip()
     badges = [
         w.text() for w in anime[2].findChildren(type(first.title)) if w.property("role") == "badge"
