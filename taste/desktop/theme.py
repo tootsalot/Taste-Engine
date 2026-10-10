@@ -52,11 +52,15 @@ def _svg_pixmap(name: str, color: str, size: int) -> QPixmap:
 
 
 def icon(name: str, color: str = MUTED, selected: str = LILAC) -> QIcon:
-    """Muted normally, lilac when its sidebar row is selected. Drawn at 2x for sharp edges."""
+    """Muted normally, lilac on the current page's sidebar button (checked, focused or
+    not). Drawn at 2x for sharp edges."""
     result = QIcon()
     result.addPixmap(_svg_pixmap(name, color, 48), QIcon.Mode.Normal)
-    result.addPixmap(_svg_pixmap(name, selected, 48), QIcon.Mode.Selected)
     result.addPixmap(_svg_pixmap(name, TEXT, 48), QIcon.Mode.Active)
+    lit = _svg_pixmap(name, selected, 48)
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected):
+        result.addPixmap(lit, mode, QIcon.State.On)
+    result.addPixmap(lit, QIcon.Mode.Selected)
     return result
 
 

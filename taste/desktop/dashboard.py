@@ -43,6 +43,9 @@ POSTER = QSize(104, 148)
 COVER = QSize(104, 104)
 SOURCES = (("mal", "MyAnimeList"), ("lastfm", "Last.fm"))
 SCOPE_TIP = "Most played on Last.fm in the last {days} days. {note}"
+# Enough for a very wide window. Shelves show as many as fit, and an item downloads
+# its picture only once it's on screen.
+SHELF_MAX = 30
 
 
 def polish(widget: QWidget) -> None:
@@ -124,7 +127,11 @@ class SyncStrip(QFrame):
 
 
 class ShelfItem(QWidget):
-    """A picture with a title (up to two lines) and a caption under it."""
+    """A picture with a title (up to two lines) and a caption under it.
+
+    The picture loads the first time the item is shown, so items a narrow window
+    leaves hidden never download theirs.
+    """
 
     def __init__(self, ctx: AppContext, size: QSize, accent: str) -> None:
         super().__init__()
@@ -145,13 +152,27 @@ class ShelfItem(QWidget):
         self.caption = label("", role="caption", wrap=True)
         layout.addWidget(self.caption)
         layout.addStretch()
+        self.pending: tuple[str | None, str] | None = None  # picture to load when shown
 
     def set(self, url: str | None, title: str, caption: str, tip: str = "") -> None:
-        self.art.set_art(url, title)
+        self.art.set_art(None, title)  # the lettered placeholder until it's on screen
+        self.pending = (url, title)
+        if self.isVisible():
+            self._load()
         # Two lines at most, ending in "…" when cut; the tooltip has the whole title.
         self.title.setText(elided_lines(title, self.title.font(), self.width(), 2))
         self.caption.setText(caption)
         self.setToolTip(tip or f"{title}\n{caption}")
+
+    def _load(self) -> None:
+        if self.pending is not None:
+            url, title = self.pending
+            self.pending = None
+            self.art.set_art(url, title)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().showEvent(event)
+        self._load()
 
 
 class Shelf(Card):
@@ -325,8 +346,8 @@ class DashboardPage(QWidget):
                 synced[source] = row[0] if row else None
             interrupted = count("SELECT COUNT(*) FROM sync_lastfm_windows WHERE status = 'open'")
             distribution = overview.score_distribution(conn)
-            finished = overview.recently_finished(conn, limit=8)
-            albums = overview.on_repeat(conn, now, limit=6)
+            finished = overview.recently_finished(conn, limit=SHELF_MAX)
+            albums = overview.on_repeat(conn, now, limit=SHELF_MAX)
             generous, harsh = overview.genre_lean(conn)
             scope_note = settings.lastfm_scope_note(conn)
         finally:

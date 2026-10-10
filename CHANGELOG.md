@@ -24,7 +24,7 @@ First packaged release: a desktop app with profiles, recommendations, and artwor
 - Sync from the app with live progress; interrupted Last.fm syncs resume
 - Raw API pages no longer pile up: identical pages are stored once, and old ones are pruned after 180 days (a setting)
 - Reports as charts: my score against MAL's, where I drop shows, genre leans, plays per week, month, or year, top artists and tracks, and plays by hour and day; every report's numbers export as CSV, one at a time or all at once
-- Long charts show as many of the latest weeks or months as fit the window, so a wider window shows more history
+- Pages fill a wide window: long charts show as many of the latest weeks or months as fit, and the Dashboard's shelves as many posters and covers (only those on screen are downloaded)
 - A sidebar with icons that collapses to a narrow rail (Ctrl+B) and remembers how it was left, with Settings at the bottom and the last sync just above it
 - Thin scroll bars that match the dark theme
 - Times shown in the profile's time zone, in plain words ("today at 10:52 PM")

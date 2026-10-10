@@ -4,11 +4,12 @@ import csv
 from datetime import datetime, timezone
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QTableView
 
 from taste import profiles, settings
-from taste.desktop import listen_for_others, notify_running_instance, ui_state
+from taste.desktop import listen_for_others, notify_running_instance, theme, ui_state
 from taste.desktop.context import AppContext
 from taste.desktop.dialogs import ConfirmDeleteDialog, NewProfileDialog
 from taste.desktop.main_window import PAGES, MainWindow
@@ -151,6 +152,23 @@ def test_sidebar_toggle_lines_up_with_the_page_icons(window, qtbot):
         for i in range(nav.count()):
             assert nav.item(i).mapTo(window.nav, QPoint(0, 0)).x() == toggle
             assert nav.item(i).width() == window.nav_toggle.width()
+
+
+def test_the_current_page_icon_is_lilac(window):
+    window.new_profile(("me", "Me"))
+    icon = window.sidebar.item(PAGES.index("Settings")).icon()
+
+    def colors(state):
+        image = icon.pixmap(QSize(48, 48), QIcon.Mode.Normal, state).toImage()
+        return {
+            image.pixelColor(x, y).name().upper()
+            for x in range(image.width())
+            for y in range(image.height())
+            if image.pixelColor(x, y).alpha() == 255
+        }
+
+    assert theme.LILAC in colors(QIcon.State.On)  # checked: the page you're on
+    assert theme.LILAC not in colors(QIcon.State.Off) and theme.MUTED in colors(QIcon.State.Off)
 
 
 def test_arrow_keys_move_between_pages(window, qtbot):

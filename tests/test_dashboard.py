@@ -6,7 +6,7 @@ import pytest
 from PySide6.QtCore import Qt
 
 from taste.desktop import theme
-from taste.desktop.dashboard import finished_tip
+from taste.desktop.dashboard import SHELF_MAX, finished_tip
 from taste.desktop.main_window import PAGES
 from taste.desktop.widgets import LeanBar
 from taste.overview import FinishedShow
@@ -68,6 +68,9 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     ]
     drama = dash.recent.items[2]
     assert drama.title.textFormat() == Qt.TextFormat.PlainText
+    window.resize(1600, 900)  # posters load once they're on screen
+    window.show()
+    qtbot.waitExposed(window)
     qtbot.waitUntil(drama.art.has_picture, timeout=5000)
 
     # Only Seed One's album was played in the last 30 days (Old Days was 400 days ago).
@@ -79,6 +82,30 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     assert dash.genres.rows("harsh") == [("Comedy", "-1.25")]
     assert dash.genres.headings() == ["Furthest above MAL", "Furthest below MAL"]
     assert dash.genres.usual == -0.28  # the dashed "usual" line
+
+
+def test_shelves_fill_the_width_and_download_only_what_shows(window, qtbot, images):
+    window.new_profile(("me", "Me"))
+    window.sidebar.setCurrentRow(PAGES.index("Dashboard"))
+    window.resize(1000, 800)
+    window.show()
+    qtbot.waitExposed(window)
+    shelf = window.dashboard.recent
+    urls = [MAL_CDN.format(300 + i) for i in range(SHELF_MAX)]
+    shelf.set_items([(url, f"Show {i}", "You 8", "") for i, url in enumerate(urls)], "")
+
+    def showing():
+        return sum(item.isVisible() for item in shelf.items)
+
+    narrow = showing()
+    assert 3 <= narrow < SHELF_MAX  # as many as fit, not all of them
+    qtbot.waitUntil(lambda: len(images.urls()) == narrow, timeout=5000)
+    qtbot.wait(100)
+    assert set(images.urls()) == set(urls[:narrow])  # hidden ones never download
+
+    window.resize(1700, 800)  # a wider window shows more, and those load now
+    qtbot.waitUntil(lambda: showing() > narrow, timeout=3000)
+    qtbot.waitUntil(lambda: set(images.urls()) == set(urls[: showing()]), timeout=5000)
 
 
 def test_long_titles_end_in_an_ellipsis_under_a_poster(window):
