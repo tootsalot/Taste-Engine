@@ -55,6 +55,9 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     assert dash.counts.text() == "6 on your list · 4 scored · 69 Last.fm plays"
     assert dash.score_chart.values == [0, 0, 0, 0, 1, 0, 1, 1, 1, 0]
     assert dash.score_chart.value_labels  # each bar shows its count
+    eight = dash.score_chart.bar_rects()[7]
+    assert dash.score_chart.tip_at(eight.center().x()) == "8: 1 show"  # just that bar
+    assert dash.score_chart.toolTip() == ""
 
     # The fake list has no finish dates, so all four share the same last edit time.
     assert captions(dash.recent) == [

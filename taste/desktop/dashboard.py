@@ -349,12 +349,13 @@ class DashboardPage(QWidget):
             self.critic_value.setVisible(False)  # a lone dash at this size reads as a bar
             self.critic_text.setText("Sync MyAnimeList to see how critical you are.")
         if any(distribution):
-            self.score_chart.set_data(distribution, [str(s) for s in range(1, 11)])
-            self.score_chart.setToolTip(
-                "\n".join(
+            self.score_chart.set_data(
+                distribution,
+                [str(s) for s in range(1, 11)],
+                tips=[
                     f"{s}: {n} {'show' if n == 1 else 'shows'}"
                     for s, n in enumerate(distribution, 1)
-                )
+                ],
             )
         else:
             self.score_chart.set_data([], [])  # draws "No scores yet"

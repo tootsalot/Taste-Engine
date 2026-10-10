@@ -136,6 +136,7 @@ class BarChart(QWidget):
         self.scale = scale
         self.values: list[float] = []
         self.labels: list[str] = []
+        self.tips: list[str] = []
         self.partial_last = False
         self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -147,19 +148,39 @@ class BarChart(QWidget):
         *,
         unit: str = "",
         partial_last: bool = False,
+        tips: Sequence[str] | None = None,
     ) -> None:
-        """`partial_last`: the last bar is still filling up (this month so far)."""
+        """`partial_last`: the last bar is still filling up (this month so far).
+
+        Hovering a bar shows its own line: `tips` when given, else "label: value unit".
+        """
         self.values = list(values)
         self.labels = list(labels)
         self.partial_last = partial_last and bool(self.values)
         suffix = f" {unit}" if unit else ""
-        tips = [
+        self.tips = list(tips) if tips is not None else [
             f"{lbl}: {v:,.0f}{suffix}" for lbl, v in zip(self.labels, self.values, strict=False)
-        ]
-        if self.partial_last and tips:
-            tips[-1] += " so far"
-        self.setToolTip("\n".join(tips))
+        ]  # fmt: skip
+        if self.partial_last and self.tips:
+            self.tips[-1] += " so far"
         self.update()
+
+    def tip_at(self, x: float) -> str:
+        """The hover text for the bar under `x` (its column, so short bars are easy to hit)."""
+        for rect, tip in zip(self.bar_rects(), self.tips, strict=False):
+            if rect.left() - self.GAP / 2 <= x <= rect.right() + self.GAP / 2:
+                return tip
+        return ""
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.ToolTip:
+            text = self.tip_at(event.pos().x())
+            if text:
+                QToolTip.showText(event.globalPos(), text, self)
+            else:
+                QToolTip.hideText()
+            return True
+        return super().event(event)
 
     def _plot(self) -> QRectF:
         left = self.SCALE_ROOM if self.scale else 0

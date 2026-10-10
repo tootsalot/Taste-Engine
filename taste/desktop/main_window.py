@@ -93,8 +93,12 @@ class MainWindow(QMainWindow):
         self.nav_toggle.setObjectName("NavToggle")
         self.nav_toggle.setIcon(theme.icon("sidebar"))
         self.nav_toggle.setIconSize(QSize(20, 20))
+        # The same box as a collapsed page row (38 x 40, icon 10 px in), so its icon
+        # lines up with the page icons under it.
+        self.nav_toggle.setFixedSize(38, 40)
         self.nav_toggle.clicked.connect(lambda: self.toggle_nav())
-        nav_layout.addWidget(self.nav_toggle)
+        toggle_row = QHBoxLayout()
+        nav_layout.addLayout(toggle_row)
         self.sidebar = QListWidget()
         self.sidebar.setObjectName("Sidebar")
         self.sidebar.setIconSize(QSize(20, 20))
@@ -107,6 +111,10 @@ class MainWindow(QMainWindow):
             self.sidebar.addItem(item)
         self.sidebar.currentRowChanged.connect(self._on_page_changed)
         nav_layout.addWidget(self.sidebar, 1)
+        # Page rows start after the list's frame and item spacing; so does the toggle.
+        toggle_row.setContentsMargins(self.sidebar.frameWidth() + self.sidebar.spacing(), 0, 0, 0)
+        toggle_row.addWidget(self.nav_toggle)
+        toggle_row.addStretch()
         body.addWidget(self.nav)
         QShortcut(QKeySequence("Ctrl+B"), self, self.toggle_nav)
 

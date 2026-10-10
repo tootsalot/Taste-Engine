@@ -51,11 +51,24 @@ def test_bars_leave_room_for_their_numbers_and_the_scale(qtbot):
     assert scaled.bar_rects()[0].left() >= BarChart.SCALE_ROOM  # numbers for the lines
 
 
-def test_the_month_in_progress_says_so(qtbot):
+def test_hovering_a_bar_shows_only_that_bar(qtbot):
     chart = BarChart(scale=True)
     qtbot.addWidget(chart)
+    chart.resize(300, 160)
     chart.set_data([400, 120], ["Sep 26", "Oct 26"], unit="plays", partial_last=True)
-    assert chart.toolTip().splitlines() == ["Sep 26: 400 plays", "Oct 26: 120 plays so far"]
+    first, last = chart.bar_rects()
+    assert chart.tip_at(first.center().x()) == "Sep 26: 400 plays"
+    assert chart.tip_at(last.center().x()) == "Oct 26: 120 plays so far"
+    assert chart.tip_at(1) == ""  # over the scale numbers, not a bar
+    assert chart.toolTip() == ""  # never one list of every bar for the whole chart
+
+
+def test_bars_can_carry_their_own_hover_text(qtbot):
+    chart = BarChart()
+    qtbot.addWidget(chart)
+    chart.resize(200, 120)
+    chart.set_data([1, 15], ["1", "2"], tips=["1: 1 show", "2: 15 shows"])
+    assert chart.tip_at(chart.bar_rects()[1].center().x()) == "2: 15 shows"
 
 
 def test_band_chart_hover_explains_the_band_under_the_mouse(qtbot):

@@ -4,7 +4,7 @@ import csv
 from datetime import datetime, timezone
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QTableView
 
 from taste import profiles, settings
@@ -131,6 +131,26 @@ def test_sidebar_collapses_to_icons_and_remembers(window, qtbot):
     assert again.nav_collapsed
     qtbot.mouseClick(again.nav_toggle, Qt.MouseButton.LeftButton)
     assert not again.nav_collapsed and nav.count() == len(PAGES)
+
+
+def test_sidebar_toggle_lines_up_with_the_page_icons(window, qtbot):
+    window.new_profile(("me", "Me"))
+    window.resize(1000, 700)
+    window.show()
+    qtbot.waitExposed(window)
+    nav = window.sidebar
+
+    def icon_x(widget, x):
+        return widget.mapTo(window.nav, QPoint(int(x), 0)).x()
+
+    for collapsed in (False, True):
+        window.set_nav_collapsed(collapsed, remember=False)
+        qtbot.wait(10)
+        toggle = icon_x(window.nav_toggle, window.nav_toggle.width() / 2)
+        item = nav.visualItemRect(nav.item(0))
+        # Page icons sit after the item's 10 px left padding; they are 20 px wide.
+        page = icon_x(nav.viewport(), item.left() + 10 + 10)
+        assert abs(toggle - page) <= 1, f"collapsed={collapsed}: toggle {toggle}, pages {page}"
 
 
 def test_bad_profile_id_is_refused(window, monkeypatch):

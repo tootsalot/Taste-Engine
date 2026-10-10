@@ -127,7 +127,8 @@ QLabel[role="big"] {{ font-size: 30px; font-weight: 800; }}
 #Sidebar::item:selected {{ background: {RAISED}; color: {TEXT}; font-weight: 700; }}
 #Sidebar::item:hover:!selected {{ background: {SURFACE}; color: {TEXT}; }}
 #Sidebar:focus {{ border: none; }}
-QToolButton#NavToggle {{ background: transparent; border: none; border-radius: 8px; padding: 8px; }}
+QToolButton#NavToggle {{ background: transparent; border: none; border-radius: 8px;
+                         padding: 10px 8px 10px 10px; }}
 QToolButton#NavToggle:hover, QToolButton#NavToggle:focus {{ background: {SURFACE}; }}
 
 QFrame[role="card"] {{ background: {SURFACE}; border-radius: 14px; }}
