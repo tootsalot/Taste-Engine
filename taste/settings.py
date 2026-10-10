@@ -153,8 +153,7 @@ SETTINGS: list[Setting] = [
         "Top N, all time",
         "int",
         50,
-        "How many artists and tracks the all-time reports keep. The Reports page shows "
-        "the top 10.",
+        "How many artists and tracks the all-time reports keep. The Reports page shows the top 10.",
         minimum=1,
         maximum=1000,
         group="Reports",

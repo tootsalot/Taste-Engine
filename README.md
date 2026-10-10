@@ -20,13 +20,13 @@ python -m taste.desktop
 ## Use it
 
 1. Create a profile. Each profile has its own keys, settings, and data.
-2. On **Settings**, enter your usernames and API keys: a [MAL client ID](https://myanimelist.net/apiconfig) and a [Last.fm API key](https://www.last.fm/api/account/create). Use **Test connection** to check them.
+2. On **Settings**, enter your usernames and API keys: a [MAL client ID](https://myanimelist.net/apiconfig) and a [Last.fm API key](https://www.last.fm/api/account/create). Use **Test connection** to check them. Settings opens in **Simple**, with the everyday settings and a sentence under each saying what it does; **Advanced** adds report limits, syncing, and storage.
 3. On the **Dashboard**, click **Sync everything**. The first time, it also fetches what the recommendations need, which takes a few minutes for a big list. After that it's seconds.
 4. The **Dashboard** shows what I finished lately, the albums on repeat this month, how I score compared to the MAL crowd, and which genres I'm most generous or harshest with.
 5. **For You** has anime suggestions, each with a predicted score for me next to the MAL mean, the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, labeled Strong match, Good match, or Worth a try, and old favorites to rediscover.
-6. **Reports** is all charts: my average score for shows at each level of the MAL mean, where I tend to drop shows, genres I rate closest to and furthest below MAL, plays per month, top artists and tracks, and plays by hour and day. Short charts show their counts and long ones a scale. The numbers behind them are in **Export CSV**, one report at a time or all at once.
+6. **Reports** is all charts: my average score for shows at each level of the MAL mean, where I tend to drop shows, genres I rate closest to and furthest below MAL, plays per week, month, or year (as many as fit the window), top artists and tracks, and plays by hour and day. Short charts show their counts and long ones a scale. The numbers behind them are in **Export CSV**, one report at a time or all at once.
 
-The sidebar collapses to icons with the button at its top or **Ctrl+B**, and the app remembers which way I left it.
+The sidebar collapses to icons with the button at its top or **Ctrl+B**, and the app remembers which way I left it. Settings sits at the bottom, with when I last synced just above it.
 
 Keys are stored in Windows Credential Manager, never in plain text on Windows or macOS, and never shown again after saving. Data lives in `%LOCALAPPDATA%\taste-engine` for the packaged app, or `data/` when run from source.
 

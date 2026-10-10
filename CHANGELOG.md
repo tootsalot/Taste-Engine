@@ -20,10 +20,12 @@ First packaged release: a desktop app with profiles, recommendations, and artwor
 - Artist photos from Deezer when Last.fm has no cover, and as a backup when a cover can't be downloaded (exact name matches only)
 - Sync everything also refreshes recommendations; the first refresh takes a few minutes, later ones seconds
 - Settings grouped by topic: time zone (with daylight saving), Last.fm capture scope, report thresholds, top-N limits, and recommendation options (anime types are checkboxes)
+- Settings opens in Simple mode with the everyday settings, each explained in a sentence under its name; Advanced shows every setting, and the app remembers which was picked
 - Sync from the app with live progress; interrupted Last.fm syncs resume
 - Raw API pages no longer pile up: identical pages are stored once, and old ones are pruned after 180 days (a setting)
-- Reports as charts: my score against MAL's, where I drop shows, genre leans, plays per month, top artists and tracks, and plays by hour and day; every report's numbers export as CSV, one at a time or all at once
-- A sidebar with icons that collapses to a narrow rail (Ctrl+B) and remembers how it was left
+- Reports as charts: my score against MAL's, where I drop shows, genre leans, plays per week, month, or year, top artists and tracks, and plays by hour and day; every report's numbers export as CSV, one at a time or all at once
+- Long charts show as many of the latest weeks or months as fit the window, so a wider window shows more history
+- A sidebar with icons that collapses to a narrow rail (Ctrl+B) and remembers how it was left, with Settings at the bottom and the last sync just above it
 - Thin scroll bars that match the dark theme
 - Times shown in the profile's time zone, in plain words ("today at 10:52 PM")
 - Visible keyboard focus on buttons, links, checkboxes, and fields

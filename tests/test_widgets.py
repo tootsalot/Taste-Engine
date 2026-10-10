@@ -13,6 +13,7 @@ from taste.desktop.widgets import (
     elided,
     elided_lines,
     nice_ticks,
+    small_font,
 )
 from taste.overview import GenreLean
 
@@ -49,6 +50,9 @@ def test_bars_leave_room_for_their_numbers_and_the_scale(qtbot):
     scaled.resize(300, 160)
     scaled.set_data([300, 550], ["a", "b"])
     assert scaled.bar_rects()[0].left() >= BarChart.SCALE_ROOM  # numbers for the lines
+    scaled.set_data([12500, 30], ["a", "b"])
+    room = QFontMetrics(small_font(scaled)).horizontalAdvance("10,000")
+    assert scaled.bar_rects()[0].left() - 6 >= room  # a five-digit scale number isn't cut off
 
 
 def test_hovering_a_bar_shows_only_that_bar(qtbot):

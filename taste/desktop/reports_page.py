@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from taste import charts, reports
-from taste.desktop import theme
+from taste.desktop import theme, ui_state
 from taste.desktop.context import AppContext
 from taste.desktop.widgets import (
     BandChart,
@@ -28,12 +28,16 @@ from taste.desktop.widgets import (
     Card,
     GenreCard,
     RankList,
+    Segmented,
     heading,
     label,
     section,
 )
 
 DROP_LABELS = [f"{i * 10}%" for i in range(10)]
+PERIOD_NAMES = {"week": "Week", "month": "Month", "year": "Year"}
+PERIOD_NOTES = {"week": "Weeks start on Sunday, your time."}
+PLAYS_MIN_BAR = 16  # narrower than this and the bars stop reading as bars
 
 
 class StatTile(Card):
@@ -52,9 +56,18 @@ class StatTile(Card):
         self.value.setStyleSheet(f"color: {color};")
 
 
-def chart_card(title: str, chart: QWidget, note: str = "") -> Card:
+def chart_card(title: str, chart: QWidget, note: str = "", side: QWidget | None = None) -> Card:
+    """A small title (with `side`, such as a switch, at the right), a note, and a chart."""
     card = Card()
-    card.body.addWidget(section(title))
+    card.title = section(title)
+    if side is None:
+        card.body.addWidget(card.title)
+    else:
+        row = QHBoxLayout()
+        row.addWidget(card.title)
+        row.addStretch()
+        row.addWidget(side)
+        card.body.addLayout(row)
     card.note = label(note, role="muted", wrap=True)
     card.body.addWidget(card.note)
     card.note.setVisible(bool(note))  # after it has a parent, or it opens as its own window
@@ -137,9 +150,13 @@ class ReportsPage(QWidget):
         layout.addWidget(self.scope)
         music = QGridLayout()
         music.setSpacing(12)
-        self.month_chart = BarChart(theme.CORAL, scale=True)
-        self.month_chart.setMinimumHeight(170)
-        music.addWidget(chart_card("Plays per month", self.month_chart), 0, 0, 1, 2)
+        # Week, month, or year: as many of the latest as fit the width.
+        self.plays_chart = BarChart(theme.CORAL, scale=True, min_bar=PLAYS_MIN_BAR)
+        self.plays_chart.setMinimumHeight(170)
+        self.period_switch = Segmented(list(PERIOD_NAMES.items()), accent="music")
+        self.period_switch.changed.connect(self.set_period)
+        self.plays_card = chart_card("Plays", self.plays_chart, side=self.period_switch)
+        music.addWidget(self.plays_card, 0, 0, 1, 2)
         self.top_artists = RankList(empty_text="No plays yet")
         music.addWidget(chart_card("Top artists", self.top_artists), 1, 0)
         self.top_tracks = RankList(empty_text="No plays yet")
@@ -162,6 +179,9 @@ class ReportsPage(QWidget):
         self.status = label("", role="muted")
         layout.addWidget(self.status)
         layout.addStretch(1)
+        self.data: charts.ReportData | None = None
+        self.period = ""
+        self.set_period(ui_state.load().get("plays_period", "month"), remember=False)
 
     # -- data ---------------------------------------------------------------
 
@@ -196,13 +216,8 @@ class ReportsPage(QWidget):
             " Plays were captured under more than one scope setting." if data.mixed_scopes else ""
         )
         self.scope.setText(f"Last.fm: {data.scope_note}{mixed}")
-        months = data.periods["month"][-24:]  # the week and year views come next
-        self.month_chart.set_data(
-            [p for _, p in months],
-            [month_label(m) for m, _ in months],
-            unit="plays",
-            partial_last=data.partial["month"],
-        )
+        self.data = data
+        self._show_plays()
         self.top_artists.set_rows(data.top_artists)
         self.top_tracks.set_rows(
             [(track, plays) for track, _, plays in data.top_tracks],
@@ -216,6 +231,32 @@ class ReportsPage(QWidget):
             unit="plays",
         )
         self.hour_card.note.setText(f"In your time zone, {data.tz_name}.")
+
+    def set_period(self, period: str, remember: bool = True) -> None:
+        """Plays per week, month, or year. The choice is kept for every profile."""
+        period = period if period in charts.PERIODS else "month"
+        self.period = period
+        self.period_switch.set_value(period)
+        self.plays_card.title.setText(f"Plays per {period}")
+        note = PERIOD_NOTES.get(period, "")
+        self.plays_card.note.setText(note)
+        self.plays_card.note.setVisible(bool(note))
+        self._show_plays()
+        if remember:
+            ui_state.save(plays_period=period)
+
+    def _show_plays(self) -> None:
+        series = self.data.periods[self.period] if self.data else []
+        names = [charts.period_label(self.period, key) for key, _ in series]
+        self.plays_chart.set_data(
+            [plays for _, plays in series],
+            [axis for axis, _ in names],
+            partial_last=bool(self.data) and self.data.partial[self.period],
+            tips=[
+                f"{hover}: {plays:,} plays"
+                for (_, hover), (_, plays) in zip(names, series, strict=True)
+            ],
+        )
 
     # -- export -------------------------------------------------------------
 
@@ -256,11 +297,3 @@ class ReportsPage(QWidget):
             conn.close()
         self.status.setText(f"Saved {len(written)} CSV files to {out}")
         return out
-
-
-MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-
-def month_label(month: str) -> str:
-    """'2026-10' as 'Oct 26'."""
-    return f"{MONTH_NAMES[int(month[5:7]) - 1]} {month[2:4]}"

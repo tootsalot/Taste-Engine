@@ -14,7 +14,7 @@ Table prefixes: `sync_` bookkeeping, `raw_` API pages as fetched, `stg_` per-sou
 
 Posters and album covers aren't stored in the database. Only their URLs are (`core_item_images`); the pictures themselves are cached as files in `<data folder>/cache/images`, capped at 100 MB.
 
-Window preferences shared by every profile (for now, whether the sidebar is collapsed) live in `<data folder>/ui_state.json`, not in any database. A missing or unreadable file means the defaults.
+Window preferences shared by every profile (whether the sidebar is collapsed, Simple or Advanced settings, and whether Reports shows plays per week, month, or year) live in `<data folder>/ui_state.json`, not in any database. A missing or unreadable file means the defaults.
 
 ---
 

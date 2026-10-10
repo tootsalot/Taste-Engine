@@ -146,12 +146,14 @@ class BarChart(QWidget):
     """Vertical bars with a few axis labels. Painted directly, no chart library.
 
     `value_labels` writes each bar's number above it (for short charts); `scale` draws
-    faint lines at round numbers, labeled on the left (for long ones).
+    faint lines at round numbers, labeled on the left (for long ones). `min_bar` keeps
+    bars at least that wide by showing only the newest ones that fit, so a wider window
+    shows more of a long history.
     """
 
     LABEL_H = 18  # axis labels under the bars
     VALUE_ROOM = 16  # numbers (or "so far") above the bars
-    SCALE_ROOM = 34  # scale numbers left of the bars
+    SCALE_ROOM = 34  # scale numbers left of the bars, at least; wider numbers get more
     GAP = 3
 
     def __init__(
@@ -162,12 +164,14 @@ class BarChart(QWidget):
         *,
         value_labels: bool = False,
         scale: bool = False,
+        min_bar: float = 0,
     ) -> None:
         super().__init__(parent)
         self.color = QColor(color)
         self.empty_text = empty_text
         self.value_labels = value_labels
         self.scale = scale
+        self.min_bar = min_bar
         self.values: list[float] = []
         self.labels: list[str] = []
         self.tips: list[str] = []
@@ -201,7 +205,8 @@ class BarChart(QWidget):
 
     def tip_at(self, x: float) -> str:
         """The hover text for the bar under `x` (its column, so short bars are easy to hit)."""
-        for rect, tip in zip(self.bar_rects(), self.tips, strict=False):
+        tips = self.tips[self.first_shown() :]
+        for rect, tip in zip(self.bar_rects(), tips, strict=False):
             if rect.left() - self.GAP / 2 <= x <= rect.right() + self.GAP / 2:
                 return tip
         return ""
@@ -216,23 +221,43 @@ class BarChart(QWidget):
             return True
         return super().event(event)
 
+    def scale_room(self) -> float:
+        """Width left of the bars for the scale numbers: room for the widest one ("12,500")."""
+        if not self.scale:
+            return 0
+        ticks = nice_ticks(max(self.values, default=0))
+        widest = QFontMetrics(small_font(self)).horizontalAdvance(f"{ticks[-1]:,}") if ticks else 0
+        return max(self.SCALE_ROOM, widest + 8)
+
     def _plot(self) -> QRectF:
-        left = self.SCALE_ROOM if self.scale else 0
+        left = self.scale_room()
         top = 8 if self.scale else 0  # room for the top scale number
         if self.value_labels or self.partial_last:
             top = self.VALUE_ROOM
         height = self.height() - self.LABEL_H - 4 - top
         return QRectF(left, top, max(self.width() - left, 1), max(height, 0))
 
+    def first_shown(self) -> int:
+        """The oldest bar on screen: 0, unless `min_bar` leaves room for only the newest."""
+        if not self.min_bar or not self.values:
+            return 0
+        fits = int((self._plot().width() + self.GAP) // (self.min_bar + self.GAP))
+        return max(len(self.values) - max(fits, 1), 0)
+
+    def shown(self) -> list[float]:
+        return self.values[self.first_shown() :]
+
     def bar_rects(self) -> list[QRectF]:
+        """One rect per bar on screen, oldest first."""
         plot = self._plot()
-        n = len(self.values)
+        values = self.shown()
+        n = len(values)
         if n == 0 or plot.height() <= 0:
             return []
-        top = max(self.values) or 1
+        top = max(values) or 1  # the bars on screen fill the height
         bar_w = max((plot.width() - self.GAP * (n - 1)) / n, 1)
         rects = []
-        for i, value in enumerate(self.values):
+        for i, value in enumerate(values):
             h = max(plot.height() * value / top, 1 if value else 0)
             rects.append(QRectF(plot.left() + i * (bar_w + self.GAP), plot.bottom() - h, bar_w, h))
         return rects
@@ -247,7 +272,9 @@ class BarChart(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_text)
             return
         plot = self._plot()
-        top = max(self.values) or 1
+        first = self.first_shown()
+        values = self.values[first:]
+        top = max(values) or 1
         painter.setFont(small_font(self))
         if self.scale:
             for tick in nice_ticks(top):
@@ -255,7 +282,7 @@ class BarChart(QWidget):
                 painter.fillRect(QRectF(plot.left(), y, plot.width(), 1), QColor(theme.LINE))
                 painter.setPen(muted)
                 painter.drawText(
-                    QRectF(0, y - 8, self.SCALE_ROOM - 6, 16),
+                    QRectF(0, y - 8, plot.left() - 6, 16),
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                     f"{tick:,}",
                 )
@@ -275,7 +302,7 @@ class BarChart(QWidget):
         above = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom
         if self.value_labels:
             painter.setPen(QColor(theme.TEXT))
-            for rect, value in zip(rects, self.values, strict=True):
+            for rect, value in zip(rects, values, strict=True):
                 if value:
                     painter.drawText(
                         QRectF(rect.center().x() - 30, rect.top() - 16, 60, 14),
@@ -301,7 +328,7 @@ class BarChart(QWidget):
             painter.drawText(
                 QRectF(rect.left(), plot.bottom() + 4, rect.width() * step, self.LABEL_H),
                 align,
-                self.labels[i],
+                self.labels[first + i],
             )
 
 

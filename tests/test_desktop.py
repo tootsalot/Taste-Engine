@@ -8,7 +8,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QTableView
 
 from taste import profiles, settings
-from taste.desktop import listen_for_others, notify_running_instance
+from taste.desktop import listen_for_others, notify_running_instance, ui_state
 from taste.desktop.context import AppContext
 from taste.desktop.dialogs import ConfirmDeleteDialog, NewProfileDialog
 from taste.desktop.main_window import PAGES, MainWindow
@@ -337,14 +337,44 @@ def test_full_sync_updates_dashboard_and_reports(window, qtbot):
     assert reports_page.genres.usual == -1.64  # "your usual" on the genre chart
     assert len(reports_page.genres.grids) == 2  # the two lists side by side
     assert reports_page.drop_chart.value_labels and reports_page.day_chart.value_labels
-    assert reports_page.month_chart.scale and reports_page.hour_chart.scale
-    assert reports_page.month_chart.partial_last  # October has only just begun
+    assert reports_page.plays_chart.scale and reports_page.hour_chart.scale
+    assert reports_page.plays_chart.partial_last  # October has only just begun
     assert "Desktop listening only" in reports_page.scope.text()
     assert sum(reports_page.hour_chart.values) == 5
     assert reports_page.hour_card.note.text() == "In your time zone, America/Phoenix."
     assert reports_page.top_artists.rows()[0] == ("the example band", "3")
     menu = [a.text() for a in reports_page.export_menu.actions() if not a.isSeparator()]
     assert menu[0] == "All reports…" and len(menu) == 1 + 12
+
+
+def test_plays_by_week_month_or_year_and_the_choice_is_kept(window, qtbot):
+    set_up_profile(window)
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        window.dashboard.start_sync("all")
+    page = window.reports
+    assert page.period == "month" and page.period_switch.buttons["month"].isChecked()
+    assert page.plays_card.title.text() == "Plays per month"
+    assert page.plays_chart.labels == ["Oct 26"]
+    assert page.plays_chart.tips == ["Oct 2026: 5 plays so far"]
+
+    qtbot.mouseClick(page.period_switch.buttons["year"], Qt.MouseButton.LeftButton)
+    assert page.plays_card.title.text() == "Plays per year"
+    assert page.plays_chart.labels == ["2026"] and page.plays_chart.values == [5]
+    assert page.plays_card.note.isHidden()
+
+    page.set_period("week")
+    assert page.plays_card.note.text() == "Weeks start on Sunday, your time."
+    assert not page.plays_card.note.isHidden()
+    assert sum(page.plays_chart.values) == 5
+    assert all(tip.startswith("Week of ") for tip in page.plays_chart.tips)
+
+    again = MainWindow(window.ctx)  # the next launch opens on the same view
+    qtbot.addWidget(again)
+    assert again.reports.period == "week"
+    ui_state.save(plays_period="decade")  # an unknown value falls back to months
+    third = MainWindow(window.ctx)
+    qtbot.addWidget(third)
+    assert third.reports.period == "month"
 
 
 def test_export_one_and_all(window, qtbot, tmp_path):
