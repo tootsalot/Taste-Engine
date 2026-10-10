@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QGridLayout,
@@ -40,7 +40,9 @@ LISTS = (
 )
 LINK_HOSTS = {"myanimelist.net": "MyAnimeList", "www.last.fm": "Last.fm"}
 PROGRESS = re.compile(r"(\d+) of (\d+)")
-COLUMNS = 2
+CARD_MIN_WIDTH = 440  # cards share each row; this keeps two columns in the default window
+MAX_COLUMNS = 4
+GRID_SPACING = 12
 POSTER = QSize(96, 136)
 COVER = QSize(112, 112)
 
@@ -177,8 +179,14 @@ class RecCard(Card):
         self.chance.setVisible(chance is not None)
 
 
+def columns_for(width: int) -> int:
+    """How many cards fit side by side: 1 in a narrow window, up to 4 on a wide screen."""
+    fits = (width + GRID_SPACING) // (CARD_MIN_WIDTH + GRID_SPACING)
+    return max(1, min(MAX_COLUMNS, fits))
+
+
 class RecList(QWidget):
-    """One tab: a note line and a two-column grid of cards."""
+    """One tab: a note line and a grid of cards, as many columns as fit the width."""
 
     def __init__(self, list_kind: str) -> None:
         super().__init__()
@@ -187,28 +195,30 @@ class RecList(QWidget):
         self.has_run = False
         self.dirty = True
         self.cards: list[RecCard] = []
+        self.columns = 2
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setSpacing(10)
         self.note = label("", role="muted" if list_kind == "anime" else "scope", wrap=True)
         layout.addWidget(self.note)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         body = QWidget()
         outer = QVBoxLayout(body)
         outer.setContentsMargins(0, 0, 6, 0)
         self.grid = QGridLayout()
-        self.grid.setSpacing(12)
-        for column in range(COLUMNS):
-            self.grid.setColumnStretch(column, 1)
+        self.grid.setSpacing(GRID_SPACING)
         outer.addLayout(self.grid)
         self.empty = label("", role="muted", wrap=True)
         outer.addWidget(self.empty)
-        outer.addStretch()
-        scroll.setWidget(body)
-        layout.addWidget(scroll, 1)
+        outer.addStretch(1)  # spare height goes below the cards, not into them
+        self.scroll.setWidget(body)
+        layout.addWidget(self.scroll, 1)
+        # The width the cards really get, which also shrinks when a scroll bar appears.
+        self.scroll.viewport().installEventFilter(self)
+        self._place()
 
     def set_recs(self, recs: list[Rec], has_run: bool) -> None:
         self.recs = recs
@@ -224,12 +234,29 @@ class RecList(QWidget):
             card = RecCard(ctx, self.list_kind, rec)
             card.opened.connect(on_open)
             card.dismissed.connect(on_dismiss)
-            self.grid.addWidget(card, i // COLUMNS, i % COLUMNS)
+            self.grid.addWidget(card, i // self.columns, i % self.columns)
             self.cards.append(card)
         texts = EMPTY_AFTER_RUN if self.has_run else EMPTY
         self.empty.setText("" if self.recs else texts[self.list_kind])
         self.empty.setVisible(not self.recs)
         self.dirty = False
+
+    def _place(self) -> None:
+        """Lay the cards out row by row in `self.columns` equal columns."""
+        for card in self.cards:
+            self.grid.removeWidget(card)
+        for i, card in enumerate(self.cards):
+            self.grid.addWidget(card, i // self.columns, i % self.columns)
+        for column in range(MAX_COLUMNS):
+            self.grid.setColumnStretch(column, 1 if column < self.columns else 0)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt naming)
+        if obj is self.scroll.viewport() and event.type() == QEvent.Type.Resize:
+            columns = columns_for(event.size().width())
+            if columns != self.columns:
+                self.columns = columns
+                self._place()
+        return super().eventFilter(obj, event)
 
 
 class ForYouPage(QWidget):

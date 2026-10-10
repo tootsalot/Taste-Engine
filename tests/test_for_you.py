@@ -12,6 +12,7 @@ from taste.desktop.for_you import (
     accuracy_text,
     accuracy_tip,
     chance_text,
+    columns_for,
     safe_link,
     score_text,
 )
@@ -183,6 +184,28 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
     ]
     assert badges == ["On your Plan to Watch"]
     assert page.tabs.tabText(0) == "Anime (4)"
+
+
+def test_cards_take_as_many_columns_as_fit(window, qtbot):
+    assert [columns_for(w) for w in (400, 900, 1400, 1900, 5000)] == [1, 2, 3, 4, 4]
+    synced(window, qtbot)
+    refreshed(window, qtbot)
+    window.sidebar.setCurrentRow(PAGES.index("For You"))
+    tab = window.for_you.lists["anime"]
+
+    def rows_and_columns():
+        return [tab.grid.getItemPosition(tab.grid.indexOf(card))[:2] for card in tab.cards]
+
+    window.resize(2560, 1400)  # the full-screen size this was designed for
+    window.show()
+    qtbot.waitExposed(window)
+    qtbot.waitUntil(lambda: tab.columns == 4, timeout=3000)
+    assert rows_and_columns() == [(0, 0), (0, 1), (0, 2), (0, 3)]
+    # A short list leaves spare height below the cards; the cards don't stretch into it.
+    assert all(card.height() <= card.sizeHint().height() + 8 for card in tab.cards)
+    window.resize(1300, 800)  # narrower: the same cards, two to a row
+    qtbot.waitUntil(lambda: tab.columns == 2, timeout=3000)
+    assert rows_and_columns() == [(0, 0), (0, 1), (1, 0), (1, 1)]
 
 
 def test_music_tabs_build_when_shown_and_carry_the_scope_note(window, qtbot):

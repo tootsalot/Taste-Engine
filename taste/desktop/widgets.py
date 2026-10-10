@@ -155,6 +155,7 @@ class BarChart(QWidget):
     VALUE_ROOM = 16  # numbers (or "so far") above the bars
     SCALE_ROOM = 34  # scale numbers left of the bars, at least; wider numbers get more
     GAP = 3
+    LABEL_GAP = 12  # the least space between two axis labels
 
     def __init__(
         self,
@@ -319,17 +320,37 @@ class BarChart(QWidget):
             )
         painter.setFont(self.font())
         painter.setPen(muted)
-        n = len(rects)
-        step = max(n // 6, 1)
-        # A label for every bar sits under its bar; sparser labels start at theirs.
-        align = Qt.AlignmentFlag.AlignHCenter if step == 1 else Qt.AlignmentFlag.AlignLeft
-        for i in range(0, n, step):
-            rect = rects[i]
-            painter.drawText(
-                QRectF(rect.left(), plot.bottom() + 4, rect.width() * step, self.LABEL_H),
-                align,
-                self.labels[first + i],
-            )
+        for box, align, text in self.axis_labels():
+            painter.drawText(box, align, text)
+
+    def axis_labels(self) -> list[tuple[QRectF, Qt.AlignmentFlag, str]]:
+        """Where the labels under the bars go. Every bar gets one when they fit, centered;
+        otherwise every second, third, ... bar, spaced by the widest label so none overlap.
+        A label that would run past the right edge is left out rather than cut off.
+        """
+        rects = self.bar_rects()
+        labels = self.labels[self.first_shown() :]
+        if not rects or not labels:
+            return []
+        metrics = QFontMetrics(self.font())
+        widths = [metrics.horizontalAdvance(text) for text in labels]
+        pitch = rects[1].left() - rects[0].left() if len(rects) > 1 else rects[0].width()
+        step = max(1, math.ceil((max(widths) + self.LABEL_GAP) / pitch))
+        y = self._plot().bottom() + 4
+        if step == 1:
+            center = Qt.AlignmentFlag.AlignHCenter
+            return [
+                (QRectF(rect.left(), y, rect.width(), self.LABEL_H), center, text)
+                for rect, text in zip(rects, labels, strict=False)
+            ]
+        boxes = []
+        for i in range(0, min(len(rects), len(labels)), step):
+            left = rects[i].left()
+            if left + widths[i] > self.width():
+                break
+            box = QRectF(left, y, widths[i] + 1, self.LABEL_H)
+            boxes.append((box, Qt.AlignmentFlag.AlignLeft, labels[i]))
+        return boxes
 
 
 class LeanBar(QWidget):

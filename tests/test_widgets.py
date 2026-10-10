@@ -82,6 +82,29 @@ def test_a_long_series_shows_as_many_recent_bars_as_fit(qtbot):
     assert chart.tip_at(last.center().x()) == "100: 100"  # the newest bar is always shown
 
 
+def test_axis_labels_never_overlap_or_run_off_the_edge(qtbot):
+    chart = BarChart(min_bar=18)
+    qtbot.addWidget(chart)
+    values = list(range(1, 121))
+    chart.set_data(values, [f"Week of {v}" for v in values])
+    metrics = chart.fontMetrics()
+    for width in (300, 640, 1500):
+        chart.resize(width, 160)
+        boxes = chart.axis_labels()
+        assert len(boxes) >= 2, width
+        for (box, _, text), (after, _, _) in zip(boxes, boxes[1:], strict=False):
+            end = box.left() + metrics.horizontalAdvance(text)
+            assert end + BarChart.LABEL_GAP <= after.left() + 0.5, (width, text)
+        last, _, text = boxes[-1]
+        assert last.left() + metrics.horizontalAdvance(text) <= width
+
+    short = BarChart()
+    qtbot.addWidget(short)
+    short.resize(600, 160)
+    short.set_data([1, 2, 3], ["Sun", "Mon", "Tue"])
+    assert [text for _, _, text in short.axis_labels()] == ["Sun", "Mon", "Tue"]  # all fit
+
+
 def test_bars_can_carry_their_own_hover_text(qtbot):
     chart = BarChart()
     qtbot.addWidget(chart)

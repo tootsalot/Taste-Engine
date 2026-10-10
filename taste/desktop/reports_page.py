@@ -37,7 +37,7 @@ from taste.desktop.widgets import (
 DROP_LABELS = [f"{i * 10}%" for i in range(10)]
 PERIOD_NAMES = {"week": "Week", "month": "Month", "year": "Year"}
 PERIOD_NOTES = {"week": "Weeks start on Sunday, your time."}
-PLAYS_MIN_BAR = 16  # narrower than this and the bars stop reading as bars
+PLAYS_MIN_BAR = 18  # narrower than this and the bars stop reading as bars
 
 
 class StatTile(Card):
@@ -64,8 +64,9 @@ def chart_card(title: str, chart: QWidget, note: str = "", side: QWidget | None 
         card.body.addWidget(card.title)
     else:
         row = QHBoxLayout()
-        row.addWidget(card.title)
-        row.addStretch()
+        # The title takes the free width: its size hint leaves out the theme's letter
+        # spacing, so held to it the last letter or two were cut off.
+        row.addWidget(card.title, 1)
         row.addWidget(side)
         card.body.addLayout(row)
     card.note = label(note, role="muted", wrap=True)
@@ -253,7 +254,7 @@ class ReportsPage(QWidget):
             [axis for axis, _ in names],
             partial_last=bool(self.data) and self.data.partial[self.period],
             tips=[
-                f"{hover}: {plays:,} plays"
+                f"{hover}: {plays:,} {'play' if plays == 1 else 'plays'}"
                 for (_, hover), (_, plays) in zip(names, series, strict=True)
             ],
         )
