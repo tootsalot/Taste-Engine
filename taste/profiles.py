@@ -7,6 +7,7 @@ registry to get out of sync. API keys live outside the database (see secrets_sto
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
 import sqlite3
@@ -134,12 +135,28 @@ def delete(profile_id: str, root: Path | None = None, store: Any = None) -> None
         Path(f"{path}{suffix}").unlink(missing_ok=True)
 
 
-def delete_all_data(store: Any = None) -> Path | None:
-    """For the uninstaller: every profile's saved API keys, then the whole data folder.
+# Everything the app keeps in its data folder: profiles (and their fallback key files),
+# the image cache, CLI reports, window state, and the Phase 1 database.
+OWNED_ENTRIES = (
+    "profiles",
+    "cache",
+    "reports",
+    "ui_state.json",
+    "taste.db",
+    "taste.db-journal",
+    "taste.db-wal",
+    "taste.db-shm",
+)
 
-    Returns the folder it deleted. Runs only where that folder is the app's own (the
-    packaged app, or TASTE_DATA_DIR); from source it would be the project, so it refuses
-    and returns None.
+
+def delete_all_data(store: Any = None) -> Path | None:
+    """For the uninstaller: every profile's saved API keys, then the app's data.
+
+    Deletes only what the app keeps there (OWNED_ENTRIES), then the folder if that left
+    it empty, so a TASTE_DATA_DIR pointed at a shared folder can't take other files with
+    it. Returns the folder. Runs only where that folder is the app's own (the packaged
+    app, or TASTE_DATA_DIR); from source it would be the project, so it refuses and
+    returns None.
     """
     from taste.secrets_store import SecretStore  # local import: secrets_store imports this module
 
@@ -149,7 +166,15 @@ def delete_all_data(store: Any = None) -> Path | None:
     store = store or SecretStore(profiles_dir())
     for profile in list_profiles():
         store.delete_all(profile.profile_id)
-    shutil.rmtree(folder, ignore_errors=True)
+    for name in OWNED_ENTRIES:
+        path = folder / name
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            with contextlib.suppress(OSError):  # in use; the uninstaller says what's left
+                path.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):
+        folder.rmdir()  # only when nothing else is in it
     return folder
 
 

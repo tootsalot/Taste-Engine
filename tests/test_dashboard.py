@@ -52,6 +52,8 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     dash = window.dashboard
 
     assert dash.critic_value.text() == "-0.28"
+    assert "lower than MAL on" in dash.critic_text.text()
+    assert "rounded to a whole number" in dash.critic_text.toolTip()
     assert dash.counts.text() == "6 on your list · 4 scored · 69 Last.fm plays"
     assert dash.score_chart.values == [0, 0, 0, 0, 1, 0, 1, 1, 1, 0]
     assert dash.score_chart.value_labels  # each bar shows its count

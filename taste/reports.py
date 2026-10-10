@@ -95,7 +95,7 @@ def summary_lines(conn: sqlite3.Connection) -> list[str]:
         lines.append(
             f"  On average I score {abs(s['avg_diff']):.2f} points {direction} the community "
             f"(below on {s['share_scored_below']:.0%} of shows, "
-            f"above on {s['share_scored_above']:.0%})."
+            f"above on {s['share_scored_above']:.0%}, against its mean rounded to a whole score)."
         )
         genres = conn.execute(
             "SELECT genre, shows_scored, avg_diff FROM rpt_mal_genre_vs_community "

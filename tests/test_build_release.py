@@ -72,3 +72,41 @@ def test_checksum_file_matches_sha256sum(tmp_path):
     setup.write_bytes(b"not really an installer")
     line = build_release.write_checksum(setup).read_text(encoding="utf-8")
     assert line == f"{hashlib.sha256(setup.read_bytes()).hexdigest()}  {setup.name}\n"
+
+
+def test_the_uninstaller_looks_for_the_mutex_the_app_holds():
+    from taste.desktop import APP_MUTEX, hold_app_mutex
+
+    script = build_release.ISS.read_text(encoding="utf-8")
+    assert f'#define AppMutex "{APP_MUTEX}"' in script
+    assert "CheckForMutexes('{#AppMutex}')" in script
+    installer_test = (ROOT / "scripts" / "test_installer.py").read_text(encoding="utf-8")
+    assert f'APP_MUTEX = "{APP_MUTEX}"' in installer_test
+
+    name = "TasteEngineTest-mutex-check"
+    handle = hold_app_mutex(name)
+    if sys.platform != "win32":
+        assert handle is None
+        return
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenMutexW.restype = ctypes.c_void_p
+    kernel32.OpenMutexW.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    synchronize = 0x00100000
+    found = kernel32.OpenMutexW(synchronize, False, name)
+    assert handle and found  # what Inno's CheckForMutexes does
+    kernel32.CloseHandle(found)
+    kernel32.CloseHandle(handle)
+    assert not kernel32.OpenMutexW(synchronize, False, name)  # gone once the app closes it
+
+
+def test_the_wizard_follows_windows_and_its_images_exist():
+    script = build_release.ISS.read_text(encoding="utf-8")
+    assert re.search(r"^WizardStyle=modern dynamic\b", script, re.MULTILINE)
+    patterns = re.findall(r"^Wizard\w*ImageFile\w*=(.+)$", script, re.MULTILINE)
+    assert len(patterns) == 4  # side and corner, light and dark
+    for pattern in patterns:
+        found = list(build_release.ISS.parent.glob(pattern.strip().replace("\\", "/")))
+        assert found, f"{pattern} matches no files (run scripts/make_wizard_images.py)"

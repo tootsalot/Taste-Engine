@@ -364,12 +364,19 @@ class DashboardPage(QWidget):
             direction = "below" if diff < 0 else "above"
             self.critic_text.setText(
                 f"Points {direction} the MAL community on average, across "
-                f"{summary['shows_scored']:,} scored shows. You score lower on "
-                f"{summary['share_scored_below']:.0%} of them."
+                f"{summary['shows_scored']:,} scored shows. You go lower than MAL on "
+                f"{summary['share_scored_below']:.0%} of them and higher on "
+                f"{summary['share_scored_above']:.0%}."
+            )
+            self.critic_text.setToolTip(
+                "Lower and higher compare your score with MAL's average rounded to a whole "
+                "number, the closest score you could give: a 7 for a show MAL rates 7.2 "
+                f"matches it. You matched on {summary['share_scored_same']:.0%}."
             )
         else:
             self.critic_value.setVisible(False)  # a lone dash at this size reads as a bar
             self.critic_text.setText("Sync MyAnimeList to see how critical you are.")
+            self.critic_text.setToolTip("")
         if any(distribution):
             self.score_chart.set_data(
                 distribution,

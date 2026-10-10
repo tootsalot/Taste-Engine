@@ -1,6 +1,6 @@
 ; Inno Setup script for the Windows installer (Inno Setup 6.7 or later).
 ; Built by scripts/build_release.py, which passes:
-;   /DAppVersion=0.2.0  /DAppFolder=<the PyInstaller app folder>
+;   /DAppVersion=1.0.0  /DAppFolder=<the PyInstaller app folder>
 ;   /DOutputDir=<dist>  /DOutputName=<setup file name without .exe>
 ;
 ; Per user, no admin prompt: installs to %LOCALAPPDATA%\Programs\Taste Engine. Profiles
@@ -26,6 +26,8 @@
 #define AppGuid "3C5D937C-337E-45F7-AB56-E60E3A811924"
 #define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\{" + AppGuid + "}_is1"
 #define DataFolder "{localappdata}\taste-engine"
+; The app holds this mutex while it's open (APP_MUTEX in taste/desktop/__init__.py).
+#define AppMutex "TasteEngineRunning-3C5D937C-337E-45F7-AB56-E60E3A811924"
 
 [Setup]
 AppId={{{#AppGuid}}
@@ -52,8 +54,20 @@ OutputDir={#OutputDir}
 OutputBaseFilename={#OutputName}
 Compression=lzma2/max
 SolidCompression=yes
-WizardStyle=modern
-; Asks to close a running Taste Engine before replacing or removing its files.
+; Light or dark to match Windows, in the app's colors when dark. The images come from
+; scripts/make_wizard_images.py.
+WizardStyle=modern dynamic hidebevels includetitlebar
+WizardBackColorDynamicDark=#0E0D16
+WizardImageFile=wizard\light\side-*.png
+WizardImageFileDynamicDark=wizard\dark\side-*.png
+WizardImageBackColor=none
+WizardImageBackColorDynamicDark=none
+WizardSmallImageFile=wizard\corner-*.png
+WizardSmallImageFileDynamicDark=wizard\corner-*.png
+WizardSmallImageBackColor=none
+WizardSmallImageBackColorDynamicDark=none
+; Setup offers to close a running Taste Engine before replacing its files. The
+; uninstaller can't, so it asks you to (InitializeUninstall).
 CloseApplications=yes
 RestartApplications=no
 
@@ -203,6 +217,20 @@ procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
 begin
   if Leaving then
     Confirm := False;
+end;
+
+// Setup offers to close a running app (CloseApplications); the uninstaller can't, so it asks.
+// A silent uninstall gives up instead of waiting.
+function InitializeUninstall: Boolean;
+begin
+  Result := True;
+  while CheckForMutexes('{#AppMutex}') do
+    if SuppressibleMsgBox('{#AppName} is open. Close it, then click Retry to uninstall it.',
+        mbError, MB_RETRYCANCEL, IDCANCEL) <> IDRETRY then
+    begin
+      Result := False;
+      Exit;
+    end;
 end;
 
 // The uninstall question. Unticked by default: profiles stay unless asked.

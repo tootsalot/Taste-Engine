@@ -89,6 +89,9 @@ class ImageCache:
         self.session = session if session is not None else requests.Session()
         self._lock = threading.Lock()
         self._failed: set[str] = set()  # URLs that failed this session; not retried
+        # Bytes on disk: counted once, then kept up to date, so storing an image doesn't
+        # list the whole folder unless the cache may be over its cap.
+        self._total: int | None = None
 
     def path_for(self, url: str) -> Path:
         return self.root / file_name(url)
@@ -153,10 +156,17 @@ class ImageCache:
         path = self.path_for(url)
         with self._lock:
             self.root.mkdir(parents=True, exist_ok=True)
+            try:
+                replaced = path.stat().st_size  # two threads fetched the same picture
+            except OSError:
+                replaced = 0
             partial = path.with_name(path.name + f".{threading.get_ident()}{PARTIAL}")
             partial.write_bytes(data)
             os.replace(partial, path)  # readers never see a half-written file
-            self._evict(keep=path)
+            if self._total is not None:
+                self._total += len(data) - replaced
+            if self._total is None or self._total > self.max_bytes:
+                self._evict(keep=path)
         return path
 
     def size(self) -> int:
@@ -187,6 +197,7 @@ class ImageCache:
                 total -= size
             except OSError:
                 pass  # in use elsewhere; try again next time
+        self._total = total
 
     def clear_failures(self) -> None:
         self._failed.clear()

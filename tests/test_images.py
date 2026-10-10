@@ -189,6 +189,22 @@ def test_least_recently_used_go_first_when_over_the_cap(tmp_path):
     assert cache.size() == 300
 
 
+def test_storing_under_the_cap_skips_the_folder_scan(tmp_path, monkeypatch):
+    session = FakeImageSession()
+    urls = [f"https://cdn.myanimelist.net/images/anime/1/{i}.jpg" for i in range(4)]
+    for url in urls:
+        session.add(url, b"x" * 100, "image/jpeg")
+    cache = images.ImageCache(tmp_path / "images", max_bytes=300, session=session)
+    scans = []
+    evict = cache._evict
+    monkeypatch.setattr(cache, "_evict", lambda keep: (scans.append(keep), evict(keep)))
+    for url in urls[:3]:
+        cache.get(url)
+    assert len(scans) == 1  # the first store counts the folder; the next two don't
+    cache.get(urls[3])  # 400 bytes > 300: now it has to look
+    assert len(scans) == 2 and cache.size() == 300
+
+
 def test_file_names_are_hashes_with_the_image_extension():
     assert images.file_name(WEBP).endswith(".webp")
     assert images.file_name("https://cdn.myanimelist.net/x").endswith(".img")

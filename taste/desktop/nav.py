@@ -62,7 +62,10 @@ class NavList(QWidget):
         self.status_dot.setObjectName("StatusDot")
         self.status_dot.setFixedSize(8, 8)
         self.status_dot.setProperty("state", "idle")
-        status_row.addWidget(self.status_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        # Left-aligned, or the row centers it once the words hide in the collapsed rail.
+        status_row.addWidget(
+            self.status_dot, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self.status_text = label("Not synced yet", role="caption", wrap=True)
         status_row.addWidget(self.status_text, 1)
 

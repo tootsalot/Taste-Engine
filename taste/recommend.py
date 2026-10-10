@@ -14,6 +14,7 @@ Every run is saved in rec_runs / rec_items with its scores and reasons.
 
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import sqlite3
@@ -22,6 +23,7 @@ from datetime import datetime, timezone
 from statistics import mean
 from typing import Any
 from urllib.parse import quote_plus
+from zoneinfo import ZoneInfo
 
 from taste import enrich, settings
 from taste.db import utc_now
@@ -95,8 +97,9 @@ class TasteModel:
         return intercept + self.slope * community_mean
 
     def adjustment(self, genres: list[str], studios: list[str]) -> float:
-        g = mean(self.genre.get(x, 0.0) for x in genres) if genres else 0.0
-        s = mean(self.studio.get(x, 0.0) for x in studios) if studios else 0.0
+        # Plain sums: statistics.mean is exact but slow, and this runs for every candidate.
+        g = sum(self.genre.get(x, 0.0) for x in genres) / len(genres) if genres else 0.0
+        s = sum(self.studio.get(x, 0.0) for x in studios) / len(studios) if studios else 0.0
         return g + STUDIO_WEIGHT * s
 
     def predict(self, community_mean: float, genres: list[str], studios: list[str]) -> float:
@@ -165,14 +168,28 @@ def build_model(scored: list[tuple[int, float, float]], facts: dict[int, dict]) 
     return model
 
 
-def evaluate(conn: sqlite3.Connection) -> dict[str, Any]:
+def whole_score(predicted: float) -> int:
+    """The whole score a prediction points to, as the card shows it: 7.5 or more is an 8.
+
+    Rounded to the one decimal the card also shows first, so it never reads "7 (7.5)".
+    """
+    return math.floor(round(predicted, 1) + 0.5)
+
+
+def evaluate(
+    conn: sqlite3.Connection,
+    facts: dict[int, dict] | None = None,
+    scored: list[tuple[int, float, float]] | None = None,
+) -> dict[str, Any]:
     """Hold out every fifth scored show, predict it, and compare errors.
 
     Mean absolute error (in MAL points) for: the community mean alone, the
     community mean plus my overall bias, and the full model. Lower is better.
+    Each guess is a whole score, like the ones I give (and the card shows): with
+    whole-number scores that misses by less than the decimal does.
     """
-    facts = _anime_facts(conn)
-    scored = _scored(conn)
+    facts = _anime_facts(conn) if facts is None else facts
+    scored = _scored(conn) if scored is None else scored
     test = [x for x in scored if x[0] % 5 == 0]
     train = [x for x in scored if x[0] % 5 != 0]
     if len(test) < 5 or len(train) < 10:
@@ -181,9 +198,13 @@ def evaluate(conn: sqlite3.Connection) -> dict[str, Any]:
     errors: dict[str, list[float]] = {"community": [], "overall": [], "model": []}
     for anime_id, score, community in test:
         f = facts[anime_id]
-        errors["community"].append(abs(score - community))
-        errors["overall"].append(abs(score - min(max(community + model.overall, 1), 10)))
-        errors["model"].append(abs(score - model.predict(community, f["genres"], f["studios"])))
+        guesses = {
+            "community": community,
+            "overall": min(max(community + model.overall, 1), 10),
+            "model": model.predict(community, f["genres"], f["studios"]),
+        }
+        for name, guess in guesses.items():
+            errors[name].append(abs(score - whole_score(guess)))
     return {"held_out": len(test), **{k: round(mean(v), 3) for k, v in errors.items()}}
 
 
@@ -196,7 +217,8 @@ def _dismissed(conn: sqlite3.Connection, kind: str) -> set[str]:
 def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str, Any]]:
     cfg = settings.get_all(conn)
     facts = _anime_facts(conn)
-    model = build_model(_scored(conn), facts)
+    scored = _scored(conn)
+    model = build_model(scored, facts)
     mine = enrich.my_mean_score(conn)
     support = enrich.candidate_support(conn)
     dismissed = _dismissed(conn, "anime")
@@ -238,8 +260,9 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
     candidates = set(support)
     if cfg["rec_include_plan_to_watch"]:
         candidates |= plan_to_watch
-    residuals = holdout_residuals(_scored(conn), facts)
+    residuals = sorted(holdout_residuals(scored, facts))
     recs: list[Rec] = []
+    predictions: dict[str, float] = {}
     for anime_id in candidates:
         f = facts.get(anime_id)
         if not f or f["community_mean"] is None or str(anime_id) in dismissed:
@@ -268,9 +291,7 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
                          f"{f['num_episodes']} eps")  # fmt: skip
         rec.subtitle = " · ".join(p for p in parts if p)
         rec.facts["mal_mean"] = f["community_mean"]
-        chance = chance_at_least(predicted, residuals, 8)
-        if chance is not None:
-            rec.facts["chance_8_plus"] = round(chance, 3)
+        predictions[rec.item_key] = predicted
         if anime_id in plan_to_watch:
             rec.badge = "On your Plan to Watch"
 
@@ -297,7 +318,11 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
     # Best predicted first; how strongly my favorites point at it breaks near-ties.
     recs.sort(key=lambda r: (-(r.score + 0.15 * math.log1p(r.support)), r.title))
     recs = recs[: cfg["rec_count"]]
-    metrics = {"model_overall_bias": round(model.overall, 3), **evaluate(conn)}
+    for rec in recs:  # only for the shows kept: it's the slow part with a long list
+        chance = chance_at_least(predictions[rec.item_key], residuals, 8)
+        if chance is not None:
+            rec.facts["chance_8_plus"] = round(chance, 3)
+    metrics = {"model_overall_bias": round(model.overall, 3), **evaluate(conn, facts, scored)}
     return recs, metrics
 
 
@@ -371,10 +396,15 @@ def holdout_residuals(
 
 
 def chance_at_least(predicted: float, residuals: list[float], at_least: int) -> float | None:
-    """Share of past misses that would put this show at `at_least` or more once rounded."""
+    """Share of past misses that would put this show at `at_least` or more once rounded.
+
+    `residuals` must be sorted. A binary search finds the first miss that gets there
+    (the same comparison as checking each one, in log time).
+    """
     if len(residuals) < MIN_RESIDUALS:
         return None
-    return mean(1.0 if predicted + r >= at_least - 0.5 else 0.0 for r in residuals)
+    first = bisect.bisect_left(residuals, at_least - 0.5, key=lambda r: predicted + r)
+    return (len(residuals) - first) / len(residuals)
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +545,7 @@ def music_recommendations(
     for key, (name, _, plays, last) in sorted(all_time.items(), key=lambda kv: -kv[1][2]):
         if plays < REDISCOVER_MIN_PLAYS or last >= quiet_since or key in dismissed:
             continue
-        last_day = datetime.fromtimestamp(last, timezone.utc)
+        last_day = datetime.fromtimestamp(last, ZoneInfo(cfg["timezone"]))  # your calendar
         rediscover.append(
             Rec(
                 kind="artist",

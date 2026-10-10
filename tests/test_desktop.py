@@ -152,6 +152,9 @@ def test_sidebar_toggle_lines_up_with_the_page_icons(window, qtbot):
         for i in range(nav.count()):
             assert nav.item(i).mapTo(window.nav, QPoint(0, 0)).x() == toggle
             assert nav.item(i).width() == window.nav_toggle.width()
+        # The sync dot sits in the icons' column: 10 px padding plus half a 20 px icon.
+        dot = nav.status_dot.mapTo(window.nav, QPoint(0, 0)).x() + nav.status_dot.width() // 2
+        assert dot == toggle + 20, f"dot off by {dot - toggle - 20} px (collapsed={collapsed})"
 
 
 def test_the_current_page_icon_is_lilac(window):

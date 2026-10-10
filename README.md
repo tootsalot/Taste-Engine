@@ -11,7 +11,7 @@ flowchart LR
 
 **Windows:** download the latest `taste-engine-<version>-windows-x64-setup.exe` from [Releases](../../releases) and run it. It installs just for me, with no admin prompt, to `%LOCALAPPDATA%\Programs\Taste Engine`, and adds a Start menu shortcut (a desktop one is optional). Windows warns the first time because the installer isn't signed: click **More info**, then **Run anyway**.
 
-Running the setup again offers to update, repair, or uninstall. Uninstalling keeps my profiles and settings unless I tick the box to delete them too, along with the saved API keys.
+The setup follows the Windows light or dark setting. Running it again offers to update, repair, or uninstall; if the app is open, updating offers to close it and uninstalling asks me to close it first. Uninstalling keeps my profiles and settings unless I tick the box to delete them too, along with the saved API keys.
 
 **From source** (Python 3.10+):
 ```
@@ -24,8 +24,8 @@ python -m taste.desktop
 1. Create a profile. Each profile has its own keys, settings, and data.
 2. On **Settings**, enter your usernames and API keys: a [MAL client ID](https://myanimelist.net/apiconfig) and a [Last.fm API key](https://www.last.fm/api/account/create). Use **Test connection** to check them. Settings opens in **Simple**, with the everyday settings and a sentence under each saying what it does; **Advanced** adds report limits, syncing, and storage.
 3. On the **Dashboard**, click **Sync everything**. The first time, it also fetches what the recommendations need, which takes a few minutes for a big list. After that it's seconds.
-4. The **Dashboard** shows what I finished lately, the albums on repeat this month, how I score compared to the MAL crowd, and which genres I'm most generous or harshest with.
-5. **For You** has anime suggestions, each with a predicted score for me next to the MAL mean, the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, labeled Strong match, Good match, or Worth a try, and old favorites to rediscover.
+4. The **Dashboard** shows what I finished lately, the albums on repeat this month, how I score compared to the MAL crowd, and which genres I'm most generous or harshest with. Since my scores are whole numbers, "lower" and "higher" than MAL count against its average rounded to a whole score: a 7 for a show MAL rates 7.2 matches it.
+5. **For You** has anime suggestions, each with the whole score I'd most likely give (the exact prediction and the MAL mean beside it), the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, labeled Strong match, Good match, or Worth a try, and old favorites to rediscover.
 6. **Reports** is all charts: my average score for shows at each level of the MAL mean, where I tend to drop shows, genres I rate closest to and furthest below MAL, plays per week, month, or year (as many as fit the window), top artists and tracks, and plays by hour and day. Short charts show their counts and long ones a scale. The numbers behind them are in **Export CSV**, one report at a time or all at once.
 
 The sidebar collapses to icons with the button at its top or **Ctrl+B**, and the app remembers which way I left it. Settings sits at the bottom, with when I last synced just above it.
@@ -47,7 +47,9 @@ Candidates are shows that MAL users recommend alongside shows I scored above my 
 1. **Start from the MAL mean.** With 30 or more scored shows, the app fits my score as a straight line in the MAL mean instead of just subtracting my usual difference. A harsh critic is often harsher on weak shows than on strong ones, and a line captures that. With fewer shows a fitted line swings too much, so it stays a plain shift.
 2. **Add my leans.** What's left after step 1 is averaged per genre and per studio, so a show gets a bump for genres and studios I rate above that baseline. Small samples are pulled toward zero, so one show can't swing a whole genre.
 
-To check that this beats simply trusting MAL, the app hides a fifth of my scored shows, predicts them, and compares the error with the MAL mean alone. The result is shown on the For You page, so I can see whether the personal part actually helps.
+To check that this beats simply trusting MAL, the app hides a fifth of my scored shows, predicts them, and compares the error with the MAL mean alone. Both guess whole scores, like the ones I give, which also misses by a little less than the raw decimal does. The result is shown on the For You page, so I can see whether the personal part actually helps.
+
+The averages themselves stay decimal: rounding the MAL mean before comparing would only add noise (a show at 7.49 and one at 7.51 are nearly the same, but would become a 7 and an 8).
 
 Predictions are averages, so they rarely reach the top of the scale. That's why each card also says how likely I am to give the show an 8 or more. The app predicts each of my scored shows without its own score (in five rounds), looks at how far my real scores landed from those predictions, and applies the same spread to the new show. It's left out when I have fewer than 20 scored shows.
 

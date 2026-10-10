@@ -333,6 +333,17 @@ CREATE TABLE IF NOT EXISTS stg_mal_anime_details (
     raw_page_id  INTEGER REFERENCES raw_api_pages (raw_page_id)
 );
 
+-- Saving, deduplicating, and pruning raw pages look them up by request and check
+-- whether staging still points at them (taste/raw.py; deletes also run the foreign
+-- key checks). Without these, every old page scanned each staging table: seconds
+-- per sync on a big library.
+CREATE INDEX IF NOT EXISTS ix_raw_api_pages_request
+    ON raw_api_pages (source, endpoint, request_params);
+CREATE INDEX IF NOT EXISTS ix_stg_lastfm_scrobbles_raw ON stg_lastfm_scrobbles (raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_mal_anime_raw ON stg_mal_anime (last_raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_mal_list_entries_raw ON stg_mal_list_entries (last_raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_mal_anime_details_raw ON stg_mal_anime_details (raw_page_id);
+
 CREATE TABLE IF NOT EXISTS stg_mal_anime_recommendations (
     mal_anime_id        INTEGER NOT NULL,
     recommended_id      INTEGER NOT NULL,

@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.2.0 to build the Windows installer and publish a GitHub Release.
+# Push a tag like v1.0.0 to build the Windows installer and publish a GitHub Release.
 # Run it by hand (Actions tab, "Run workflow") to build and test without publishing.
 on:
   push:

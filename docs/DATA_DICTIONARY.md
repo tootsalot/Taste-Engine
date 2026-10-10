@@ -55,7 +55,7 @@ The Last.fm resume ledger. Each sync fetches a fixed time window `[from_unix, to
 ## Raw
 
 ### `raw_api_pages`
-Every successful API response page, unchanged. Identical repeats aren't stored twice, Last.fm pages with nothing new aren't kept, and pages older than `raw_retention_days` (default 180) are pruned after each sync unless staging points to them or they're the latest copy of their request. This makes re-processing possible without calling the APIs again.
+Every successful API response page, unchanged. Identical repeats aren't stored twice, Last.fm pages with nothing new aren't kept, and pages older than `raw_retention_days` (default 180) are pruned after each sync unless staging points to them or they're the latest copy of their request. This makes re-processing possible without calling the APIs again. Indexed by request (source, endpoint, request_params), and each staging table's raw page column is indexed, so saving and pruning pages are lookups rather than scans.
 
 | Column | Type | Description |
 |---|---|---|
@@ -523,7 +523,7 @@ All views read from core, plus `app_settings` through `rpt_settings`. Every Last
 | `rpt_settings` | Helper. One row: genre_min_sample, in_line_threshold, top_n_all_time, top_n_per_year, top_n_per_month, timezone. |
 | `rpt_lastfm_scope` | Helper. One row: data_scope, capture_scopes. |
 | `rpt_mal_score_vs_community` | item_id, title, title_english, release_year, list_status, my_score, community_mean, score_diff (mine minus community), normalized_diff, community_raters |
-| `rpt_mal_critic_summary` | shows_scored, my_avg_score, community_avg_score, avg_diff, share_scored_below, share_scored_above |
+| `rpt_mal_critic_summary` | shows_scored, my_avg_score, community_avg_score, avg_diff, share_scored_below, share_scored_above, share_scored_same. The shares compare my score with the community mean rounded to a whole score (7.5 counts as 8), since MAL scores are whole numbers: a 7 for a show at 7.2 is the same, not below. The averages aren't rounded. |
 | `rpt_mal_genre_vs_community` | genre, shows_scored, my_avg_score, community_avg_score, avg_diff, diff_vs_my_norm (genre avg_diff minus my overall avg_diff), vs_community (`above` if avg_diff >= the `in_line_threshold` setting, `below` if <= minus it, else `in_line`), min_sample_size (the `genre_min_sample` setting). Genres with fewer scored shows are left out. |
 | `rpt_mal_dropped_on_hold` | item_id, title, title_english, list_status, episodes_watched, total_episodes, pct_complete (NULL when total unknown), my_score, last_updated_utc |
 | `rpt_lastfm_plays_local` | Helper. event_id, track_item_id, track, artist_id, artist, occurred_at_utc, occurred_at_local, local_year, local_month, local_hour, local_weekday_num (0 = Sunday), tz_name, capture_scope, data_scope. Local means the profile's time zone setting, from `core_event_local_times`. |

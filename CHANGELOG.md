@@ -2,21 +2,23 @@
 
 Each release's notes on GitHub come from its section here.
 
-## [0.2.0]
+## [1.0.0]
 
 First packaged release: a desktop app with profiles, recommendations, and artwork.
 
 - A real Windows app with the After Hours look: dark, lilac and coral, Space Grotesk and Inter, and a two-disc logo
-- A Windows installer: per user with no admin prompt, a Start menu shortcut and an optional desktop one; running it again offers Update, Repair, or Uninstall, and uninstalling keeps profiles and settings unless asked to delete them (saved API keys included)
+- A Windows installer: per user with no admin prompt, light or dark to match Windows with the app's logo, a Start menu shortcut and an optional desktop one; running it again offers Update, Repair, or Uninstall, and uninstalling keeps profiles and settings unless asked to delete them (saved API keys included, and nothing else in that folder)
+- If Taste Engine is open, updating offers to close it and uninstalling asks you to close it first
 - Profiles, each with its own API keys, settings, and data
 - API keys entered in the app and kept in Windows Credential Manager
-- Dashboard with recently finished anime, albums on repeat in the last 30 days, my score distribution, and my most generous and harshest genres; the sync log opens only while a sync runs, and stays open if something went wrong
+- Dashboard with recently finished anime, albums on repeat in the last 30 days, my score distribution, how often I score lower or higher than MAL (against its mean rounded to a whole score, since mine are whole numbers), and my most generous and harshest genres; the sync log opens only while a sync runs, and stays open if something went wrong
 - For You: anime suggestions with a predicted score for me and the reasons behind each, new artists to try, and old favorites to rediscover, each with "Not interested" and a link to MyAnimeList or Last.fm
 - Suggestions explained in plain words, with English titles when MAL has one ("Because you loved A and really liked B"); the numbers behind each reason are in the card's tooltip
-- Each anime card shows the MAL mean next to my predicted score, and the chance I'd give the show an 8 or more (left out under 20 scored shows)
+- Each anime card shows the whole score I'd most likely give, with the exact prediction and the MAL mean beside it, and the chance I'd give the show an 8 or more (left out under 20 scored shows)
 - Music suggestions labeled Strong match, Good match, or Worth a try, with similarity given as a percent
 - With 30 or more scored shows, the anime model scales the MAL mean instead of only shifting it, which predicts harsh critics better
-- An accuracy check on the anime predictions, compared with the MAL mean alone
+- An accuracy check on the anime predictions, compared with the MAL mean alone, both guessing whole scores like the ones I give
+- Quick on a big library: recommendations recompute in a fraction of a second, and cleaning up old raw pages after a sync no longer scans every page
 - Posters and album covers, downloaded only from MAL's and Last.fm's image servers and cached on disk (capped at 100 MB); covers that moved to another address on the same server still load
 - Artist photos from Deezer when Last.fm has no cover, and as a backup when a cover can't be downloaded (exact name matches only)
 - Sync everything also refreshes recommendations; the first refresh takes a few minutes, later ones seconds

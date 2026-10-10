@@ -81,6 +81,18 @@ def test_uninstall_cleanup_deletes_keys_and_the_whole_data_folder():
     assert ring.saved == {}  # no keys left behind in the credential store
 
 
+def test_uninstall_cleanup_leaves_files_it_did_not_make(monkeypatch, tmp_path):
+    shared = tmp_path / "shared"  # say TASTE_DATA_DIR pointed at a folder used for more
+    monkeypatch.setenv("TASTE_DATA_DIR", str(shared))
+    profiles.create("me")
+    (shared / "cache").mkdir()
+    (shared / "my-notes.txt").write_text("not the app's", encoding="utf-8")
+    (shared / "photos").mkdir()
+
+    assert profiles.delete_all_data(SecretStore(backend=FakeKeyring())) == shared
+    assert sorted(p.name for p in shared.iterdir()) == ["my-notes.txt", "photos"]
+
+
 def test_uninstall_cleanup_refuses_to_delete_a_source_checkout(monkeypatch):
     monkeypatch.delenv("TASTE_DATA_DIR")  # from source, data/ is the project's own folder
     monkeypatch.setattr(profiles.shutil, "rmtree", lambda *a, **k: pytest.fail("deleted"))

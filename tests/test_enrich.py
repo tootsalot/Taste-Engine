@@ -296,7 +296,7 @@ def test_bad_key_stops_the_run_and_caches_nothing(conn, make_client, music):
 
 def test_artist_covers_for_new_artists_are_cached(conn, make_client, music):
     client, _ = make_client(music)
-    names = ["Example New X", "Example New Y"]
+    names = ["Example New X", "Example New Y", "example new x"]  # X once, whatever the case
     assert enrich.fetch_artist_covers(conn, client, LASTFM_SETTINGS, names, NOW_DT) == 2
     rows = dict(
         conn.execute("SELECT artist_key, image_url FROM stg_lastfm_artist_top_album").fetchall()

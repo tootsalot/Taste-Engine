@@ -167,8 +167,8 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
     assert [c.rec.item_key for c in anime] == ["201", "203", "104", "206"]
     first = anime[0]
     assert first.title.text() == "Example Candidate One"
-    assert first.score.text() == "8.2"
-    assert first.caption.text() == "for you · MAL 8.20"
+    assert first.score.text() == "8"
+    assert first.caption.text() == "for you (8.2) · MAL 8.20"
     assert first.chance.isHidden()  # four scored shows are too few to estimate it
     assert first.open_button.text() == "Open on MyAnimeList"
     reasons = [
@@ -351,9 +351,11 @@ def test_helpers():
     assert safe_link("https://myanimelist.net.evil.example/x") is None
     assert safe_link(None) is None
     anime = Rec("anime", "1", "T", score=7.675, facts={"mal_mean": 8.26})
-    assert score_text("anime", anime) == ("7.7", "for you · MAL 8.26")
+    # The whole score you'd likely give, with the exact prediction beside MAL's mean.
+    assert score_text("anime", anime) == ("8", "for you (7.7) · MAL 8.26")
     older = Rec("anime", "1", "T", score=7.675)  # saved before facts existed
-    assert score_text("anime", older) == ("7.7", "predicted for you")
+    assert score_text("anime", older) == ("8", "predicted for you (7.7)")
+    assert score_text("anime", Rec("anime", "1", "T", score=7.44))[0] == "7"
     label = {"match_label": "Strong match"}
     assert score_text("music_discover", Rec("artist", "x", "X", score=0.95, facts=label)) == (
         "Strong match",

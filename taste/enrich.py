@@ -445,6 +445,16 @@ def enrich_lastfm(
     return fetched
 
 
+def _to_fetch(names: Iterable[str], fresh: set[str]) -> dict[str, str]:
+    """{artist key: name} for names not fetched lately, each artist once (case aside)."""
+    todo: dict[str, str] = {}
+    for name in names:
+        key = artist_key(name)
+        if key not in fresh:
+            todo.setdefault(key, name)
+    return todo
+
+
 def fetch_artist_covers(
     conn: sqlite3.Connection,
     client: HttpClient,
@@ -461,14 +471,13 @@ def fetch_artist_covers(
             "SELECT artist_key FROM stg_lastfm_artist_top_album WHERE fetched_at >= ?", (cutoff,)
         )
     }
-    todo = [n for n in names if artist_key(n) not in fresh]
+    todo = _to_fetch(names, fresh)
     if not todo:
         return 0
     run = SyncRun(conn, lastfm.SOURCE, "enrich")
     count = 0
     try:
-        for name in todo:
-            key = artist_key(name)
+        for key, name in todo.items():
             with transaction(conn):
                 data = _lastfm_call(
                     conn, client, cfg, run, "artist.gettopalbums", name, {"limit": 1}
@@ -515,13 +524,13 @@ def fetch_deezer_pictures(
             "SELECT artist_key FROM stg_deezer_artists WHERE fetched_at >= ?", (_cutoff(now),)
         )
     }
-    todo = [n for n in dict.fromkeys(names) if artist_key(n) not in fresh]
+    todo = _to_fetch(names, fresh)
     if not todo:
         return 0
     run = SyncRun(conn, deezer.SOURCE, "enrich")
     count = 0
     try:
-        for name in todo:
+        for key, name in todo.items():
             params = {"q": name, "limit": 5}
             with transaction(conn):
                 response = client.get_json(
@@ -545,7 +554,7 @@ def fetch_deezer_pictures(
                     "deezer_id = excluded.deezer_id, name = excluded.name, "
                     "picture_url = excluded.picture_url, fetched_at = excluded.fetched_at",
                     (
-                        artist_key(name),
+                        key,
                         match.get("id") if match else None,
                         (match.get("name") or "") if match else "",
                         deezer.picture_url(match),

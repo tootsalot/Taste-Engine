@@ -69,14 +69,21 @@ LEFT JOIN core_curation cu
 WHERE r.source = 'mal';
 
 -- One row: how critical am I overall?
+-- MAL scores are whole numbers, so the shares compare my score with the whole number
+-- closest to the community mean (7.5 counts as 8): giving a 7.2 show a 7 matches MAL
+-- rather than scoring it lower. The averages stay unrounded; rounding them only adds noise.
 CREATE VIEW rpt_mal_critic_summary AS
 SELECT
     COUNT(*) AS shows_scored,
     ROUND(AVG(my_score), 2) AS my_avg_score,
     ROUND(AVG(community_mean), 2) AS community_avg_score,
     ROUND(AVG(score_diff), 2) AS avg_diff,
-    ROUND(AVG(CASE WHEN score_diff < 0 THEN 1.0 ELSE 0.0 END), 3) AS share_scored_below,
-    ROUND(AVG(CASE WHEN score_diff > 0 THEN 1.0 ELSE 0.0 END), 3) AS share_scored_above
+    ROUND(AVG(CASE WHEN my_score < ROUND(community_mean, 0) THEN 1.0 ELSE 0.0 END), 3)
+        AS share_scored_below,
+    ROUND(AVG(CASE WHEN my_score > ROUND(community_mean, 0) THEN 1.0 ELSE 0.0 END), 3)
+        AS share_scored_above,
+    ROUND(AVG(CASE WHEN my_score = ROUND(community_mean, 0) THEN 1.0 ELSE 0.0 END), 3)
+        AS share_scored_same
 FROM rpt_mal_score_vs_community;
 
 -- Per genre, only genres with at least genre_min_sample scored shows, so one show
