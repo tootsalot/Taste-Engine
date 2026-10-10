@@ -196,11 +196,12 @@ class ReportsPage(QWidget):
             " Plays were captured under more than one scope setting." if data.mixed_scopes else ""
         )
         self.scope.setText(f"Last.fm: {data.scope_note}{mixed}")
+        months = data.periods["month"][-24:]  # the week and year views come next
         self.month_chart.set_data(
-            [p for _, p in data.months],
-            [month_label(m) for m, _ in data.months],
+            [p for _, p in months],
+            [month_label(m) for m, _ in months],
             unit="plays",
-            partial_last=data.partial_month,
+            partial_last=data.partial["month"],
         )
         self.top_artists.set_rows(data.top_artists)
         self.top_tracks.set_rows(

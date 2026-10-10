@@ -122,14 +122,21 @@ QLabel[role="big"] {{ font-size: 30px; font-weight: 800; }}
 
 #TopBar {{ background: {PANEL}; border-bottom: 1px solid {LINE}; }}
 #NavPanel {{ background: {PANEL}; border: none; border-right: 1px solid {LINE}; }}
-#Sidebar {{ background: transparent; border: none; outline: 0; }}
-#Sidebar::item {{ padding-left: 10px; border-radius: 8px; color: {MUTED}; }}
-#Sidebar::item:selected {{ background: {RAISED}; color: {TEXT}; font-weight: 700; }}
-#Sidebar::item:hover:!selected {{ background: {SURFACE}; color: {TEXT}; }}
-#Sidebar:focus {{ border: none; }}
-QToolButton#NavToggle {{ background: transparent; border: none; border-radius: 8px;
-                         padding: 10px 8px 10px 10px; }}
-QToolButton#NavToggle:hover, QToolButton#NavToggle:focus {{ background: {SURFACE}; }}
+QPushButton[role="nav"] {{ background: transparent; border: 1px solid transparent;
+                           border-radius: 8px; padding: 0 0 0 9px; text-align: left;
+                           color: {MUTED}; min-height: 0; }}
+QPushButton[role="nav"]:hover {{ background: {SURFACE}; color: {TEXT}; }}
+QPushButton[role="nav"]:checked {{ background: {RAISED}; color: {TEXT}; font-weight: 700; }}
+QPushButton[role="nav"]:focus {{ border-color: {LILAC}; }}
+QFrame[role="segmented"] {{ background: {BG}; border: 1px solid {LINE}; border-radius: 15px; }}
+QPushButton[role="segment"] {{ background: transparent; border: 1px solid transparent;
+                               border-radius: 13px; padding: 3px 14px; color: {MUTED};
+                               min-height: 0; }}
+QPushButton[role="segment"]:hover {{ color: {TEXT}; }}
+QPushButton[role="segment"]:checked {{ background: {LILAC}; color: {ON_ACCENT};
+                                       font-weight: 700; }}
+QPushButton[role="segment"][accent="music"]:checked {{ background: {CORAL}; }}
+QPushButton[role="segment"]:focus {{ border-color: {TEXT}; }}
 
 QFrame[role="card"] {{ background: {SURFACE}; border-radius: 14px; }}
 QLabel[role="badge"] {{ background: {RAISED}; color: {LILAC}; border-radius: 9px;

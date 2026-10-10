@@ -16,8 +16,9 @@ def test_everything_is_empty_but_drawable_before_a_sync(conn):
         ("0", "Last.fm plays"),
         ("-", "busiest day"),
     ]
-    assert data.bands == [] and data.months == [] and data.top_artists == []
-    assert data.partial_month is False
+    assert data.bands == [] and data.top_artists == []
+    assert data.periods == {"week": [], "month": [], "year": []}
+    assert data.partial == {"week": False, "month": False, "year": False}
     assert data.hours == [0] * 24
     assert [d for d, _ in data.weekdays] == ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     assert data.drops == [0] * 10
@@ -55,8 +56,35 @@ def test_scores_are_averaged_per_half_point_of_the_mal_mean(conn):
 
 def test_the_month_in_progress_is_marked(conn):
     add_play(conn, 1782000000)  # 2026-06 in Phoenix
-    assert charts.load(conn, now=datetime(2026, 6, 25, tzinfo=timezone.utc)).partial_month
-    assert not charts.load(conn, now=datetime(2026, 8, 1, tzinfo=timezone.utc)).partial_month
+    assert charts.load(conn, now=datetime(2026, 6, 25, tzinfo=timezone.utc)).partial["month"]
+    assert not charts.load(conn, now=datetime(2026, 8, 1, tzinfo=timezone.utc)).partial["month"]
+
+
+def utc(*parts):
+    return int(datetime(*parts, tzinfo=timezone.utc).timestamp())
+
+
+def test_plays_group_by_week_month_and_year(conn):
+    # Phoenix is seven hours behind UTC all year. Weeks start on Sunday.
+    add_play(conn, utc(2025, 12, 31, 20))  # Wednesday Dec 31: the week of Sunday Dec 28
+    add_play(conn, utc(2026, 1, 4, 3), track="B")  # still Saturday Jan 3 there: same week
+    add_play(conn, utc(2026, 1, 20, 12), track="C")  # Tuesday Jan 20: the week of Jan 18
+    data = charts.load(conn, now=datetime(2026, 1, 21, tzinfo=timezone.utc))
+    assert data.periods["week"] == [
+        ("2025-12-28", 2),
+        ("2026-01-04", 0),  # weeks without plays still show, as zero
+        ("2026-01-11", 0),
+        ("2026-01-18", 1),
+    ]
+    assert data.periods["month"] == [("2025-12", 1), ("2026-01", 2)]
+    assert data.periods["year"] == [("2025", 1), ("2026", 2)]
+    assert data.partial == {"week": True, "month": True, "year": True}
+
+
+def test_period_labels_for_the_axis_and_the_hover():
+    assert charts.period_label("week", "2025-12-28") == ("Dec 28", "Week of Dec 28, 2025")
+    assert charts.period_label("month", "2026-10") == ("Oct 26", "Oct 2026")
+    assert charts.period_label("year", "2026") == ("2026", "2026")
 
 
 def test_genre_lists_take_the_ends_of_the_ranking(conn):
@@ -74,7 +102,7 @@ def test_music_charts(conn, make_client):
     assert data.tiles[3].value in WEEKDAYS
     assert data.top_artists[0] == ("the example band", 3)
     assert data.top_tracks[0][0] == "signal" and data.top_tracks[0][2] == 2
-    assert data.months == [("2026-10", 5)]
+    assert data.periods["month"] == [("2026-10", 5)]
     assert sum(data.hours) == 5 and sum(p for _, p in data.weekdays) == 5
     assert "Desktop listening only" in data.scope_note
 
@@ -82,6 +110,6 @@ def test_music_charts(conn, make_client):
 def test_months_without_plays_still_show_as_zero(conn):
     add_play(conn, 1767225600)  # 2025-12 in Phoenix
     add_play(conn, 1782000000, track="Later")  # 2026-06
-    months = charts.load(conn).months
+    months = charts.load(conn).periods["month"]
     assert months[0] == ("2025-12", 1) and months[-1] == ("2026-06", 1)
     assert len(months) == 7 and sum(p for _, p in months) == 2

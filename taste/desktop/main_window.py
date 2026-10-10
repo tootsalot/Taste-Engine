@@ -10,13 +10,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QStackedWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +24,7 @@ from taste.desktop.context import AppContext
 from taste.desktop.dashboard import DashboardPage
 from taste.desktop.dialogs import NewProfileDialog
 from taste.desktop.for_you import ForYouPage
+from taste.desktop.nav import NavList, nav_button
 from taste.desktop.reports_page import ReportsPage
 from taste.desktop.settings_page import SettingsPage
 from taste.desktop.widgets import heading, label
@@ -89,32 +87,15 @@ class MainWindow(QMainWindow):
         nav_layout = QVBoxLayout(self.nav)
         nav_layout.setContentsMargins(8, 10, 8, 10)
         nav_layout.setSpacing(8)
-        self.nav_toggle = QToolButton()
-        self.nav_toggle.setObjectName("NavToggle")
-        self.nav_toggle.setIcon(theme.icon("sidebar"))
-        self.nav_toggle.setIconSize(QSize(20, 20))
-        # The same box as a collapsed page row (38 x 40, icon 10 px in), so its icon
-        # lines up with the page icons under it.
-        self.nav_toggle.setFixedSize(38, 40)
+        # The toggle is a page row without a page, so its icon lines up with theirs.
+        self.nav_toggle = nav_button("sidebar")
         self.nav_toggle.clicked.connect(lambda: self.toggle_nav())
-        toggle_row = QHBoxLayout()
-        nav_layout.addLayout(toggle_row)
-        self.sidebar = QListWidget()
-        self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setIconSize(QSize(20, 20))
-        self.sidebar.setSpacing(2)
-        self.sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        for page in PAGES:
-            item = QListWidgetItem(theme.icon(PAGE_ICONS[page]), page)
-            item.setSizeHint(QSize(0, 40))
-            self.sidebar.addItem(item)
+        nav_layout.addWidget(self.nav_toggle)
+        self.sidebar = NavList(
+            [(page, PAGE_ICONS[page]) for page in PAGES], bottom=PAGES.index("Settings")
+        )
         self.sidebar.currentRowChanged.connect(self._on_page_changed)
         nav_layout.addWidget(self.sidebar, 1)
-        # Page rows start after the list's frame and item spacing; so does the toggle.
-        toggle_row.setContentsMargins(self.sidebar.frameWidth() + self.sidebar.spacing(), 0, 0, 0)
-        toggle_row.addWidget(self.nav_toggle)
-        toggle_row.addStretch()
         body.addWidget(self.nav)
         QShortcut(QKeySequence("Ctrl+B"), self, self.toggle_nav)
 
@@ -132,6 +113,7 @@ class MainWindow(QMainWindow):
         self.dashboard.sync_finished.connect(lambda _: self.reports.refresh())
         self.dashboard.sync_finished.connect(lambda _: self.for_you.reload())
         self.dashboard.recs_updated.connect(self.for_you.reload)
+        self.dashboard.status_changed.connect(self.sidebar.set_status)
         self.settings.settings_saved.connect(self._after_settings_saved)
         self.settings.profile_deleted.connect(self._after_profile_deleted)
         # A sync and a recommendations refresh never run at the same time: both write
@@ -157,7 +139,7 @@ class MainWindow(QMainWindow):
         self.reload_profiles()
         # Start keyboard focus on the page list, not on whichever button comes first
         # (a focus ring on "New profile" at launch looks like a pending action).
-        self.sidebar.setFocus()
+        self.sidebar.focus_current()
 
     def _empty_state(self) -> QWidget:
         page = QWidget()
@@ -188,10 +170,7 @@ class MainWindow(QMainWindow):
         """Icons only (with tooltips) or icons and labels. Ctrl+B toggles it."""
         self.nav_collapsed = collapsed
         self.nav.setFixedWidth(NAV_COLLAPSED_WIDTH if collapsed else NAV_WIDTH)
-        for i, page in enumerate(PAGES):
-            item = self.sidebar.item(i)
-            item.setText("" if collapsed else page)
-            item.setToolTip(page if collapsed else "")
+        self.sidebar.set_collapsed(collapsed)
         self.nav_toggle.setToolTip(
             "Show page names (Ctrl+B)" if collapsed else "Collapse the sidebar (Ctrl+B)"
         )

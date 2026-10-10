@@ -16,9 +16,12 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
+    QSpacerItem,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -26,15 +29,17 @@ from PySide6.QtWidgets import (
 
 from taste import __version__, profiles, settings
 from taste.config import data_dir
+from taste.desktop import ui_state
 from taste.desktop.context import AppContext
 from taste.desktop.dialogs import ConfirmDeleteDialog
-from taste.desktop.widgets import Card, heading, label, section
+from taste.desktop.widgets import Card, Segmented, heading, label, section
 from taste.desktop.workers import ConnectionTestWorker
 from taste.secrets_store import KEY_LABELS, KEY_NAMES, SecretStoreError
 from taste.settings import SettingError
 
 KEY_SOURCES = {"MAL_CLIENT_ID": "mal", "LASTFM_API_KEY": "lastfm"}
-LABEL_WIDTH = 290
+LABEL_WIDTH = 320
+COLUMN_WIDTH = 1000  # the page stops widening here
 CREDITS = (
     "Built with Python and Qt for Python (PySide6, used under the LGPL 3.0), plus requests, "
     "keyring, python-dotenv, and tzdata. Fonts: Space Grotesk and Inter (SIL Open Font "
@@ -68,10 +73,27 @@ class SettingsPage(QWidget):
         outer.addWidget(scroll)
         body = QWidget()
         scroll.setWidget(body)
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(28, 24, 28, 24)
+        # One column that stops at a readable width, so fields don't stretch across a
+        # wide screen; the space to its right is left empty.
+        page_row = QHBoxLayout(body)
+        page_row.setContentsMargins(28, 24, 28, 24)
+        column = QWidget()
+        column.setMaximumWidth(COLUMN_WIDTH)
+        column.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        page_row.addWidget(column)
+        page_row.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum))
+        layout = QVBoxLayout(column)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
-        layout.addWidget(heading("Settings", 28))
+        top = QHBoxLayout()
+        top.addWidget(heading("Settings", 28))
+        top.addStretch()
+        self.mode_switch = Segmented([("simple", "Simple"), ("advanced", "Advanced")])
+        self.mode_switch.setToolTip("Advanced adds report limits, sync, and storage settings.")
+        self.mode_switch.changed.connect(self.set_mode)
+        self.mode_buttons = self.mode_switch.buttons
+        top.addWidget(self.mode_switch)
+        layout.addLayout(top)
 
         # API keys
         keys = Card()
@@ -125,8 +147,11 @@ class SettingsPage(QWidget):
         form_card = Card()
         form_card.body.addWidget(heading("Profile settings", 18))
         self.inputs: dict[str, QWidget] = {}
+        self.descriptions: dict[str, QLabel] = {}
         self.headings: list[str] = []
+        self.heading_widgets: dict[str, QLabel] = {}
         self.group_of: dict[str, str] = {}
+        self._form_of: dict[str, QFormLayout] = {}
         for group in settings.GROUPS:
             fields = [f for f in settings.SETTINGS if f.group == group]
             if not fields:
@@ -135,18 +160,28 @@ class SettingsPage(QWidget):
             title.setContentsMargins(0, 10 if self.headings else 2, 0, 0)
             form_card.body.addWidget(title)
             self.headings.append(group)
+            self.heading_widgets[group] = title
             form = QFormLayout()
-            form.setVerticalSpacing(10)
+            form.setVerticalSpacing(12)
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             for field in fields:
                 widget = self._input_for(field)
-                if field.help:
-                    widget.setToolTip(field.help)
                 self.inputs[field.key] = widget
                 self.group_of[field.key] = group
-                name = label(field.label, wrap=True)
+                # The name, with a plain sentence under it saying what it does.
+                name = QWidget()
                 name.setFixedWidth(LABEL_WIDTH)  # one label column across all groups
+                stack = QVBoxLayout(name)
+                stack.setContentsMargins(0, 0, 0, 0)
+                stack.setSpacing(2)
+                stack.addWidget(label(field.label, wrap=True))
+                self.descriptions[field.key] = label(field.help, role="caption", wrap=True)
+                stack.addWidget(self.descriptions[field.key])
                 form.addRow(name, widget)
+                self._form_of[field.key] = form
             form_card.body.addLayout(form)
+        self.hidden_note = label("", role="muted")
+        form_card.body.addWidget(self.hidden_note)
         save_row = QHBoxLayout()
         self.save_button = QPushButton("Save settings")
         self.save_button.setProperty("role", "primary")
@@ -194,6 +229,29 @@ class SettingsPage(QWidget):
         about.body.addLayout(about_row)
         layout.addWidget(about)
         layout.addStretch()
+        self.mode = ""
+        self.set_mode(ui_state.load().get("settings_mode", "simple"), remember=False)
+
+    def set_mode(self, mode: str, remember: bool = True) -> None:
+        """Simple shows the everyday settings; Advanced shows every one. Hidden settings
+        keep their values and are saved unchanged."""
+        mode = "advanced" if mode == "advanced" else "simple"
+        self.mode = mode
+        self.mode_switch.set_value(mode)
+        advanced = mode == "advanced"
+        for field in settings.SETTINGS:
+            self._form_of[field.key].setRowVisible(
+                self.inputs[field.key], advanced or not field.advanced
+            )
+        for group, title in self.heading_widgets.items():
+            title.setVisible(
+                advanced or any(not f.advanced for f in settings.SETTINGS if f.group == group)
+            )
+        hidden = sum(f.advanced for f in settings.SETTINGS)
+        self.hidden_note.setText(f"{hidden} more settings in Advanced.")
+        self.hidden_note.setVisible(not advanced)
+        if remember:
+            ui_state.save(settings_mode=mode)
 
     @staticmethod
     def _input_for(field: settings.Setting) -> QWidget:

@@ -211,6 +211,7 @@ class DashboardPage(QWidget):
     sync_started = Signal()
     sync_finished = Signal(dict)
     recs_updated = Signal()
+    status_changed = Signal(str, str, str)  # short line, dot state, details (the sidebar)
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -395,6 +396,15 @@ class DashboardPage(QWidget):
             if self.outcome is False:
                 text = "The last sync had problems; the log says what happened. " + text
             self.strip.text.setText(text)
+            latest = max(filter(None, synced.values()), default=None)
+            if self.outcome is False:
+                short, state = "Last sync had problems", "error"
+            elif latest:
+                short = f"Synced {local_time.describe(latest, cfg['timezone'], now)}"
+                state = "ok"
+            else:
+                short, state = "Not synced yet", "idle"
+            self.status_changed.emit(short, state, text)
 
     # -- syncing ------------------------------------------------------------
 
@@ -425,6 +435,7 @@ class DashboardPage(QWidget):
         self.worker.done.connect(self._on_done)
         self.worker.start()
         self.sync_started.emit()
+        self.status_changed.emit("Syncing…", "running", "")
 
     def _on_done(self, results: dict) -> None:
         self.worker.wait()

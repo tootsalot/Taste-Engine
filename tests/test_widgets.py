@@ -63,6 +63,21 @@ def test_hovering_a_bar_shows_only_that_bar(qtbot):
     assert chart.toolTip() == ""  # never one list of every bar for the whole chart
 
 
+def test_a_long_series_shows_as_many_recent_bars_as_fit(qtbot):
+    chart = BarChart(min_bar=20)
+    qtbot.addWidget(chart)
+    values = list(range(1, 101))
+    chart.set_data(values, [str(v) for v in values])
+    chart.resize(300, 160)
+    narrow = len(chart.bar_rects())
+    chart.resize(900, 160)
+    wide = len(chart.bar_rects())
+    assert 10 <= narrow < wide < 100  # a wider window loads more of the history
+    assert all(rect.width() >= 20 for rect in chart.bar_rects())
+    last = chart.bar_rects()[-1]
+    assert chart.tip_at(last.center().x()) == "100: 100"  # the newest bar is always shown
+
+
 def test_bars_can_carry_their_own_hover_text(qtbot):
     chart = BarChart()
     qtbot.addWidget(chart)

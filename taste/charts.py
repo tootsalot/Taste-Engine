@@ -9,13 +9,14 @@ from __future__ import annotations
 import math
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from statistics import mean, quantiles
 from zoneinfo import ZoneInfo
 
 from taste import overview, settings
 
-MONTHS_SHOWN = 24
+PERIODS = ("week", "month", "year")
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 TOP_SHOWN = 10
 BAND_WIDTH = 0.5  # MAL mean points per band of the score chart
 MIDDLE_MIN_SHOWS = 4  # fewer than this and a band's middle half says nothing
@@ -47,12 +48,12 @@ class ReportData:
     generous: list[overview.GenreLean]
     harsh: list[overview.GenreLean]
     drops: list[int]  # dropped shows by how far in I stopped: 0 to 9%, 10 to 19%, ...
-    months: list[tuple[str, int]]  # ("YYYY-MM", plays), no gaps
+    periods: dict[str, list[tuple[str, int]]]  # plays per week, month, year (plays_by_period)
+    partial: dict[str, bool]  # whether each series ends in the period in progress
     top_artists: list[tuple[str, int]]
     top_tracks: list[tuple[str, str, int]]  # track, artist, plays
     hours: list[int]  # 24, local time
     weekdays: list[tuple[str, int]]  # Sunday first
-    partial_month: bool = False  # the last month is the one in progress
     scope_note: str = ""
     mixed_scopes: bool = False
     tz_name: str = ""
@@ -109,8 +110,8 @@ def load(conn: sqlite3.Connection, now: datetime | None = None) -> ReportData:
     generous, harsh = overview.genre_lean(conn, n=TOP_SHOWN)
     scope = conn.execute("SELECT * FROM rpt_lastfm_scope").fetchone()
     tz_name = settings.get(conn, "timezone")
-    months = _months(conn)
-    this_month = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(tz_name))
+    today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(tz_name)).date()
+    periods, partial = plays_by_period(conn, today)
     return ReportData(
         tiles=tiles,
         bands=score_bands(
@@ -125,8 +126,8 @@ def load(conn: sqlite3.Connection, now: datetime | None = None) -> ReportData:
         generous=generous,
         harsh=harsh,
         drops=drops,
-        months=months,
-        partial_month=bool(months) and months[-1][0] == f"{this_month:%Y-%m}",
+        periods=periods,
+        partial=partial,
         top_artists=[
             (r[0], r[1])
             for r in conn.execute(
@@ -153,20 +154,67 @@ def load(conn: sqlite3.Connection, now: datetime | None = None) -> ReportData:
     )
 
 
-def _months(conn: sqlite3.Connection) -> list[tuple[str, int]]:
-    """Plays per local month for the last MONTHS_SHOWN months with any, gaps as zero."""
-    counts = dict(
-        conn.execute(
-            "SELECT local_month, COUNT(*) FROM rpt_lastfm_plays_local GROUP BY local_month"
-        ).fetchall()
-    )
-    if not counts:
-        return []
-    first, last = min(counts), max(counts)
-    year, month = int(first[:4]), int(first[5:7])
-    months = []
-    while f"{year:04d}-{month:02d}" <= last:
-        key = f"{year:04d}-{month:02d}"
-        months.append((key, counts.get(key, 0)))
-        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
-    return months[-MONTHS_SHOWN:]
+def week_start(day: date) -> date:
+    """The Sunday a week starts on, like the weekday chart."""
+    return day - timedelta(days=(day.weekday() + 1) % 7)
+
+
+def _next(period: str, key: str) -> str:
+    if period == "week":
+        return (date.fromisoformat(key) + timedelta(days=7)).isoformat()
+    if period == "month":
+        year, month = int(key[:4]), int(key[5:7])
+        return f"{year + 1:04d}-01" if month == 12 else f"{year:04d}-{month + 1:02d}"
+    return str(int(key) + 1)
+
+
+def plays_by_period(
+    conn: sqlite3.Connection, today: date
+) -> tuple[dict[str, list[tuple[str, int]]], dict[str, bool]]:
+    """Plays per local week, month, and year, oldest first, gaps as zero.
+
+    Keys are "YYYY-MM-DD" (the Sunday), "YYYY-MM", and "YYYY". The second dict says
+    whether each series ends in the period still in progress. The page shows as many
+    of the latest periods as fit its width.
+    """
+    counts: dict[str, dict[str, int]] = {p: {} for p in PERIODS}
+    for day_text, plays in conn.execute(
+        "SELECT substr(occurred_at_local, 1, 10), COUNT(*) FROM rpt_lastfm_plays_local "
+        "GROUP BY substr(occurred_at_local, 1, 10)"
+    ):
+        day = date.fromisoformat(day_text)
+        for period, key in (
+            ("week", week_start(day).isoformat()),
+            ("month", day_text[:7]),
+            ("year", day_text[:4]),
+        ):
+            counts[period][key] = counts[period].get(key, 0) + plays
+    current = {
+        "week": week_start(today).isoformat(),
+        "month": f"{today:%Y-%m}",
+        "year": str(today.year),
+    }
+    series: dict[str, list[tuple[str, int]]] = {}
+    for period in PERIODS:
+        found = counts[period]
+        filled = []
+        if found:
+            key, last = min(found), max(found)
+            while key <= last:
+                filled.append((key, found.get(key, 0)))
+                key = _next(period, key)
+        series[period] = filled
+    partial = {p: bool(series[p]) and series[p][-1][0] == current[p] for p in PERIODS}
+    return series, partial
+
+
+def period_label(period: str, key: str) -> tuple[str, str]:
+    """(axis label, hover name): ("Dec 28", "Week of Dec 28, 2025"), ("Oct 26", "Oct 2026")."""
+    if period == "week":
+        day = date.fromisoformat(key)
+        name = f"{MONTH_NAMES[day.month - 1]} {day.day}"
+        return name, f"Week of {name}, {day.year}"
+    if period == "month":
+        month = MONTH_NAMES[int(key[5:7]) - 1]
+        return f"{month} {key[2:4]}", f"{month} {key[:4]}"
+    return key, key

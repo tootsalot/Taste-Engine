@@ -69,26 +69,48 @@ class Setting:
     maximum: float | None = None
     max_length: int = 200
     group: str = "Profile"
+    advanced: bool = False  # shown only in the Settings page's Advanced mode
 
 
 SETTINGS: list[Setting] = [
-    Setting("display_name", "Display name", "text", "", "Shown in the app. Blank uses the ID."),
-    Setting("mal_username", "MyAnimeList username", "text", "", "The list has to be public."),
-    Setting("lastfm_username", "Last.fm username", "text", ""),
+    Setting(
+        "display_name",
+        "Display name",
+        "text",
+        "",
+        "The name at the top of the Dashboard. Leave it blank to use the profile ID.",
+    ),
+    Setting(
+        "mal_username",
+        "MyAnimeList username",
+        "text",
+        "",
+        "Your MyAnimeList username. Your anime list has to be public.",
+    ),
+    Setting("lastfm_username", "Last.fm username", "text", "", "Your Last.fm username."),
     Setting(
         "timezone",
         "Time zone",
         "timezone",
         "America/Phoenix",
-        "Used for hour of day, weekday, month, and year in the Last.fm reports.",
+        "Used for the times shown in the app, and to put your plays in the right hour, "
+        "day, and month.",
     ),
-    Setting("include_nsfw", "Include NSFW anime", "bool", True, "Sends nsfw=true to MAL."),
+    Setting(
+        "include_nsfw",
+        "Include NSFW anime",
+        "bool",
+        True,
+        "Include shows MyAnimeList marks as adult, in your synced list and in suggestions. "
+        "Their posters stay hidden on the Dashboard either way.",
+    ),
     Setting(
         "lastfm_capture_scope",
         "Which devices scrobble to Last.fm?",
         "choice",
         "unknown",
-        "Applies to scrobbles synced from now on. Earlier plays keep their label.",
+        "Tells the reports how much of your listening reaches Last.fm. Plays synced from "
+        "now on get this label; older plays keep theirs.",
         choices=CAPTURE_SCOPES,
         group="Last.fm",
     ),
@@ -97,44 +119,75 @@ SETTINGS: list[Setting] = [
         "Last.fm scope note",
         "text",
         "",
-        "Printed on every Last.fm report. Blank uses a standard note for the scope above.",
+        "Your own wording for the note shown with Last.fm reports. Leave it blank for the "
+        "standard note.",
         max_length=500,
         group="Last.fm",
+        advanced=True,
     ),
     Setting(
         "genre_min_sample",
         "Genre minimum sample",
         "int",
         5,
-        "Genres with fewer scored shows are left out of the genre report.",
+        "Genres with fewer of your scored shows than this are left out of the genre charts.",
         minimum=1,
         maximum=1000,
         group="Reports",
+        advanced=True,
     ),
     Setting(
         "in_line_threshold",
         "In-line threshold",
         "float",
         0.25,
-        "How close to the community average (in MAL points) counts as in line.",
+        "How close to the MAL average, in points, still counts as in line. Used in the "
+        "genre report export.",
         minimum=0,
         maximum=9,
         group="Reports",
+        advanced=True,
     ),
     Setting(
-        "top_n_all_time", "Top N, all time", "int", 50, minimum=1, maximum=1000, group="Reports"
+        "top_n_all_time",
+        "Top N, all time",
+        "int",
+        50,
+        "How many artists and tracks the all-time reports keep. The Reports page shows "
+        "the top 10.",
+        minimum=1,
+        maximum=1000,
+        group="Reports",
+        advanced=True,
     ),
     Setting(
-        "top_n_per_year", "Top N, per year", "int", 25, minimum=1, maximum=1000, group="Reports"
+        "top_n_per_year",
+        "Top N, per year",
+        "int",
+        25,
+        "How many artists and tracks each year keeps in the yearly report exports.",
+        minimum=1,
+        maximum=1000,
+        group="Reports",
+        advanced=True,
     ),
     Setting(
-        "top_n_per_month", "Top N, per month", "int", 10, minimum=1, maximum=1000, group="Reports"
+        "top_n_per_month",
+        "Top N, per month",
+        "int",
+        10,
+        "How many artists and tracks each month keeps in the monthly report exports.",
+        minimum=1,
+        maximum=1000,
+        group="Reports",
+        advanced=True,
     ),
     Setting(
         "rec_count",
         "Recommendations per list",
         "int",
         30,
+        "How many cards each For You tab shows.",
         minimum=5,
         maximum=200,
         group="Recommendations",
@@ -144,17 +197,19 @@ SETTINGS: list[Setting] = [
         "Minimum MAL raters for anime suggestions",
         "int",
         5000,
-        "Leaves out obscure shows whose community score rests on few people.",
+        "Skips shows rated by fewer MyAnimeList users than this, since their scores are "
+        "less settled.",
         minimum=0,
         maximum=5_000_000,
         group="Recommendations",
+        advanced=True,
     ),
     Setting(
         "rec_media_types",
         "Anime types to suggest",
         "multichoice",
         "tv,movie,ona,ova",
-        "Only these kinds of shows are suggested.",
+        "Only these kinds of anime are suggested.",
         choices=ANIME_TYPES,
         group="Recommendations",
     ),
@@ -163,7 +218,7 @@ SETTINGS: list[Setting] = [
         "Include my Plan to Watch in suggestions",
         "bool",
         True,
-        "Ranks shows already on your Plan to Watch alongside new ones, labeled.",
+        "Also suggest shows already on your Plan to Watch, with a label.",
         group="Recommendations",
     ),
     Setting(
@@ -171,31 +226,35 @@ SETTINGS: list[Setting] = [
         "Artists to base music suggestions on",
         "int",
         50,
-        "Your most played artists over the last year, recent plays counting more.",
+        "How many of your most played artists from the past year music suggestions start "
+        "from. Recent plays count more.",
         minimum=5,
         maximum=200,
         group="Recommendations",
+        advanced=True,
     ),
     Setting(
         "lastfm_lookback_days",
         "Last.fm lookback days",
         "int",
         14,
-        "How far back each incremental sync re-checks for late scrobbles.",
+        "Each sync looks this many days back for plays that reached Last.fm late.",
         minimum=0,
         maximum=365,
         group="Syncing and storage",
+        advanced=True,
     ),
     Setting(
         "raw_retention_days",
         "Keep raw API pages for (days)",
         "int",
         180,
-        "Older raw pages are pruned after each sync, except the latest copy of each "
-        "request and anything still in use. 0 keeps everything.",
+        "How many days to keep copies of the raw API responses. Older copies are cleared "
+        "after each sync, except the newest of each and any still in use. 0 keeps them all.",
         minimum=0,
         maximum=3650,
         group="Syncing and storage",
+        advanced=True,
     ),
 ]
 BY_KEY = {s.key: s for s in SETTINGS}

@@ -5,13 +5,15 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QToolTip,
     QVBoxLayout,
@@ -95,6 +97,38 @@ def nice_ticks(top: float) -> list[int]:
         if candidate <= raw and candidate == int(candidate):
             step = int(candidate)
     return list(range(step, int(top) + 1, step))
+
+
+class Segmented(QFrame):
+    """A row of pill buttons where exactly one is on, like Simple | Advanced."""
+
+    changed = Signal(str)
+
+    def __init__(self, options: Sequence[tuple[str, str]], accent: str = "anime") -> None:
+        """`options` are (key, text). `accent` "music" lights the chosen one coral."""
+        super().__init__()
+        self.setProperty("role", "segmented")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(2, 2, 2, 2)
+        row.setSpacing(0)
+        self.group = QButtonGroup(self)
+        self.buttons: dict[str, QPushButton] = {}
+        for key, text in options:
+            button = QPushButton(text)
+            button.setProperty("role", "segment")
+            button.setProperty("accent", accent)
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _=False, k=key: self.changed.emit(k))
+            self.group.addButton(button)
+            row.addWidget(button)
+            self.buttons[key] = button
+
+    def set_value(self, key: str) -> None:
+        self.buttons[key].setChecked(True)
+
+    def value(self) -> str:
+        return next((k for k, b in self.buttons.items() if b.isChecked()), "")
 
 
 class Card(QFrame):

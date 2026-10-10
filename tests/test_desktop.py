@@ -133,24 +133,54 @@ def test_sidebar_collapses_to_icons_and_remembers(window, qtbot):
     assert not again.nav_collapsed and nav.count() == len(PAGES)
 
 
-def test_sidebar_toggle_lines_up_with_the_page_icons(window, qtbot):
-    window.new_profile(("me", "Me"))
+def shown(window, qtbot):
     window.resize(1000, 700)
     window.show()
     qtbot.waitExposed(window)
+
+
+def test_sidebar_toggle_lines_up_with_the_page_icons(window, qtbot):
+    window.new_profile(("me", "Me"))
+    shown(window, qtbot)
     nav = window.sidebar
-
-    def icon_x(widget, x):
-        return widget.mapTo(window.nav, QPoint(int(x), 0)).x()
-
     for collapsed in (False, True):
         window.set_nav_collapsed(collapsed, remember=False)
         qtbot.wait(10)
-        toggle = icon_x(window.nav_toggle, window.nav_toggle.width() / 2)
-        item = nav.visualItemRect(nav.item(0))
-        # Page icons sit after the item's 10 px left padding; they are 20 px wide.
-        page = icon_x(nav.viewport(), item.left() + 10 + 10)
-        assert abs(toggle - page) <= 1, f"collapsed={collapsed}: toggle {toggle}, pages {page}"
+        # Same kind of button, same padding: the same left edge puts the icons in line.
+        toggle = window.nav_toggle.mapTo(window.nav, QPoint(0, 0)).x()
+        for i in range(nav.count()):
+            assert nav.item(i).mapTo(window.nav, QPoint(0, 0)).x() == toggle
+            assert nav.item(i).width() == window.nav_toggle.width()
+
+
+def test_arrow_keys_move_between_pages(window, qtbot):
+    window.new_profile(("me", "Me"))
+    shown(window, qtbot)
+    nav = window.sidebar
+    nav.setCurrentRow(0)
+    nav.focus_current()
+    qtbot.keyClick(nav.item(0), Qt.Key.Key_Down)
+    assert nav.currentRow() == 1 and window.stack.currentWidget() is window.for_you
+    qtbot.keyClick(nav.item(1), Qt.Key.Key_Up)
+    assert nav.currentRow() == 0
+
+
+def test_settings_sits_at_the_bottom_under_the_last_sync(window, qtbot):
+    set_up_profile(window)
+    shown(window, qtbot)
+    nav = window.sidebar
+    reports, settings_button = nav.item(PAGES.index("Reports")), nav.item(PAGES.index("Settings"))
+    assert settings_button.geometry().top() - reports.geometry().bottom() > 200
+    assert nav.status_text.text() == "Not synced yet"
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        window.dashboard.start_sync("all")
+    assert nav.status_text.text().startswith("Synced ")
+    assert nav.status_dot.property("state") == "ok"
+    assert nav.status_text.geometry().bottom() < settings_button.geometry().top()
+
+    window.set_nav_collapsed(True, remember=False)
+    assert nav.status_text.isHidden() and not nav.status_dot.isHidden()
+    assert "MyAnimeList synced" in nav.status_dot.toolTip()  # the details, on hover
 
 
 def test_bad_profile_id_is_refused(window, monkeypatch):
@@ -182,6 +212,65 @@ def test_settings_save_and_validation(window):
     assert settings.get(conn, "timezone") == "America/Phoenix"
     conn.close()
     assert window.profile_picker.currentText() == "Me Again"
+
+
+SIMPLE_SETTINGS = {
+    "display_name",
+    "mal_username",
+    "lastfm_username",
+    "timezone",
+    "include_nsfw",
+    "lastfm_capture_scope",
+    "rec_count",
+    "rec_media_types",
+    "rec_include_plan_to_watch",
+}
+
+
+def test_every_setting_explains_itself():
+    assert all(s.help.endswith(".") for s in settings.SETTINGS)
+    assert {s.key for s in settings.SETTINGS if not s.advanced} == SIMPLE_SETTINGS
+
+
+def test_settings_open_in_simple_mode_with_descriptions(window):
+    window.new_profile(("me", "Me"))
+    page = window.settings
+    assert page.mode == "simple" and page.mode_buttons["simple"].isChecked()
+    for setting in settings.SETTINGS:
+        assert page.inputs[setting.key].isHidden() == setting.advanced, setting.key
+        assert page.descriptions[setting.key].text() == setting.help
+    # Groups with nothing simple in them fold away, headings included.
+    assert page.heading_widgets["Reports"].isHidden()
+    assert not page.heading_widgets["Profile"].isHidden()
+    advanced = len(settings.SETTINGS) - len(SIMPLE_SETTINGS)
+    assert page.hidden_note.text() == f"{advanced} more settings in Advanced."
+
+
+def test_advanced_mode_shows_everything_and_is_remembered(window, qtbot):
+    window.new_profile(("me", "Me"))
+    page = window.settings
+    qtbot.mouseClick(page.mode_buttons["advanced"], Qt.MouseButton.LeftButton)
+    assert page.mode == "advanced"
+    assert not any(page.inputs[s.key].isHidden() for s in settings.SETTINGS)
+    assert page.hidden_note.isHidden()
+    again = MainWindow(window.ctx)
+    qtbot.addWidget(again)
+    assert again.settings.mode == "advanced"
+
+
+def test_saving_in_simple_mode_keeps_the_hidden_settings(window):
+    window.new_profile(("me", "Me"))
+    page = window.settings
+    page.set_mode("advanced")
+    page.inputs["rec_min_raters"].setValue(1234)
+    assert page.save_settings()
+    page.set_mode("simple")
+    page.inputs["display_name"].setText("Me Again")
+    assert page.save_settings()
+    conn = window.ctx.connect("me")
+    assert settings.get(conn, "rec_min_raters") == 1234
+    assert settings.get(conn, "display_name") == "Me Again"
+    conn.close()
 
 
 def test_keys_saved_cleared_and_never_shown(window):
