@@ -1,14 +1,16 @@
-"""Build a release package of the standalone app.
+"""Build the Windows installer for the standalone app.
 
-    python scripts/build_release.py                 lint, test, build, smoke test, zip
+    python scripts/build_release.py                 lint, test, build, smoke test, installer
     python scripts/build_release.py --skip-checks   skip lint and tests (CI runs them first)
+    python scripts/build_release.py --no-installer  stop after the smoke test (any OS)
     python scripts/build_release.py --check-tag v0.2.0   fail unless the tag matches __version__
     python scripts/build_release.py --notes v0.2.0       print that version's CHANGELOG section
 
-Output goes to dist/: taste-engine-<version>-<platform>.zip plus a .sha256 file. The zip
-holds the app folder with LICENSE.txt and THIRD_PARTY_NOTICES.txt (scripts/notices.py).
-The build is for the OS it runs on. Windows releases are built on GitHub Actions.
-Needs: pip install -r requirements-build.txt
+Output goes to dist/: taste-engine-<version>-windows-x64-setup.exe plus a .sha256 file.
+The app folder inside it carries LICENSE.txt and THIRD_PARTY_NOTICES.txt
+(scripts/notices.py). The installer is made by Inno Setup 6.7 or later from
+packaging/taste-engine.iss; set ISCC to its ISCC.exe if it isn't found on its own.
+Windows releases are built on GitHub Actions. Needs: pip install -r requirements-build.txt
 """
 
 from __future__ import annotations
@@ -22,7 +24,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import zipfile
 from pathlib import Path
 
 import notices  # scripts/notices.py
@@ -31,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
 DIST = ROOT / "dist"
 APP_NAME = "taste-engine"
+ISS = ROOT / "packaging" / "taste-engine.iss"
 
 
 def version() -> str:
@@ -121,28 +123,66 @@ def smoke_test(exe: Path, expected_version: str) -> None:
     print(f"smoke test: window built, fonts and icon loaded, version {expected_version}")
 
 
+def installer_name(ver: str) -> str:
+    """The setup file's name without .exe: taste-engine-0.2.0-windows-x64-setup."""
+    return f"{APP_NAME}-{ver}-{platform_tag()}-setup"
+
+
+def find_iscc() -> Path | None:
+    """Inno Setup's compiler: $ISCC, then PATH, then where its installer puts it."""
+    candidates = [os.environ.get("ISCC", ""), shutil.which("iscc") or ""]
+    for base in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
+        root = os.environ.get(base)
+        if root:
+            programs = Path(root) / ("Programs" if base == "LOCALAPPDATA" else "")
+            candidates.append(str(programs / "Inno Setup 6" / "ISCC.exe"))
+    return next((Path(c) for c in candidates if c and Path(c).is_file()), None)
+
+
+def iscc_command(iscc: Path, ver: str, app_dir: Path, out_dir: Path) -> list[str]:
+    return [
+        str(iscc),
+        f"/DAppVersion={ver}",
+        f"/DAppFolder={app_dir}",
+        f"/DOutputDir={out_dir}",
+        f"/DOutputName={installer_name(ver)}",
+        str(ISS),
+    ]
+
+
+def write_checksum(path: Path) -> Path:
+    """<file>.sha256 next to it, in the format sha256sum -c reads."""
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    target = path.with_name(path.name + ".sha256")
+    target.write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+    return target
+
+
 def package(exe: Path, ver: str) -> Path:
-    DIST.mkdir(exist_ok=True)
-    zip_path = DIST / f"{APP_NAME}-{ver}-{platform_tag()}.zip"
+    """The installer, from the app folder with the license files added."""
     app_dir = exe.parent
     notices.write(app_dir, ver)  # THIRD_PARTY_NOTICES.txt and LICENSE.txt next to the exe
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(app_dir.rglob("*")):
-            if path.is_file():
-                zf.write(path, Path(APP_NAME) / path.relative_to(app_dir))
-    with zipfile.ZipFile(zip_path) as zf:
-        names = set(zf.namelist())
-    for required in ("THIRD_PARTY_NOTICES.txt", "LICENSE.txt"):
-        if f"{APP_NAME}/{required}" not in names:
-            sys.exit(f"The release zip is missing {required}")
-    digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
-    zip_path.with_suffix(".zip.sha256").write_text(f"{digest}  {zip_path.name}\n", encoding="utf-8")
-    return zip_path
+    iscc = find_iscc()
+    if iscc is None:
+        sys.exit(
+            "Inno Setup 6.7 or later is needed to build the installer: get it from "
+            "jrsoftware.org, or set ISCC to its ISCC.exe. --no-installer skips this step."
+        )
+    DIST.mkdir(exist_ok=True)
+    run(*iscc_command(iscc, ver, app_dir, DIST))
+    setup = DIST / f"{installer_name(ver)}.exe"
+    if not setup.is_file():
+        sys.exit(f"Inno Setup finished but {setup} is missing")
+    write_checksum(setup)
+    return setup
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--skip-checks", action="store_true", help="skip ruff and pytest")
+    parser.add_argument(
+        "--no-installer", action="store_true", help="stop after the smoke test (no Inno Setup)"
+    )
     parser.add_argument("--check-tag", metavar="TAG", help="fail unless TAG is v<version>")
     parser.add_argument("--notes", metavar="TAG", help="print the CHANGELOG section for TAG")
     args = parser.parse_args()
@@ -164,9 +204,12 @@ def main() -> None:
         run(sys.executable, "-m", "pytest", "-q")
     exe = build()
     smoke_test(exe, ver)
-    zip_path = package(exe, ver)
-    size_mb = zip_path.stat().st_size / 1_000_000
-    print(f"Built {zip_path.relative_to(ROOT)} ({size_mb:.1f} MB)")
+    if args.no_installer:
+        print(f"Built {exe.parent.relative_to(ROOT)} (no installer)")
+        return
+    setup = package(exe, ver)
+    size_mb = setup.stat().st_size / 1_000_000
+    print(f"Built {setup.relative_to(ROOT)} ({size_mb:.1f} MB)")
 
 
 if __name__ == "__main__":

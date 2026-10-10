@@ -35,8 +35,12 @@ def user_data_dir() -> Path:
     return Path(base) / APP_NAME
 
 
-def _base_dir() -> Path | None:
-    """The single folder holding everything, or None when running from source."""
+def standalone_dir() -> Path | None:
+    """The single folder holding everything, or None when running from source.
+
+    It belongs to the app alone (the packaged app's folder, or TASTE_DATA_DIR), so the
+    uninstaller may delete it. From source, data/ and reports/ sit in the project.
+    """
     override = os.environ.get("TASTE_DATA_DIR", "").strip()
     if override:
         return Path(override).expanduser()
@@ -46,12 +50,12 @@ def _base_dir() -> Path | None:
 
 
 def data_dir() -> Path:
-    base = _base_dir()
+    base = standalone_dir()
     return base if base is not None else PROJECT_ROOT / "data"
 
 
 def reports_dir() -> Path:
-    base = _base_dir()
+    base = standalone_dir()
     return base / "reports" if base is not None else PROJECT_ROOT / "reports"
 
 

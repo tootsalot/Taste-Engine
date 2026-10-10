@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from taste import db, settings
-from taste.config import data_dir
+from taste.config import data_dir, standalone_dir
 
 DEFAULT_PROFILE = "default"
 
@@ -132,6 +132,25 @@ def delete(profile_id: str, root: Path | None = None, store: Any = None) -> None
     (store or SecretStore(root)).delete_all(profile_id)
     for suffix in ("", "-journal", "-wal", "-shm"):
         Path(f"{path}{suffix}").unlink(missing_ok=True)
+
+
+def delete_all_data(store: Any = None) -> Path | None:
+    """For the uninstaller: every profile's saved API keys, then the whole data folder.
+
+    Returns the folder it deleted. Runs only where that folder is the app's own (the
+    packaged app, or TASTE_DATA_DIR); from source it would be the project, so it refuses
+    and returns None.
+    """
+    from taste.secrets_store import SecretStore  # local import: secrets_store imports this module
+
+    folder = standalone_dir()
+    if folder is None:
+        return None
+    store = store or SecretStore(profiles_dir())
+    for profile in list_profiles():
+        store.delete_all(profile.profile_id)
+    shutil.rmtree(folder, ignore_errors=True)
+    return folder
 
 
 def migrate_legacy(root: Path | None = None, legacy: Path | None = None) -> bool:

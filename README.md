@@ -9,7 +9,9 @@ flowchart LR
 
 ## Run it
 
-**Windows:** download the latest zip from [Releases](../../releases), unzip it, and double-click `taste-engine.exe`. Windows warns the first time because the exe isn't signed: click **More info**, then **Run anyway**.
+**Windows:** download the latest `taste-engine-<version>-windows-x64-setup.exe` from [Releases](../../releases) and run it. It installs just for me, with no admin prompt, to `%LOCALAPPDATA%\Programs\Taste Engine`, and adds a Start menu shortcut (a desktop one is optional). Windows warns the first time because the installer isn't signed: click **More info**, then **Run anyway**.
+
+Running the setup again offers to update, repair, or uninstall. Uninstalling keeps my profiles and settings unless I tick the box to delete them too, along with the saved API keys.
 
 **From source** (Python 3.10+):
 ```

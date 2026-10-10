@@ -1,7 +1,7 @@
 name: Release
 
-# Push a tag like v0.2.0 to build the Windows app and publish a GitHub Release.
-# Run it by hand (Actions tab, "Run workflow") to build without publishing.
+# Push a tag like v0.2.0 to build the Windows installer and publish a GitHub Release.
+# Run it by hand (Actions tab, "Run workflow") to build and test without publishing.
 on:
   push:
     tags: ["v*"]
@@ -15,7 +15,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   build-windows:
-    name: Build Windows app
+    name: Build and test the Windows installer
     needs: checks
     runs-on: windows-latest
     steps:
@@ -29,8 +29,16 @@ jobs:
       - name: Check the tag matches the version
         if: startsWith(github.ref, 'refs/tags/')
         run: python scripts/build_release.py --check-tag "${{ github.ref_name }}"
-      - name: Build, smoke test, and zip
+      - name: Make sure Inno Setup is installed
+        # The windows-latest image has it; this covers an image that drops it.
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+      - name: Build, smoke test, and make the installer
         run: python scripts/build_release.py --skip-checks
+      - name: Install, repair, and uninstall it
+        run: python scripts/test_installer.py (Resolve-Path dist/*-setup.exe)
       - uses: actions/upload-artifact@v4
         with:
           name: taste-engine-windows

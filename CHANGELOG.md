@@ -6,7 +6,8 @@ Each release's notes on GitHub come from its section here.
 
 First packaged release: a desktop app with profiles, recommendations, and artwork.
 
-- A real Windows app (`taste-engine.exe`) with the After Hours look: dark, lilac and coral, Space Grotesk and Inter, and a two-disc logo
+- A real Windows app with the After Hours look: dark, lilac and coral, Space Grotesk and Inter, and a two-disc logo
+- A Windows installer: per user with no admin prompt, a Start menu shortcut and an optional desktop one; running it again offers Update, Repair, or Uninstall, and uninstalling keeps profiles and settings unless asked to delete them (saved API keys included)
 - Profiles, each with its own API keys, settings, and data
 - API keys entered in the app and kept in Windows Credential Manager
 - Dashboard with recently finished anime, albums on repeat in the last 30 days, my score distribution, and my most generous and harshest genres; the sync log opens only while a sync runs, and stays open if something went wrong
@@ -30,7 +31,7 @@ First packaged release: a desktop app with profiles, recommendations, and artwor
 - Times shown in the profile's time zone, in plain words ("today at 10:52 PM")
 - Visible keyboard focus on buttons, links, checkboxes, and fields
 - Existing `data/taste.db` from 0.1 becomes the `default` profile automatically
-- The download includes LICENSE.txt and THIRD_PARTY_NOTICES.txt
+- The installed app includes LICENSE.txt and THIRD_PARTY_NOTICES.txt (Settings, About, Third-party notices)
 
 ## [0.1.0]
 

@@ -1,8 +1,9 @@
 import pytest
 
-from taste import profiles, settings
+from taste import config, desktop, profiles, settings
 from taste.profiles import ProfileError
 from taste.secrets_store import SecretStore
+from tests.conftest import FakeKeyring
 
 
 @pytest.mark.parametrize(
@@ -63,3 +64,33 @@ def test_migration_only_runs_once():
     legacy.write_bytes(b"")  # a second legacy file must not overwrite the profile
     assert profiles.migrate_legacy() is False
     assert legacy.exists()
+
+
+def test_uninstall_cleanup_deletes_keys_and_the_whole_data_folder():
+    ring = FakeKeyring()
+    store = SecretStore(backend=ring)
+    for pid in ("me", "friend"):
+        profiles.create(pid)
+        store.set(pid, "MAL_CLIENT_ID", f"fake-id-{pid}")
+    folder = config.data_dir()
+    (folder / "cache" / "images").mkdir(parents=True)
+    (folder / "ui_state.json").write_text("{}", encoding="utf-8")
+
+    assert profiles.delete_all_data(store) == folder
+    assert not folder.exists()
+    assert ring.saved == {}  # no keys left behind in the credential store
+
+
+def test_uninstall_cleanup_refuses_to_delete_a_source_checkout(monkeypatch):
+    monkeypatch.delenv("TASTE_DATA_DIR")  # from source, data/ is the project's own folder
+    monkeypatch.setattr(profiles.shutil, "rmtree", lambda *a, **k: pytest.fail("deleted"))
+    assert profiles.delete_all_data(SecretStore(backend=FakeKeyring())) is None
+
+
+def test_the_app_flag_runs_the_cleanup_without_a_window(monkeypatch):
+    profiles.create("me")
+    folder = config.data_dir()
+    assert desktop.main(["taste-engine", "--delete-all-data"]) == 0
+    assert not folder.exists()
+    monkeypatch.delenv("TASTE_DATA_DIR")
+    assert desktop.main(["taste-engine", "--delete-all-data"]) == 1  # refused from source

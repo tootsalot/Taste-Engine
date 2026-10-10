@@ -91,6 +91,11 @@ def main(argv: list[str] | None = None) -> int:
     if "--version" in argv[1:]:
         print(f"taste-engine {__version__}")  # no-op in the windowed exe, which has no console
         return 0
+    if "--delete-all-data" in argv[1:]:
+        # Run by the uninstaller when "Also delete my profiles..." is ticked. No window.
+        from taste import profiles
+
+        return 0 if profiles.delete_all_data() is not None else 1
 
     from taste import profiles
     from taste.config import load_env
