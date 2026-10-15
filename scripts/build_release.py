@@ -35,6 +35,12 @@ APP_NAME = "taste-engine"
 ISS = ROOT / "packaging" / "taste-engine.iss"
 
 
+# Pages the built app's window stacks: Dashboard, For You, Reports, Rev, Settings, and
+# the empty state before a profile exists. tests/test_build_release.py checks this
+# against the real window, so a new page can't make a release fail at the last step.
+SMOKE_PAGES = 6
+
+
 def version() -> str:
     text = (ROOT / "taste" / "__init__.py").read_text(encoding="utf-8")
     match = re.search(r'^__version__ = "([^"]+)"', text, re.MULTILINE)
@@ -112,7 +118,7 @@ def smoke_test(exe: Path, expected_version: str) -> None:
         "heading_font": "True",
         "body_font": "True",
         "icon": "True",
-        "pages": "5",
+        "pages": str(SMOKE_PAGES),
         "webp": "True",
         "jpeg": "True",
         "gif": "True",

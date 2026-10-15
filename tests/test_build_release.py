@@ -110,3 +110,13 @@ def test_the_wizard_follows_windows_and_its_images_exist():
     for pattern in patterns:
         found = list(build_release.ISS.parent.glob(pattern.strip().replace("\\", "/")))
         assert found, f"{pattern} matches no files (run scripts/make_wizard_images.py)"
+
+
+def test_the_smoke_test_expects_the_pages_the_window_really_has(qtbot):
+    """The packaged app's smoke test checks the page count; a page added without updating
+    it failed the 2.0.0 release build at its last step."""
+    from taste.desktop.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert window.stack.count() == build_release.SMOKE_PAGES
