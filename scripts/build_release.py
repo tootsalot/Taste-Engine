@@ -3,8 +3,8 @@
     python scripts/build_release.py                 lint, test, build, smoke test, installer
     python scripts/build_release.py --skip-checks   skip lint and tests (CI runs them first)
     python scripts/build_release.py --no-installer  stop after the smoke test (any OS)
-    python scripts/build_release.py --check-tag v0.2.0   fail unless the tag matches __version__
-    python scripts/build_release.py --notes v0.2.0       print that version's CHANGELOG section
+    python scripts/build_release.py --check-tag v1.0.0   fail unless the tag matches __version__
+    python scripts/build_release.py --notes v1.0.0       print that version's CHANGELOG section
 
 Output goes to dist/: taste-engine-<version>-windows-x64-setup.exe plus a .sha256 file.
 The app folder inside it carries LICENSE.txt and THIRD_PARTY_NOTICES.txt
@@ -124,7 +124,7 @@ def smoke_test(exe: Path, expected_version: str) -> None:
 
 
 def installer_name(ver: str) -> str:
-    """The setup file's name without .exe: taste-engine-0.2.0-windows-x64-setup."""
+    """The setup file's name without .exe: taste-engine-1.0.0-windows-x64-setup."""
     return f"{APP_NAME}-{ver}-{platform_tag()}-setup"
 
 

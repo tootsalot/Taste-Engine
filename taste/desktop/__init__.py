@@ -16,6 +16,24 @@ from PySide6.QtWidgets import QApplication
 from taste import __version__
 
 SHOW_MESSAGE = b"show"
+# Held while the app is open, so the uninstaller can ask you to close it first.
+# packaging/taste-engine.iss checks for the same name.
+APP_MUTEX = "TasteEngineRunning-3C5D937C-337E-45F7-AB56-E60E3A811924"
+
+
+def hold_app_mutex(name: str = APP_MUTEX) -> int | None:
+    """Windows: create the named mutex and return its handle, or None elsewhere.
+
+    The handle stays open until the process ends; Windows closes it then, even after a crash.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    return kernel32.CreateMutexW(None, False, name) or None
 
 
 def instance_name() -> str:
@@ -111,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     if notify_running_instance(name):
         return 0
 
+    hold_app_mutex()
     load_env()
     theme.apply(app)
     profiles.migrate_legacy()

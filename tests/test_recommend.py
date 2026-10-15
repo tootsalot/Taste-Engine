@@ -18,6 +18,7 @@ The anime numbers below are worked out by hand from tests/fake_recs.py:
 """
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -252,7 +253,11 @@ def test_because_sentences():
 def test_chance_of_an_8_or_more():
     # Predicted 7.6, and real scores have landed -1, 0, +0.5, and +1 from predictions:
     # 6.6, 7.6, 8.1, 8.6. Three of four round to 8 or more.
-    assert recommend.chance_at_least(7.6, [-1.0, 0.0, 0.5, 1.0] * 5, 8) == 0.75
+    assert recommend.chance_at_least(7.6, sorted([-1.0, 0.0, 0.5, 1.0] * 5), 8) == 0.75
+    # Landing exactly on 7.5 counts: it rounds up to an 8.
+    assert recommend.chance_at_least(7.5, sorted([-1.0, 0.0, 0.5, 1.0] * 5), 8) == 0.75
+    assert recommend.chance_at_least(1.0, sorted([0.0] * 20), 8) == 0.0
+    assert recommend.chance_at_least(9.9, sorted([0.0] * 20), 8) == 1.0
     assert recommend.chance_at_least(7.6, [0.0] * 3, 8) is None  # too few to say
 
 
@@ -277,13 +282,19 @@ def test_holdout_evaluation(conn, make_client):
     result = recommend.evaluate(conn)
     # Held out: ids 5, 10, ..., 30 (3 Drama, 3 Comedy). Trained on 12 of each.
     assert result["held_out"] == 6
-    # The community mean is off by 0.5 on Drama and 1.5 on Comedy.
+    # Guesses are whole scores. The community mean, 7.5, guesses 8: right on Drama,
+    # 2 off on Comedy.
     assert result["community"] == 1.0
-    # My overall bias (-0.5) alone makes both off by 1.0.
+    # My overall bias (-0.5) alone guesses 7: 1 off on both.
     assert result["overall"] == 1.0
-    # Genre bias: +1.0 extra on 12 Drama shows, shrunk to 12 / 17. Each prediction is
-    # then off by 1 - 12/17 = 5/17.
-    assert result["model"] == round(5 / 17, 3)
+    # Genre bias: +1.0 extra on 12 Drama shows, shrunk to 12 / 17. Drama predicts
+    # 7.0 + 0.71 = 7.7, a whole 8; Comedy 7.0 - 0.71 = 6.3, a whole 6. Both right.
+    assert result["model"] == 0.0
+
+
+def test_whole_score_matches_the_card():
+    assert [recommend.whole_score(x) for x in (7.44, 7.45, 7.5, 8.49, 9.96)] == [7, 8, 8, 9, 10]
+    assert recommend.whole_score(7.25) == 7  # shown as 7.2, so a 7
 
 
 def test_holdout_needs_enough_shows(conn, make_client):
@@ -355,7 +366,7 @@ def test_rediscover_window(conn, music_world):
     assert [r.title for r in rediscover] == ["Example Old Favorite"]
     old = rediscover[0]
     # The play count is already the card's big number and its reason; the subtitle says when.
-    last = datetime.fromtimestamp(NOW - 400 * DAY, timezone.utc)
+    last = datetime.fromtimestamp(NOW - 400 * DAY, ZoneInfo("America/Phoenix"))  # the default
     assert old.subtitle == f"Last played {last:%b} {last.day}, {last.year}"
     # Artist art: the cover of their most-played album.
     assert old.image_url == "https://lastfm.freetls.fastly.net/i/u/300x300/olddays.png"

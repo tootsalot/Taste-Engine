@@ -101,3 +101,19 @@ def test_views_never_vanish_while_another_connection_sets_up(tmp_path):
         worker.join()
         reader.close()
     assert errors == []
+
+
+def test_setting_the_same_image_again_writes_nothing(conn):
+    from taste import core
+
+    item = core.upsert_item(
+        conn, source="mal", id_type="mal_anime_id", external_id="1", media_type="anime", title="T"
+    )
+    core.set_item_image(conn, item, "mal", "poster", "https://cdn.myanimelist.net/a.jpg")
+    before = conn.total_changes
+    core.set_item_image(conn, item, "mal", "poster", "https://cdn.myanimelist.net/a.jpg")
+    assert conn.total_changes == before
+    core.set_item_image(conn, item, "mal", "poster", "https://cdn.myanimelist.net/b.jpg")
+    assert conn.total_changes == before + 1
+    url = conn.execute("SELECT url FROM core_item_images WHERE item_id = ?", (item,)).fetchone()
+    assert url[0] == "https://cdn.myanimelist.net/b.jpg"

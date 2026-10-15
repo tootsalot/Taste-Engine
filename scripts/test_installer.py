@@ -29,6 +29,8 @@ DATA_DIR = LOCAL / "taste-engine"
 START_MENU = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
 SHORTCUT = START_MENU / "Taste Engine.lnk"
 SILENT = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+APP_MUTEX = "TasteEngineRunning-3C5D937C-337E-45F7-AB56-E60E3A811924"  # taste/desktop
+SYNCHRONIZE = 0x00100000
 
 
 def step(text: str) -> None:
@@ -95,6 +97,41 @@ def check_delete_all_data() -> None:
             fail(f"--delete-all-data exited with {result.returncode} and {left}")
 
 
+def app_is_open() -> bool:
+    """Whether the mutex the app holds while open exists (what the uninstaller checks)."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenMutexW.restype = ctypes.c_void_p
+    kernel32.OpenMutexW.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.OpenMutexW(SYNCHRONIZE, False, APP_MUTEX)
+    if handle:
+        kernel32.CloseHandle(handle)
+    return bool(handle)
+
+
+def check_uninstall_waits_for_the_app(uninstaller: str, log: Path) -> None:
+    """With the app open, a silent uninstall must give up and leave everything installed."""
+    with tempfile.TemporaryDirectory() as data:
+        app = subprocess.Popen([str(EXE)], env={**os.environ, "TASTE_DATA_DIR": data})
+        try:
+            wait_until(app_is_open, "the app to open", seconds=120)
+            subprocess.run([uninstaller, *SILENT, f"/LOG={log}"], timeout=600)
+            wait_until(
+                lambda: log.is_file() and "Log closed" in log.read_text("utf-8", "replace"),
+                "the uninstaller to finish",
+            )
+            if "InitializeUninstall returned False" not in log.read_text("utf-8", "replace"):
+                fail("the uninstaller didn't stop for the open app")
+            if not uninstall_entry() or not EXE.exists():
+                fail("the uninstaller removed Taste Engine while it was open")
+        finally:
+            app.terminate()
+            app.wait(60)
+    wait_until(lambda: not app_is_open(), "the app's mutex to go")
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -127,6 +164,9 @@ def main() -> None:
     marker.parent.mkdir(parents=True)
     marker.write_text("a profile would be here", encoding="utf-8")
     uninstaller = uninstall_entry()["UninstallString"].strip('"')
+    step("uninstalling while the app is open (must wait)")
+    check_uninstall_waits_for_the_app(uninstaller, logs / "uninstall-open.log")
+    step("uninstall waited for the app, which held its mutex")
     step("uninstalling")
     subprocess.run([uninstaller, *SILENT, f"/LOG={logs / 'uninstall.log'}"], timeout=600)
     wait_until(lambda: not uninstall_entry(), "the uninstall entry to go")

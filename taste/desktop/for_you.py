@@ -32,7 +32,7 @@ from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
 from taste.desktop.widgets import Card, ScrollArea, elided_lines, heading, label, plain_tip, section
 from taste.desktop.workers import RecsWorker
-from taste.recommend import Rec
+from taste.recommend import Rec, whole_score
 
 LISTS = (
     ("anime", "Anime"),
@@ -105,10 +105,14 @@ def score_text(kind: str, rec: Rec) -> tuple[str, str]:
     if rec.score is None:
         return "-", ""
     if kind == "anime":
-        # One decimal: the model is good to about a point, not a hundredth.
+        # The whole score you'd most likely give, since MAL scores are whole numbers,
+        # with the exact prediction to one decimal (good to about a point, not a hundredth).
+        whole, exact = whole_score(rec.score), f"{rec.score:.1f}"
         mal = rec.facts.get("mal_mean")
-        return f"{rec.score:.1f}", f"for you · MAL {mal:.2f}" if mal else "predicted for you"
+        caption = f"for you ({exact}) · MAL {mal:.2f}" if mal else f"predicted for you ({exact})"
+        return str(whole), caption
     if kind == "film":
+        # TMDB ratings come in half points, so one decimal, not a whole number.
         mean = rec.facts.get("tmdb_mean")
         return f"{rec.score:.1f}", f"for you · TMDB {mean:.1f}" if mean else "predicted for you"
     if kind == "book":
@@ -648,5 +652,6 @@ def accuracy_tip(metrics: dict) -> str:
         f"On {metrics['held_out']} of your scored shows the model never saw, its predictions "
         f"were off by {metrics['model']:.2f} points on average. The MAL score alone was off "
         f"by {metrics['community']:.2f}, and the MAL score plus your usual difference by "
-        f"{metrics['overall']:.2f}. Lower is better."
+        f"{metrics['overall']:.2f}. Each guess is a whole score, like the ones you give. "
+        "Lower is better."
     )

@@ -85,3 +85,25 @@ def test_discard_never_deletes_a_page_in_use(conn):
     )
     assert not raw.discard_if_unused(conn, page)
     assert pages(conn) == 1
+
+
+def test_pruning_and_saving_use_indexes_not_full_scans(conn):
+    # A big library made prune take seconds per sync: every old page scanned each
+    # staging table. Small test data can't show the time, so check the plans.
+    def plan(sql, params=()):
+        return " | ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params))
+
+    prune = plan(
+        f"DELETE FROM raw_api_pages AS p WHERE p.fetched_at < ? AND {raw._unreferenced_sql('p')} "
+        "AND p.raw_page_id <> (SELECT MAX(q.raw_page_id) FROM raw_api_pages q "
+        "WHERE q.source = p.source AND q.endpoint = p.endpoint "
+        "AND q.request_params = p.request_params)",
+        ("2026-01-01 00:00:00",),
+    )
+    assert "SCAN r" not in prune and "SCAN q" not in prune, prune
+    latest = plan(
+        "SELECT raw_page_id, payload FROM raw_api_pages WHERE source = ? AND endpoint = ? "
+        "AND request_params = ? ORDER BY raw_page_id DESC LIMIT 1",
+        ("lastfm", "user.getrecenttracks", "{}"),
+    )
+    assert "ix_raw_api_pages_request" in latest and "TEMP B-TREE" not in latest, latest

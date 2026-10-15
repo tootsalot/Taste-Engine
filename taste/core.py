@@ -167,9 +167,11 @@ def set_item_tags(
 def set_item_image(
     conn: sqlite3.Connection, item_id: int, source: str, kind: str, url: str
 ) -> None:
+    # Syncs set every poster and cover again; an unchanged one isn't rewritten.
     conn.execute(
         "INSERT INTO core_item_images (item_id, source, kind, url) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT (item_id, source, kind) DO UPDATE SET url = excluded.url",
+        "ON CONFLICT (item_id, source, kind) DO UPDATE SET url = excluded.url "
+        "WHERE core_item_images.url IS NOT excluded.url",
         (item_id, source, kind, url),
     )
 

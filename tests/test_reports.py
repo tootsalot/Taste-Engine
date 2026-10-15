@@ -118,6 +118,18 @@ def test_score_vs_community_and_summary(conn, make_client):
     assert summary["share_scored_below"] == pytest.approx(0.667)
 
 
+def test_lower_and_higher_mean_past_the_closest_whole_score(conn):
+    add_scored_anime(conn, 3, "A", my_score=7, community_mean=7.2)  # 7 is MAL's, rounded
+    add_scored_anime(conn, 2, "B", my_score=8, community_mean=7.5)  # 7.5 rounds up to 8
+    add_scored_anime(conn, 1, "C", my_score=7, community_mean=7.5)  # lower
+    add_scored_anime(conn, 2, "D", my_score=9, community_mean=8.4)  # higher
+    summary = conn.execute("SELECT * FROM rpt_mal_critic_summary").fetchone()
+    assert summary["share_scored_below"] == pytest.approx(0.125)
+    assert summary["share_scored_above"] == pytest.approx(0.25)
+    assert summary["share_scored_same"] == pytest.approx(0.625)
+    assert summary["avg_diff"] == pytest.approx(0.14)  # averages stay unrounded
+
+
 def test_genre_view_respects_minimum_sample(conn):
     add_scored_anime(conn, 6, "Drama", my_score=9, community_mean=8)  # above, n=6
     add_scored_anime(conn, 5, "Mecha", my_score=6, community_mean=8)  # below, n=5

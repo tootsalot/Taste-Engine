@@ -67,6 +67,8 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     # Ten four-minute plays: 40 minutes, from the track lengths the sync looked up.
     assert dash.month.numbers["hours"][0].text() == "<1"
     assert dash.week_chart.values[-1] == 10 and dash.week_chart.partial_last
+    assert "lower than MAL on" in dash.critic_text.text()
+    assert "rounded to a whole number" in dash.critic_text.toolTip()
     assert dash.counts.text() == "6 on your list · 4 scored · 69 Last.fm plays"
     assert dash.score_chart.values == [0, 0, 0, 0, 1, 0, 1, 1, 1, 0]
     assert dash.score_chart.value_labels  # each bar shows its count

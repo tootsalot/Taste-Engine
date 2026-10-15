@@ -506,6 +506,17 @@ CREATE TABLE IF NOT EXISTS stg_mal_anime_details (
     fields_version INTEGER NOT NULL DEFAULT 0
 );
 
+-- Saving, deduplicating, and pruning raw pages look them up by request and check
+-- whether staging still points at them (taste/raw.py; deletes also run the foreign
+-- key checks). Without these, every old page scanned each staging table: seconds
+-- per sync on a big library.
+CREATE INDEX IF NOT EXISTS ix_raw_api_pages_request
+    ON raw_api_pages (source, endpoint, request_params);
+CREATE INDEX IF NOT EXISTS ix_stg_lastfm_scrobbles_raw ON stg_lastfm_scrobbles (raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_mal_anime_raw ON stg_mal_anime (last_raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_mal_list_entries_raw ON stg_mal_list_entries (last_raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_mal_anime_details_raw ON stg_mal_anime_details (raw_page_id);
+
 CREATE TABLE IF NOT EXISTS stg_mal_anime_recommendations (
     mal_anime_id        INTEGER NOT NULL,
     recommended_id      INTEGER NOT NULL,
@@ -656,3 +667,15 @@ CREATE TABLE IF NOT EXISTS rec_dismissed (
     dismissed_at TEXT NOT NULL,
     PRIMARY KEY (kind, item_key)
 );
+
+-- Staging tables added in 2.0.0 point at raw pages too: indexed like the ones above,
+-- so pruning old raw pages looks each reference up instead of scanning the table.
+CREATE INDEX IF NOT EXISTS ix_stg_lastfm_artist_info_raw ON stg_lastfm_artist_info (raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_tmdb_account_ratings_raw
+    ON stg_tmdb_account_ratings (last_raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_tmdb_movies_raw ON stg_tmdb_movies (raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_tmdb_tv_raw ON stg_tmdb_tv (raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_hardcover_user_books_raw
+    ON stg_hardcover_user_books (last_raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_hardcover_reads_raw ON stg_hardcover_reads (last_raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_hardcover_books_raw ON stg_hardcover_books (last_raw_page_id);
