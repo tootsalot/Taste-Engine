@@ -53,6 +53,10 @@ def anime(
         "status": "finished_airing",
         "main_picture": {"medium": MAL_CDN.format(anime_id), "large": MAL_CDN.format(anime_id)},
         "nsfw": nsfw,
+        "num_list_users": raters * 3,
+        "popularity": anime_id,
+        "rank": anime_id * 2,
+        "synopsis": f"A made-up story about {title}.\n\n[Written by MAL Rewrite]",
     }
     if recommendations or related:
         node["recommendations"] = [
@@ -254,6 +258,9 @@ class FakeDeezer:
         return FakeResponse(200, {"data": found, "total": len(found)})
 
 
+TRACK_MS = 240_000  # every fake track lasts four minutes unless told otherwise
+
+
 class FakeLastfmApi:
     """artist.getsimilar, artist.gettoptags, artist.gettopalbums, and scrobbles."""
 
@@ -261,11 +268,29 @@ class FakeLastfmApi:
         self.recent = recent
         self.bad_key = bad_key
         self.calls: list[tuple[str, str]] = []
+        self.track_calls: list[tuple[str, str]] = []
+        self.lengths: dict[str, int] = {}  # track name -> ms; 0 means Last.fm has none
+        self.unknown_tracks: set[str] = set()
 
     def __call__(self, url: str, params: dict[str, Any]) -> FakeResponse:
         method = params.get("method")
         if method == "user.getrecenttracks":
             return self.recent(url, params)
+        if method == "track.getinfo":
+            self.track_calls.append((params["artist"], params["track"]))
+            if self.bad_key:
+                return FakeResponse(403, {"error": 10, "message": "Invalid API key"})
+            if params["track"] in self.unknown_tracks:
+                return FakeResponse(200, {"error": 6, "message": "Track not found"})
+            return FakeResponse(
+                200,
+                {
+                    "track": {
+                        "name": params["track"],
+                        "duration": str(self.lengths.get(params["track"], TRACK_MS)),
+                    }
+                },
+            )
         self.calls.append((method, params.get("artist")))
         if self.bad_key:
             return FakeResponse(403, {"error": 10, "message": "Invalid API key"})
@@ -275,6 +300,14 @@ class FakeLastfmApi:
         if method == "artist.getsimilar":
             similar = [{"name": n, "mbid": "", "match": str(m)} for n, m in SIMILAR.get(artist, [])]
             return FakeResponse(200, {"similarartists": {"artist": similar}})
+        if method == "artist.getinfo":
+            bio = (
+                f"{artist} is a made-up band &amp; friends. "
+                f'<a href="https://www.last.fm/music/{artist}">Read more on Last.fm</a>'
+            )
+            info = {"name": artist, "stats": {"listeners": "123456", "playcount": "9876543"},
+                    "bio": {"summary": bio}}  # fmt: skip
+            return FakeResponse(200, {"artist": info})
         if method == "artist.gettoptags":
             tags = [{"name": "Example Dream Pop", "count": 100}, {"name": "Night", "count": 40}]
             return FakeResponse(200, {"toptags": {"tag": tags}})

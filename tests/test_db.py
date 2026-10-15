@@ -7,7 +7,7 @@ def test_schema_is_idempotent(tmp_path):
     db.connect(path).close()
     conn = db.connect(path)  # second run must not fail or duplicate seed rows
     sources = [r["source"] for r in conn.execute("SELECT source FROM core_sources ORDER BY 1")]
-    assert sources == ["deezer", "lastfm", "mal"]
+    assert sources == ["deezer", "hardcover", "lastfm", "mal", "tmdb"]
 
 
 def test_lastfm_scope_follows_profile_setting(conn):

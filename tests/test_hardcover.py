@@ -1,0 +1,313 @@
+"""Hardcover: signing in, syncing my library, and token refresh. Made-up books only."""
+
+import json
+import threading
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+
+import pytest
+
+from taste import activity, credentials, db, runner
+from taste.secrets_store import SecretStore
+from taste.sources import hardcover
+from tests import fake_hardcover
+from tests.conftest import FakeKeyring
+from tests.fake_hardcover import FakeHardcover, book, entry
+
+NOW = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+
+
+def browser_returns(sign_in, **query):
+    """Stand in for the browser coming back to the app's loopback address."""
+    url = f"{sign_in.redirect_uri}?{urllib.parse.urlencode(query)}"
+
+    def visit():
+        with urllib.request.urlopen(url, timeout=5) as page:  # 127.0.0.1 only
+            visit.page = page.read().decode()
+
+    thread = threading.Thread(target=visit)
+    thread.start()
+    return thread, visit
+
+
+def test_the_sign_in_url_asks_for_read_only_access_with_pkce():
+    sign_in = hardcover.SignIn()
+    try:
+        query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(sign_in.url).query))
+        assert sign_in.url.startswith(hardcover.AUTHORIZE_URL + "?")
+        assert query["client_id"] == hardcover.CLIENT_ID
+        assert query["code_challenge"] == hardcover.challenge(sign_in.verifier)
+        assert query["code_challenge_method"] == "S256"
+        assert query["redirect_uri"].startswith("http://127.0.0.1:")
+        assert query["redirect_uri"].endswith("/callback")
+        assert all(scope.startswith("read:") for scope in query["scope"].split())
+        assert 43 <= len(sign_in.verifier) <= 128
+    finally:
+        sign_in.server.server_close()
+
+
+def test_the_browser_coming_back_gives_the_code(make_client):
+    sign_in = hardcover.SignIn()
+    fake = FakeHardcover()
+    code = fake.issue(hardcover.challenge(sign_in.verifier))
+    thread, visit = browser_returns(sign_in, code=code, state=sign_in.state, iss=hardcover.ISSUER)
+    assert sign_in.wait(timeout=10) == code
+    thread.join()
+    assert "close this tab" in visit.page
+    client, transport = make_client(fake)
+    tokens = hardcover.exchange(client, sign_in, code, NOW)
+    assert (tokens.access, tokens.refresh) == (fake_hardcover.ACCESS, fake_hardcover.REFRESH)
+    assert tokens.expires_at == "2026-10-21 12:00:00"
+    sent = transport.calls[0]["params"]
+    assert (
+        sent["code_verifier"] == sign_in.verifier and sent["redirect_uri"] == sign_in.redirect_uri
+    )
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ({"state": "someone-else"}, "wasn't the one this app started"),
+        ({"iss": "https://evil.example"}, "didn't come from Hardcover"),
+        ({"error": "access_denied", "code": ""}, "didn't approve"),
+    ],
+)
+def test_a_wrong_or_refused_callback_is_rejected(change, message):
+    sign_in = hardcover.SignIn()
+    query = {"code": "code-1", "state": sign_in.state, "iss": hardcover.ISSUER, **change}
+    thread, visit = browser_returns(sign_in, **query)
+    with pytest.raises(hardcover.SignInError, match=message):
+        sign_in.wait(timeout=10)
+    thread.join()
+    assert "didn't get access" in visit.page  # the browser never says "Signed in"
+
+
+def test_a_sign_in_can_be_stopped():
+    sign_in = hardcover.SignIn()
+    sign_in.cancel()
+    with pytest.raises(hardcover.SignInError, match="Stopped"):
+        sign_in.wait(timeout=10)
+
+
+def synced(conn, make_client, fake=None):
+    fake = fake or FakeHardcover()
+    client, transport = make_client(fake)
+    result = hardcover.sync(conn, client, fake.access, lambda m: None)
+    return result, fake, transport
+
+
+def test_a_sync_fills_staging_and_core(conn, make_client):
+    result, fake, _ = synced(conn, make_client)
+    assert (result.status, result.books, result.new) == ("success", 8, 8)
+    rows = {r["user_book_id"]: r for r in conn.execute("SELECT * FROM stg_hardcover_user_books")}
+    assert rows[101]["rating"] == 4.5 and rows[101]["owned"] == 1
+    assert rows[106]["rating"] is None  # want to read, not rated
+    assert rows[103]["reading_format_id"] == 2 and rows[103]["edition_seconds"] == 36000
+    first = conn.execute("SELECT * FROM stg_hardcover_books WHERE book_id = 1").fetchone()
+    assert json.loads(first["genres_json"]) == ["Fantasy", "Young Adult"]
+    assert json.loads(first["moods_json"]) == ["adventurous"]
+    assert [a["name"] for a in json.loads(first["authors_json"])] == ["Ana Example"]
+
+    view = {r["title"]: r for r in conn.execute("SELECT * FROM rpt_hardcover_books")}
+    lantern = view["Example Lantern Road"]
+    assert (lantern["my_stars"], lantern["hardcover_average"]) == (4.5, 4.1)
+    assert lantern["times_read"] == 2 and lantern["status"] == "read"
+    assert lantern["vs_average"] == "higher"  # 4.1 rounds to 4.0 in halves
+    assert view["Example Quiet Harbor"]["vs_average"] == "lower"
+    assert view["Example Old Favorite"]["times_read"] == 1  # from the last read date
+    assert view["Example Undated Read"]["times_read"] == 0
+    assert view["Example Gave Up"]["status"] == "did_not_finish"
+    keys = {r[0] for r in conn.execute("SELECT source_event_key FROM core_behavior_events")}
+    assert keys == {"101:read:1001", "101:read:1002", "102:read:1003", "103:read:1004", "104:read"}
+    tags = conn.execute(
+        "SELECT t.tag_kind, t.name FROM core_item_tags it JOIN core_tags t ON t.tag_id = it.tag_id "
+        "JOIN core_items i ON i.item_id = it.item_id WHERE i.title = 'Example Lantern Road' "
+        "ORDER BY t.tag_kind, t.name"
+    ).fetchall()
+    assert [tuple(t) for t in tags] == [
+        ("genre", "Fantasy"), ("genre", "Young Adult"), ("mood", "adventurous"),
+    ]  # fmt: skip
+    authors = conn.execute(
+        "SELECT DISTINCT c.name FROM core_item_creators ic JOIN core_creators c "
+        "ON c.creator_id = ic.creator_id WHERE ic.source = 'hardcover'"
+    ).fetchall()
+    assert "Example Illustrator" not in {a[0] for a in authors}
+
+
+def test_raw_pages_never_hold_a_token(conn, make_client):
+    synced(conn, make_client)
+    for params, payload in conn.execute("SELECT request_params, payload FROM raw_api_pages"):
+        assert "hc_at_" not in params + payload and "hc_rt_" not in params + payload
+
+
+def test_syncing_twice_changes_nothing_and_removals_are_kept(conn, make_client):
+    synced(conn, make_client)
+    result, _, _ = synced(conn, make_client)
+    assert (result.new, result.removed) == (0, 0)
+    assert conn.execute("SELECT COUNT(*) FROM core_items").fetchone()[0] == 8
+
+    smaller = [e for e in fake_hardcover.LIBRARY if e["id"] != 102]
+    # A read-through deleted on Hardcover goes too.
+    smaller[0] = entry(101, smaller[0]["book"], rating=4.5, reads=[(1001, None, "2026-09-04")])
+    result, _, _ = synced(conn, make_client, FakeHardcover(smaller))
+    assert result.removed == 1
+    gone = conn.execute("SELECT removed_at FROM stg_hardcover_user_books WHERE user_book_id = 102")
+    assert gone.fetchone()[0] is not None
+    keys = {r[0] for r in conn.execute("SELECT source_event_key FROM core_behavior_events")}
+    assert "102:read:1003" not in keys and "101:read:1002" not in keys
+    assert "101:read:1001" in keys
+
+
+def test_a_big_library_comes_in_pages(conn, make_client):
+    shelf = [
+        entry(1000 + i, book(500 + i, f"Example Book {i}", fake_hardcover.BEN), status=1)
+        for i in range(hardcover.PAGE_SIZE + 5)
+    ]
+    result, fake, _ = synced(conn, make_client, FakeHardcover(shelf))
+    assert result.books == hardcover.PAGE_SIZE + 5
+    assert fake.calls == ["me", "library:0", f"library:{hardcover.PAGE_SIZE}"]
+
+
+def test_an_expired_sign_in_fails_with_a_plain_message(conn, make_client):
+    def expired(url, params):
+        from tests.conftest import FakeResponse
+
+        return FakeResponse(401, {"error": "invalid_token"})
+
+    client, _ = make_client(expired)
+    result = hardcover.sync(conn, client, "hc_at_old", lambda m: None)
+    assert result.status == "failed"
+    assert "Connect your account again" in result.error
+
+
+def test_cached_tags_in_other_shapes_read_as_no_tags():
+    assert hardcover.tag_names(None, "Genre") == []
+    assert hardcover.tag_names("not json", "Genre") == []
+    assert hardcover.tag_names({"genre": ["Mystery", "Mystery", ""]}, "Genre") == ["Mystery"]
+    assert hardcover.tag_names('{"Mood": [{"tag": "dark"}]}', "Mood") == ["dark"]
+
+
+def test_tokens_refresh_before_they_run_out_and_the_new_pair_is_kept(make_client, tmp_path):
+    store = SecretStore(tmp_path, backend=FakeKeyring())
+    fake = FakeHardcover()
+    credentials.save_hardcover(
+        "me", store, hardcover.Tokens(fake.access, fake.refresh, "2026-10-14 18:00:00")
+    )
+    factory = lambda secrets: make_client(fake)[0]  # noqa: E731
+    clock = NOW.timestamp
+    tokens = runner.hardcover_tokens("me", store, factory, clock)
+    assert fake.refreshes == 1 and tokens.refresh.endswith("-1")
+    assert credentials.hardcover("me", store) == tokens  # saved before use
+    # A week away from running out: used as it is.
+    assert runner.hardcover_tokens("me", store, factory, clock) == tokens
+    assert fake.refreshes == 1
+
+
+def test_sync_all_includes_hardcover_once_connected(conn, make_client, tmp_path):
+    store = SecretStore(tmp_path, backend=FakeKeyring())
+    fake = FakeHardcover()
+    factory = lambda secrets: make_client(fake)[0]  # noqa: E731
+    results = runner.sync_sources(conn, "me", "hardcover", store=store, out=lambda m: None)
+    assert results == {"hardcover": False}  # not connected yet
+    credentials.save_hardcover(
+        "me", store, hardcover.Tokens(fake.access, fake.refresh, "2026-12-01 00:00:00")
+    )
+    results = runner.sync_sources(
+        conn, "me", "hardcover", store=store, out=lambda m: None, client_factory=factory,
+        now=NOW.timestamp,
+    )  # fmt: skip
+    assert results == {"hardcover": True}
+
+
+def test_books_read_in_a_month(conn, make_client):
+    synced(conn, make_client)
+    september = activity.books_read(conn, "2026-09-01", "2026-10-01")
+    assert [b.title for b in september] == [
+        "Example Lantern Road", "Example Quiet Harbor", "Example Lantern Road",
+    ]  # fmt: skip
+    first = september[0]
+    assert (first.author, first.my_rating, first.average, first.pages) == (
+        "Ana Example", 4.5, 4.1, 320,
+    )  # fmt: skip
+    assert first.cover_url.endswith("/1/cover.jpg")
+
+
+def test_old_goodreads_books_are_removed_once(tmp_path):
+    path = tmp_path / "old.db"
+    conn = db.connect(path)
+    # What a profile from before Hardcover held: the old sources, a book, and its rows.
+    conn.executescript(
+        """
+        INSERT INTO core_sources (source, display_name, default_capture_scope)
+            VALUES ('goodreads', 'Goodreads', 'self_reported');
+        INSERT INTO core_sources (source, display_name, default_capture_scope)
+            VALUES ('openlibrary', 'Open Library', 'not_applicable');
+        CREATE TABLE stg_goodreads_books (goodreads_book_id INTEGER PRIMARY KEY);
+        CREATE TABLE stg_openlibrary_books (isbn13 TEXT PRIMARY KEY);
+        INSERT INTO core_items (item_id, media_type, title, source, created_at, updated_at)
+            VALUES (900, 'book', 'Example Old Book', 'goodreads', '2026-01-01', '2026-01-01');
+        INSERT INTO core_item_external_ids (source, id_type, external_id, item_id, match_method)
+            VALUES ('goodreads', 'goodreads_book_id', '1', 900,
+            'source_native');
+        INSERT INTO core_item_images (item_id, source, kind, url)
+            VALUES (900, 'openlibrary', 'cover', 'https://example.org/c');
+        INSERT INTO sync_runs (source, mode, started_at, status)
+            VALUES ('goodreads', 'import', '2026-01-01 00:00:00', 'success');
+        """
+    )
+    conn.close()
+    conn = db.connect(path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM core_items").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM sync_runs").fetchone()[0] == 0
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "stg_goodreads_books" not in tables and "stg_openlibrary_books" not in tables
+        sources = {r[0] for r in conn.execute("SELECT source FROM core_sources")}
+        assert "goodreads" not in sources and "hardcover" in sources
+    finally:
+        conn.close()
+
+
+def test_a_refresh_token_that_ran_out_asks_to_connect_again(conn, make_client, tmp_path):
+    store = SecretStore(tmp_path, backend=FakeKeyring())
+    fake = FakeHardcover()
+    credentials.save_hardcover(
+        "me", store, hardcover.Tokens(fake.access, "hc_rt_long-gone", "2026-10-01 00:00:00")
+    )
+    lines = []
+    results = runner.sync_sources(
+        conn, "me", "hardcover", store=store, out=lines.append,
+        client_factory=lambda secrets: make_client(fake)[0], now=NOW.timestamp,
+    )  # fmt: skip
+    assert results == {"hardcover": False}
+    assert any("Connect your account again" in line for line in lines)
+
+
+def test_book_suggestions_from_similar_books(conn, make_client):
+    from taste import recommend
+
+    fake = FakeHardcover()
+    client, _ = make_client(fake)
+    hardcover.sync(conn, client, fake.access, lambda m: None)
+    looked_up = hardcover.enrich_recommendations(conn, client, fake.access, lambda m: None, now=NOW)
+    assert looked_up == 5  # 4 candidates and the Want to Read book
+    assert hardcover.enrich_recommendations(conn, client, fake.access, lambda m: None, now=NOW) == 0
+
+    recs, metrics = recommend.book_recommendations(conn)
+    titles = [r.title for r in recs]
+    assert "Example Few Ratings" not in titles  # 3 ratings: too unsettled
+    assert "Example Lantern Road" not in titles  # already read
+    assert {"Example Tide Keeper", "Example Salt Atlas", "Example Paper Fox"} <= set(titles)
+    want = next(r for r in recs if r.title == "Example Want List")
+    assert want.badge == "On your Want to Read"
+    salt = next(r for r in recs if r.title == "Example Salt Atlas")
+    assert 0.5 <= salt.score <= 5 and salt.facts["hardcover_mean"] == 3.9
+    assert salt.facts["about"] == "A made-up book called Example Salt Atlas."
+    assert salt.facts["popularity"][0] == "1.1k readers on Hardcover"
+    assert salt.url == "https://hardcover.app/books/example-salt-atlas"
+    assert any("Example Old Favorite" in reason for reason in salt.reasons)
+    assert metrics["rated"] == 6
+
+    recommend.dismiss(conn, "book", salt.item_key)
+    assert "Example Salt Atlas" not in [r.title for r in recommend.book_recommendations(conn)[0]]

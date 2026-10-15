@@ -35,6 +35,8 @@ def api_handler():
         if "myanimelist" in url:
             name = "mal_animelist_page2.json" if "offset=3" in url else "mal_animelist_page1.json"
             return FakeResponse(200, load_fixture(name))
+        if params.get("method") == "track.getinfo":
+            return FakeResponse(200, {"track": {"duration": "0"}})  # Last.fm knows no length
         if params.get("method") == "user.getinfo":
             if params.get("api_key") != LASTFM_KEY:
                 return FakeResponse(403, {"error": 10, "message": "Invalid API key"})
@@ -124,7 +126,7 @@ def test_sidebar_collapses_to_icons_and_remembers(window, qtbot):
     assert window.nav.maximumWidth() < 80
     assert [nav.item(i).text() for i in range(nav.count())] == [""] * len(PAGES)
     assert [nav.item(i).toolTip() for i in range(nav.count())] == list(PAGES)
-    nav.setCurrentRow(PAGES.index("Reports"))  # still navigates
+    nav.setCurrentRow(PAGES.index("Music"))  # still navigates
     assert window.stack.currentWidget() is window.reports
 
     again = MainWindow(window.ctx)  # the next launch opens the way it was left
@@ -187,7 +189,7 @@ def test_settings_sits_at_the_bottom_under_the_last_sync(window, qtbot):
     set_up_profile(window)
     shown(window, qtbot)
     nav = window.sidebar
-    reports, settings_button = nav.item(PAGES.index("Reports")), nav.item(PAGES.index("Settings"))
+    reports, settings_button = nav.item(PAGES.index("Music")), nav.item(PAGES.index("Settings"))
     assert settings_button.geometry().top() - reports.geometry().bottom() > 200
     assert nav.status_text.text() == "Not synced yet"
     with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
@@ -340,12 +342,11 @@ def test_full_sync_updates_dashboard_and_reports(window, qtbot):
     reports_page = window.reports
     # Charts only: the raw numbers live in the CSV exports, not in tables on screen.
     assert reports_page.findChildren(QTableView) == []
-    assert [t.value.text() for t in reports_page.tiles] == [
-        "3",
-        "-1.64",
-        "5",
-        reports_page.tiles[3].value.text(),
-    ]
+    anime_tiles = {t.caption.text(): t.value.text() for t in reports_page.anime.tiles}
+    assert anime_tiles["vs MAL"] == "-1.64" and anime_tiles["your average"] != "-"
+    music_tiles = {t.caption.text(): t.value.text() for t in reports_page.music.tiles}
+    assert music_tiles["Last.fm plays"] == "5"
+    assert music_tiles["hours of music"] == "-"  # no track lengths fetched in this test
     # Averages per half point of the MAL mean, not one dot per show.
     assert [(b.mal_from, b.average) for b in reports_page.scores.bands] == [
         (6.5, 4.0),
@@ -353,16 +354,18 @@ def test_full_sync_updates_dashboard_and_reports(window, qtbot):
         (8.0, 8.0),
     ]
     assert reports_page.genres.usual == -1.64  # "your usual" on the genre chart
-    assert len(reports_page.genres.grids) == 2  # the two lists side by side
-    assert reports_page.drop_chart.value_labels and reports_page.day_chart.value_labels
+    assert len(reports_page.genres.grids) == 1  # stacked, in a third of the page
+    assert reports_page.drop_chart.value_labels and reports_page.music.day_chart.value_labels
     assert reports_page.plays_chart.scale and reports_page.hour_chart.scale
     assert reports_page.plays_chart.partial_last  # October has only just begun
     assert "Desktop listening only" in reports_page.scope.text()
     assert sum(reports_page.hour_chart.values) == 5
     assert reports_page.hour_card.note.text() == "In your time zone, America/Phoenix."
-    assert reports_page.top_artists.rows()[0] == ("the example band", "3")
+    lead = reports_page.music.stats.people[0]
+    assert (lead.name, lead.plays) == ("the example band", 3)
+    assert reports_page.music.people[0].name.text() == "the example band"
     menu = [a.text() for a in reports_page.export_menu.actions() if not a.isSeparator()]
-    assert menu[0] == "All reports…" and len(menu) == 1 + 12
+    assert menu[0] == "All reports…" and len(menu) == 1 + 14
 
 
 def test_plays_by_week_month_or_year_and_the_choice_is_kept(window, qtbot):
@@ -406,7 +409,7 @@ def test_export_one_and_all(window, qtbot, tmp_path):
     assert rows[0][:3] == ["local_hour", "plays", "pct_of_plays"]
     assert len(rows) == 25
     folder = page.export_all(str(tmp_path))
-    assert len(list(folder.glob("*.csv"))) == 12
+    assert len(list(folder.glob("*.csv"))) == 14
 
 
 def test_delete_profile_needs_confirmation(window, qtbot):
@@ -460,7 +463,7 @@ def test_smoke_test_report(qapp, tmp_path):
     path = tmp_path / "smoke.txt"
     assert smoke_test(qapp, str(path)) == 0
     report = dict(line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines())
-    assert report["pages"] == "5"
+    assert report["pages"] == "6"  # five pages and the welcome screen
     assert report["webp"] == "True" and report["jpeg"] == "True"
     assert report["gif"] == "True"  # some Last.fm covers are GIFs
 

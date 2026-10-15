@@ -13,7 +13,9 @@ on its own, so an interrupted run picks up where it stopped.
 
 from __future__ import annotations
 
+import html
 import math
+import re
 import sqlite3
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
@@ -29,7 +31,8 @@ from taste.sync_log import SyncRun
 
 REFRESH_DAYS = 30
 MAL_MIN_INTERVAL = 0.5  # 2 requests a second; backoff slows it further if MAL pushes back
-MAL_DETAIL_FIELDS = ",".join([*mal.ANIME_FIELDS, "recommendations", "related_anime"])
+MAL_DETAIL_FIELDS = ",".join([*mal.ANIME_FIELDS, "synopsis", "recommendations", "related_anime"])
+DETAIL_FIELDS_VERSION = 2  # bump when MAL_DETAIL_FIELDS gains something cached rows lack
 # Relations worth suggesting. Summaries, character crossovers, and "other" aren't.
 RELATED_KINDS = {
     "sequel",
@@ -184,10 +187,11 @@ def save_details(
             (anime_id, node["id"], node.get("title", ""), rel.get("relation_type") or "other"),
         )
     conn.execute(
-        "INSERT INTO stg_mal_anime_details (mal_anime_id, fetched_at, raw_page_id) "
-        "VALUES (?, ?, ?) ON CONFLICT (mal_anime_id) DO UPDATE SET "
-        "fetched_at = excluded.fetched_at, raw_page_id = excluded.raw_page_id",
-        (anime_id, fetched_at, raw_id),
+        "INSERT INTO stg_mal_anime_details (mal_anime_id, fetched_at, raw_page_id, "
+        "fields_version) VALUES (?, ?, ?, ?) ON CONFLICT (mal_anime_id) DO UPDATE SET "
+        "fetched_at = excluded.fetched_at, raw_page_id = excluded.raw_page_id, "
+        "fields_version = excluded.fields_version",
+        (anime_id, fetched_at, raw_id, DETAIL_FIELDS_VERSION),
     )
 
     item_id = mal.load_anime_core(conn, anime_id)
@@ -257,6 +261,46 @@ def _fetch_details(
         if i % 10 == 0 or i == len(ids):
             out(f"Recommendations: details for {label}, {i} of {len(ids)}")
     return len(ids)
+
+
+def fetch_synopses(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    cfg: MalSettings,
+    ids: list[int],
+    out: Callable[[str], None] = print,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Details again for suggested shows whose cached details predate synopses. Each is
+    fetched once: a show MAL has no synopsis for isn't asked about again."""
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        old = {
+            r[0]
+            for r in conn.execute(
+                "SELECT mal_anime_id FROM stg_mal_anime_details WHERE fields_version < ? "
+                f"AND mal_anime_id IN ({marks})",
+                (DETAIL_FIELDS_VERSION, *ids),
+            )
+        }
+        ids = [i for i in ids if i in old]
+    if not ids:
+        return 0
+    now = now or datetime.now(timezone.utc)
+    client.min_interval = max(client.min_interval, MAL_MIN_INTERVAL)
+    run = SyncRun(conn, mal.SOURCE, "enrich")
+    try:
+        fetched = _fetch_details(conn, client, cfg, run, ids, "suggestions", out, now)
+        run.finish("success")
+        return fetched
+    except ApiError as exc:
+        run.finish("failed", str(exc))
+        out(f"Recommendations: MyAnimeList summaries stopped, will continue next time: {exc}")
+        return 0
+    except Exception as exc:
+        run.finish("failed", client.redact(f"{type(exc).__name__}: {exc}"))
+        raise
 
 
 def enrich_mal(
@@ -491,6 +535,197 @@ def fetch_artist_covers(
         run.finish("success")
     except ApiError as exc:
         run.finish("failed", str(exc))
+    except Exception as exc:
+        run.finish("failed", client.redact(f"{type(exc).__name__}: {exc}"))
+        raise
+    return count
+
+
+_READ_MORE = re.compile(r"<a\b[^>]*>\s*Read more on Last\.fm\s*</a>\.?", re.IGNORECASE)
+_TAG = re.compile(r"<[^>]+>")
+
+
+def plain_bio(text: str | None) -> str | None:
+    """Last.fm's bio summary as plain text: its trailing "Read more" link and any other
+    markup removed, entities decoded. None when nothing is left."""
+    if not text:
+        return None
+    text = _TAG.sub("", _READ_MORE.sub("", text))
+    text = " ".join(html.unescape(text).split())
+    return text or None
+
+
+def _count(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_artist_info(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    cfg: LastfmSettings,
+    names: Iterable[str],
+    now: datetime | None = None,
+) -> int:
+    """Bio and listener count for suggested artists (artist.getinfo). Cached 30 days."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = _cutoff(now)
+    fresh = {
+        r[0]
+        for r in conn.execute(
+            "SELECT artist_key FROM stg_lastfm_artist_info WHERE fetched_at >= ?", (cutoff,)
+        )
+    }
+    todo = list(dict.fromkeys(n for n in names if artist_key(n) not in fresh))
+    if not todo:
+        return 0
+    run = SyncRun(conn, lastfm.SOURCE, "enrich")
+    count = 0
+    try:
+        for name in todo:
+            with transaction(conn):
+                data = _lastfm_call(conn, client, cfg, run, "artist.getinfo", name, {})
+                artist = (data or {}).get("artist") or {}
+                stats = artist.get("stats") or {}
+                conn.execute(
+                    "INSERT INTO stg_lastfm_artist_info (artist_key, bio, listeners, playcount, "
+                    "fetched_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (artist_key) DO UPDATE SET "
+                    "bio = excluded.bio, listeners = excluded.listeners, "
+                    "playcount = excluded.playcount, fetched_at = excluded.fetched_at",
+                    (
+                        artist_key(name),
+                        plain_bio((artist.get("bio") or {}).get("summary")),
+                        _count(stats.get("listeners")),
+                        _count(stats.get("playcount")),
+                        _stamp(now),
+                    ),
+                )
+            count += 1
+        run.finish("success")
+    except ApiError as exc:
+        run.finish("failed", str(exc))
+    except Exception as exc:
+        run.finish("failed", client.redact(f"{type(exc).__name__}: {exc}"))
+        raise
+    return count
+
+
+TRACK_LENGTHS_PER_RUN = 300  # lookups per sync, so a sync never waits on thousands of them
+TRACK_NOT_FOUND = 6  # Last.fm error code, same as for artists
+
+
+def tracks_needing_length(
+    conn: sqlite3.Connection, start: str, end: str, limit: int
+) -> list[tuple[str, str, str]]:
+    """(track key, artist, track) for tracks played between two local days that have
+    no length looked up yet, most played first (so hours cover the most plays soonest).
+    """
+    rows = conn.execute(
+        "SELECT x.external_id, c.name, i.title, COUNT(*) AS plays "
+        "FROM core_behavior_events e "
+        "JOIN core_event_local_times l ON l.event_id = e.event_id "
+        "JOIN core_items i ON i.item_id = e.item_id "
+        "JOIN core_item_external_ids x ON x.item_id = e.item_id AND x.source = 'lastfm' "
+        "  AND x.id_type = 'lastfm_track_key' "
+        "JOIN core_item_creators ic ON ic.item_id = e.item_id AND ic.role = 'artist' "
+        "  AND ic.source = 'lastfm' "
+        "JOIN core_creators c ON c.creator_id = ic.creator_id "
+        "WHERE e.source = 'lastfm' AND e.event_type = 'play' "
+        "  AND l.local_date >= ? AND l.local_date < ? "
+        "  AND NOT EXISTS (SELECT 1 FROM stg_lastfm_track_info t "
+        "    WHERE t.track_key = x.external_id) "
+        "GROUP BY x.external_id, c.name, i.title ORDER BY plays DESC, x.external_id LIMIT ?",
+        (start, end, limit),
+    ).fetchall()
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def duration_ms(data: dict[str, Any] | None) -> int | None:
+    """track.getinfo's duration in milliseconds. Last.fm sends "0" when it has none."""
+    try:
+        value = int(((data or {}).get("track") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def fetch_track_lengths(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    cfg: LastfmSettings,
+    spans: Iterable[tuple[str, str]],
+    out: Callable[[str], None] = print,
+    *,
+    now: datetime | None = None,
+    limit: int = TRACK_LENGTHS_PER_RUN,
+) -> int:
+    """Look up lengths for tracks played in each (start, end) span of local days.
+
+    Scrobbles have no length, and "about how many hours" needs one. A length never
+    changes, so every answer is kept for good, misses too. Returns how many were
+    looked up. An error stops the run; what was stored stays.
+    """
+    now = now or datetime.now(timezone.utc)
+    todo: list[tuple[str, str, str]] = []
+    for start, end in spans:
+        for track in tracks_needing_length(conn, start, end, limit):
+            if track not in todo:
+                todo.append(track)
+    todo = todo[:limit]
+    if not todo:
+        return 0
+    run = SyncRun(conn, lastfm.SOURCE, "enrich")
+    count = 0
+    try:
+        for i, (key, artist, track) in enumerate(todo, 1):
+            params = {
+                "method": "track.getinfo",
+                "artist": artist,
+                "track": track,
+                "autocorrect": 0,
+                "api_key": cfg.api_key,
+                "format": "json",
+            }
+            with transaction(conn):
+                try:
+                    response = client.get_json(
+                        lastfm.API_URL, params=params, checker=lastfm.check_error
+                    )
+                except ApiError as exc:
+                    if not str(exc).startswith(f"Last.fm error {TRACK_NOT_FOUND}:"):
+                        raise
+                    data = None
+                else:
+                    data = response.data
+                    store_page(
+                        conn,
+                        sync_run_id=run.run_id,
+                        source=lastfm.SOURCE,
+                        endpoint="track.getinfo",
+                        params=params,
+                        page_number=None,
+                        http_status=response.status,
+                        payload=data,
+                    )
+                    run.pages_fetched += 1
+                conn.execute(
+                    "INSERT INTO stg_lastfm_track_info (track_key, artist_name, track_name, "
+                    "duration_ms, fetched_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (track_key) "
+                    "DO UPDATE SET duration_ms = excluded.duration_ms, "
+                    "fetched_at = excluded.fetched_at",
+                    (key, artist, track, duration_ms(data), _stamp(now)),
+                )
+                run.rows_fetched += 1
+                run.save()
+            count += 1
+            if i % 25 == 0 or i == len(todo):
+                out(f"Last.fm: track lengths, {i} of {len(todo)}")
+        run.finish("success")
+    except ApiError as exc:
+        run.finish("failed", str(exc))
+        out(f"Last.fm: track lengths stopped, will continue next time: {exc}")
     except Exception as exc:
         run.finish("failed", client.redact(f"{type(exc).__name__}: {exc}"))
         raise

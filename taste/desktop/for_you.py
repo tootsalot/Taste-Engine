@@ -1,4 +1,4 @@
-"""For You: anime and music recommendations, each card explaining itself.
+"""For You: suggestions as a grid of posters, with the selected one explained in full.
 
 Lists come from the latest saved run (recommend.latest). "Refresh
 recommendations" fetches what's missing and recomputes in a background thread,
@@ -11,9 +11,10 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QEvent, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QProgressBar,
@@ -26,10 +27,10 @@ from PySide6.QtWidgets import (
 )
 
 from taste import local_time, recommend, settings
-from taste.desktop import theme
+from taste.desktop import motion, theme
 from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import Card, heading, label
+from taste.desktop.widgets import Card, ScrollArea, elided_lines, heading, label, plain_tip, section
 from taste.desktop.workers import RecsWorker
 from taste.recommend import Rec
 
@@ -37,14 +38,27 @@ LISTS = (
     ("anime", "Anime"),
     ("music_discover", "Discover music"),
     ("music_rediscover", "Rediscover"),
+    ("film", "Films"),
+    ("book", "Books"),
 )
-LINK_HOSTS = {"myanimelist.net": "MyAnimeList", "www.last.fm": "Last.fm"}
+LINK_HOSTS = {
+    "myanimelist.net": "MyAnimeList",
+    "www.last.fm": "Last.fm",
+    "www.themoviedb.org": "TMDB",
+    "hardcover.app": "Hardcover",
+}
+ACCENTS = {"anime": theme.LILAC, "film": theme.TEAL, "book": theme.AMBER}  # music is coral
+PORTRAIT = ("anime", "film", "book")  # lists whose pictures are posters or covers, not squares
 PROGRESS = re.compile(r"(\d+) of (\d+)")
-CARD_MIN_WIDTH = 440  # cards share each row; this keeps two columns in the default window
-MAX_COLUMNS = 4
-GRID_SPACING = 12
-POSTER = QSize(96, 136)
-COVER = QSize(112, 112)
+TILE_POSTER = QSize(150, 214)
+TILE_COVER = QSize(150, 150)
+TILE_PAD = 8  # around a tile's picture, where the selected outline shows
+TILE_GAP = 10
+TILE_STEP = 4  # tile widths move in steps, so resizing doesn't redraw every picture
+GRID_PAD = 14
+DETAIL_POSTER = QSize(168, 240)
+DETAIL_COVER = QSize(200, 200)
+DETAIL_WIDTH = 440  # the panel that shows the selected suggestion in full
 
 EMPTY = {
     "anime": (
@@ -57,6 +71,14 @@ EMPTY = {
         f"{recommend.REDISCOVER_MIN_PLAYS} times who have been quiet for "
         f"{recommend.REDISCOVER_QUIET_DAYS} days."
     ),
+    "film": (
+        "No film suggestions yet. Connect your TMDB account in Settings, sync, then press "
+        "Refresh recommendations. They start from the films you rated highest."
+    ),
+    "book": (
+        "No book suggestions yet. Connect your Hardcover account in Settings, sync, then press "
+        "Refresh recommendations. They start from the books you rated highest."
+    ),
 }
 EMPTY_AFTER_RUN = {
     "anime": (
@@ -65,11 +87,13 @@ EMPTY_AFTER_RUN = {
     ),
     "music_discover": "No new artists found among the ones similar to what you play.",
     "music_rediscover": EMPTY["music_rediscover"],
+    "film": "No films to suggest yet. Rating a few more films on TMDB gives it more to go on.",
+    "book": "No books to suggest yet. Rating a few more books on Hardcover gives it more to go on.",
 }
 
 
 def safe_link(url: str | None) -> str | None:
-    """Only https links to MyAnimeList or Last.fm are opened."""
+    """Only https links to the services the picks come from are opened."""
     if not url:
         return None
     parts = urlsplit(url)
@@ -84,17 +108,97 @@ def score_text(kind: str, rec: Rec) -> tuple[str, str]:
         # One decimal: the model is good to about a point, not a hundredth.
         mal = rec.facts.get("mal_mean")
         return f"{rec.score:.1f}", f"for you · MAL {mal:.2f}" if mal else "predicted for you"
+    if kind == "film":
+        mean = rec.facts.get("tmdb_mean")
+        return f"{rec.score:.1f}", f"for you · TMDB {mean:.1f}" if mean else "predicted for you"
+    if kind == "book":
+        mean = rec.facts.get("hardcover_mean")
+        return (
+            f"{rec.score:.1f}★",
+            f"for you · Hardcover {mean:.2f}" if mean else "predicted for you",
+        )
     if kind == "music_discover":
         label_text = rec.facts.get("match_label")
         return (label_text, "") if label_text else (f"{rec.score:.2f}", "match")
     return f"{int(rec.score):,}", "plays"
 
 
-def chance_text(chance: float) -> str:
+def chance_text(chance: float, kind: str = "anime") -> str:
+    if kind == "book":
+        return f"{chance:.0%} chance you'd give it 4★ or more"
     return f"{chance:.0%} chance you'd give it an 8 or more"
 
 
+class PosterTile(QFrame):
+    """One suggestion in the grid: its picture, title, and score. Click to see why."""
+
+    clicked = Signal(int)
+
+    def __init__(self, ctx: AppContext, list_kind: str, rec: Rec, index: int) -> None:
+        super().__init__()
+        self.rec = rec
+        self.index = index
+        self.setProperty("role", "tile")
+        self.setProperty("selected", False)
+        self.setProperty("accent", list_kind.split("_")[0])  # anime, music, or film
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.poster = list_kind in PORTRAIT
+        size = TILE_POSTER if self.poster else TILE_COVER
+        self.setFixedWidth(size.width() + 2 * TILE_PAD)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(TILE_PAD, TILE_PAD, TILE_PAD, TILE_PAD)
+        layout.setSpacing(6)
+        self.art = ArtTile(ctx.art, size, accent=ACCENTS.get(list_kind, theme.CORAL))
+        self.art.set_art(rec.image_url, rec.title, fallback=rec.facts.get("fallback_image"))
+        layout.addWidget(self.art)
+        self.title = label("", wrap=True)
+        font = QFont(theme.BODY_FAMILY)
+        font.setPixelSize(13)
+        font.setWeight(QFont.Weight.DemiBold)
+        self.title.setFont(font)
+        self.title.setText(elided_lines(rec.title, font, size.width(), 2))
+        self.picture_width = size.width()
+        self.title.setFixedHeight(self.title.fontMetrics().lineSpacing() * 2 + 2)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.title)
+        number, caption = score_text(list_kind, rec)
+        self.score = label(number if list_kind != "music_rediscover" else f"{number} plays")
+        self.score.setProperty("role", "tile-score")
+        self.score.setProperty("accent", list_kind.split("_")[0])
+        layout.addWidget(self.score)
+        self.setToolTip(plain_tip(rec.title))
+
+    def set_width(self, width: int) -> None:
+        """Grow or shrink with the grid, so every row fills the panel."""
+        picture = width - 2 * TILE_PAD
+        if picture == self.picture_width:
+            return
+        self.picture_width = picture
+        ratio = TILE_POSTER.height() / TILE_POSTER.width() if self.poster else 1.0
+        self.art.set_size(QSize(picture, round(picture * ratio)))
+        self.setFixedWidth(width)
+        self.title.setText(elided_lines(self.rec.title, self.title.font(), picture, 2))
+
+    def set_selected(self, selected: bool) -> None:
+        self.setProperty("selected", selected)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.index)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit(self.index)
+        else:
+            super().keyPressEvent(event)
+
+
 class RecCard(Card):
+    """The selected suggestion in full: picture, score, the reasons, and what to do."""
+
     dismissed = Signal(str, str)  # list kind, item key
     opened = Signal(str)  # url
 
@@ -102,67 +206,84 @@ class RecCard(Card):
         super().__init__()
         self.rec = rec
         self.list_kind = list_kind
-        anime = list_kind == "anime"
-        accent = theme.LILAC if anime else theme.CORAL
+        poster = list_kind in PORTRAIT
+        accent = ACCENTS.get(list_kind, theme.CORAL)
+        self.body.setContentsMargins(22, 22, 22, 20)
+        self.body.setSpacing(10)
 
-        row = QHBoxLayout()
-        row.setSpacing(14)
-        self.art = ArtTile(ctx.art, POSTER if anime else COVER, accent=accent)
-        self.art.set_art(rec.image_url, rec.title, fallback=rec.facts.get("fallback_image"))
-        row.addWidget(self.art, 0, Qt.AlignmentFlag.AlignTop)
-
-        text = QVBoxLayout()
-        text.setSpacing(4)
         top = QHBoxLayout()
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
-        self.title = label(rec.title, wrap=True)
-        self.title.setFont(theme.title_font(16))
-        titles.addWidget(self.title)
-        if rec.subtitle:
-            titles.addWidget(label(rec.subtitle, role="muted", wrap=True))
-        top.addLayout(titles, 1)
+        top.setSpacing(16)
+        self.art = ArtTile(ctx.art, DETAIL_POSTER if poster else DETAIL_COVER, accent=accent)
+        self.art.set_art(rec.image_url, rec.title, fallback=rec.facts.get("fallback_image"))
+        top.addWidget(self.art, 0, Qt.AlignmentFlag.AlignTop)
+        side = QVBoxLayout()
+        side.setSpacing(4)
         number, caption = score_text(list_kind, rec)
-        score_box = QVBoxLayout()
-        score_box.setSpacing(0)
         self.score = label(number)
         if rec.facts.get("match_label") and list_kind == "music_discover":
             self.score.setProperty("role", "match")  # a word, drawn as a coral pill
             self.score.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         else:
-            self.score.setFont(theme.number_font(26))
+            self.score.setFont(theme.number_font(40))
             self.score.setStyleSheet(f"color: {accent};")
-        self.score.setAlignment(Qt.AlignmentFlag.AlignRight)
-        score_box.addWidget(self.score, 0, Qt.AlignmentFlag.AlignRight)
-        self.caption = label(caption, role="muted")
-        self.caption.setAlignment(Qt.AlignmentFlag.AlignRight)
-        score_box.addWidget(self.caption)
-        score_box.addStretch()
-        top.addLayout(score_box)
-        text.addLayout(top)
-
+        side.addWidget(self.score, 0, Qt.AlignmentFlag.AlignLeft)
+        self.caption = label(caption, role="muted", wrap=True)
+        side.addWidget(self.caption)
+        chance = rec.facts.get("chance_4_plus" if list_kind == "book" else "chance_8_plus")
+        self.chance = label(
+            chance_text(chance, list_kind) if chance is not None else "", role="muted", wrap=True
+        )
+        side.addWidget(self.chance)
         if rec.badge:
-            badge = label(rec.badge, role="badge")
-            text.addWidget(badge, 0, Qt.AlignmentFlag.AlignLeft)
+            side.addWidget(label(rec.badge, role="badge"), 0, Qt.AlignmentFlag.AlignLeft)
+        side.addStretch(1)
+        top.addLayout(side, 1)
+        self.body.addLayout(top)
+
+        self.title = label(rec.title, wrap=True)
+        self.title.setFont(theme.title_font(22))
+        self.body.addWidget(self.title)
+        if rec.subtitle:
+            self.body.addWidget(label(rec.subtitle, role="muted", wrap=True))
         for reason in rec.reasons:
-            text.addWidget(label(reason, role="reason", wrap=True))
-        chance = rec.facts.get("chance_8_plus")
-        self.chance = label(chance_text(chance) if chance is not None else "", role="muted")
-        text.addWidget(self.chance)
-        text.addStretch()
-        # The numbers behind the words, for anyone curious.
-        self.setToolTip("\n".join(rec.facts.get("details", [])))
+            self.body.addWidget(label(reason, role="reason", wrap=True))
+        # What it is, and how many people know it: the panel's room is for this.
+        about = rec.facts.get("about") or ""
+        self.about = label(about, wrap=True)
+        if about:
+            self.body.addSpacing(4)
+            self.body.addWidget(section("About"))
+            self.body.addWidget(self.about)
+        popularity = rec.facts.get("popularity") or []
+        self.popularity = [label(text, role="chip") for text in popularity]
+        if popularity:
+            self.body.addSpacing(4)
+            self.body.addWidget(section("How popular"))
+            chips = QGridLayout()  # two to a row, so they never push the panel wider
+            chips.setSpacing(6)
+            for i, chip in enumerate(self.popularity):
+                chips.addWidget(chip, i // 2, i % 2, Qt.AlignmentFlag.AlignLeft)
+            chips.setColumnStretch(2, 1)
+            self.body.addLayout(chips)
+        details = rec.facts.get("details", [])
+        if details:
+            self.body.addSpacing(4)
+            self.body.addWidget(section("Behind the score"))
+            for line in details:
+                self.body.addWidget(label(line, role="caption", wrap=True))
+        # The numbers behind the words, also a hover away.
+        self.setToolTip(plain_tip("\n".join(details)))
+        self.body.addStretch(1)  # spare height goes here, under the words
 
         buttons = QHBoxLayout()
         link = safe_link(rec.url)
         self.open_button = QPushButton(
             f"Open on {LINK_HOSTS[urlsplit(link).hostname]}" if link else "No link"
         )
-        self.open_button.setProperty("role", "link")
+        self.open_button.setProperty("role", "primary")
         self.open_button.setEnabled(link is not None)
         self.open_button.clicked.connect(lambda: self.opened.emit(link))
         self.dismiss_button = QPushButton("Not interested")
-        self.dismiss_button.setProperty("role", "link")
         self.dismiss_button.setToolTip("Hide this for good. It won't be suggested again.")
         self.dismiss_button.clicked.connect(
             lambda: self.dismissed.emit(self.list_kind, self.rec.item_key)
@@ -170,9 +291,7 @@ class RecCard(Card):
         buttons.addWidget(self.open_button)
         buttons.addStretch()
         buttons.addWidget(self.dismiss_button)
-        text.addLayout(buttons)
-        row.addLayout(text, 1)
-        self.body.addLayout(row)
+        self.body.addLayout(buttons)
         # Only now do the labels have a parent. Showing a widget without one opens it
         # as its own window, which flashed up on screen for every card.
         self.caption.setVisible(bool(caption))
@@ -180,13 +299,12 @@ class RecCard(Card):
 
 
 def columns_for(width: int) -> int:
-    """How many cards fit side by side: 1 in a narrow window, up to 4 on a wide screen."""
-    fits = (width + GRID_SPACING) // (CARD_MIN_WIDTH + GRID_SPACING)
-    return max(1, min(MAX_COLUMNS, fits))
+    """How many tiles fit side by side in a grid this wide."""
+    return max(1, (width + TILE_GAP) // (TILE_POSTER.width() + 2 * TILE_PAD + TILE_GAP))
 
 
 class RecList(QWidget):
-    """One tab: a note line and a grid of cards, as many columns as fit the width."""
+    """One tab: a note line, a grid of suggestions, and the selected one in full."""
 
     def __init__(self, list_kind: str) -> None:
         super().__init__()
@@ -194,31 +312,57 @@ class RecList(QWidget):
         self.recs: list[Rec] = []
         self.has_run = False
         self.dirty = True
-        self.cards: list[RecCard] = []
-        self.columns = 2
+        self.tiles: list[PosterTile] = []
+        self.detail: RecCard | None = None
+        self.selected = 0
+        self.columns = 1
+        self.tile_width = 0
+        self._ctx = None
+        self._on_open = None
+        self._on_dismiss = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setSpacing(10)
-        self.note = label("", role="muted" if list_kind == "anime" else "scope", wrap=True)
+        music = list_kind.startswith("music")
+        self.note = label("", role="scope" if music else "muted", wrap=True)
         layout.addWidget(self.note)
-        self.scroll = QScrollArea()
+        body = QHBoxLayout()
+        body.setSpacing(16)
+        self.scroll = ScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        body = QWidget()
-        outer = QVBoxLayout(body)
-        outer.setContentsMargins(0, 0, 6, 0)
+        holder = Card()  # the grid's own panel, beside the one showing the selected
+        outer = holder.body
+        outer.setContentsMargins(GRID_PAD, GRID_PAD, GRID_PAD, GRID_PAD)
         self.grid = QGridLayout()
-        self.grid.setSpacing(GRID_SPACING)
+        self.grid.setSpacing(TILE_GAP)
+        self.grid.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         outer.addLayout(self.grid)
         self.empty = label("", role="muted", wrap=True)
         outer.addWidget(self.empty)
-        outer.addStretch(1)  # spare height goes below the cards, not into them
-        self.scroll.setWidget(body)
-        layout.addWidget(self.scroll, 1)
-        # The width the cards really get, which also shrinks when a scroll bar appears.
-        self.scroll.viewport().installEventFilter(self)
-        self._place()
+        outer.addStretch(1)
+        self.scroll.setWidget(holder)
+        body.addWidget(self.scroll, 1)
+        # The panel scrolls on its own when a suggestion has more to say than fits.
+        self.panel = QScrollArea()
+        self.panel.setWidgetResizable(True)
+        self.panel.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.panel.setFixedWidth(DETAIL_WIDTH)
+        self.panel_body = QWidget()
+        self.panel_layout = QVBoxLayout(self.panel_body)
+        self.panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.panel.setWidget(self.panel_body)
+        body.addWidget(self.panel)
+        layout.addLayout(body, 1)
+        self.panel.setVisible(False)
+        # The width the tiles really get, which also shrinks when a scroll bar appears.
+        self.scroll.viewport_resized.connect(self._fit)
+
+    @property
+    def cards(self) -> list[RecCard]:
+        """The detail card, as a list (older callers looked at a list of cards)."""
+        return [self.detail] if self.detail is not None else []
 
     def set_recs(self, recs: list[Rec], has_run: bool) -> None:
         self.recs = recs
@@ -226,37 +370,72 @@ class RecList(QWidget):
         self.dirty = True
 
     def render(self, ctx: AppContext, on_open, on_dismiss) -> None:
-        for card in self.cards:
-            self.grid.removeWidget(card)
-            card.deleteLater()
-        self.cards = []
+        self._ctx, self._on_open, self._on_dismiss = ctx, on_open, on_dismiss
+        for tile in self.tiles:
+            self.grid.removeWidget(tile)
+            tile.deleteLater()
+        self.tiles = []
         for i, rec in enumerate(self.recs):
-            card = RecCard(ctx, self.list_kind, rec)
-            card.opened.connect(on_open)
-            card.dismissed.connect(on_dismiss)
-            self.grid.addWidget(card, i // self.columns, i % self.columns)
-            self.cards.append(card)
+            tile = PosterTile(ctx, self.list_kind, rec, i)
+            tile.clicked.connect(self.select)
+            if self.tile_width:
+                tile.set_width(self.tile_width)
+            self.tiles.append(tile)
+        self._place()
         texts = EMPTY_AFTER_RUN if self.has_run else EMPTY
         self.empty.setText("" if self.recs else texts[self.list_kind])
         self.empty.setVisible(not self.recs)
+        self.panel.setVisible(bool(self.recs))
         self.dirty = False
+        if self.recs:
+            self.select(min(self.selected, len(self.recs) - 1), animate=False)
+        else:
+            self._clear_detail()
+        motion.fade_in(self.tiles)
+
+    def select(self, index: int, animate: bool = True) -> None:
+        """Show one suggestion in full in the panel."""
+        if not 0 <= index < len(self.recs):
+            return
+        self.selected = index
+        for i, tile in enumerate(self.tiles):
+            tile.set_selected(i == index)
+        self._clear_detail()
+        card = RecCard(self._ctx, self.list_kind, self.recs[index])
+        card.opened.connect(self._on_open)
+        card.dismissed.connect(self._on_dismiss)
+        self.panel_layout.addWidget(card)
+        self.detail = card
+        if animate:
+            motion.fade_in([card], stagger=False)
+
+    def tile_for(self, item_key: str) -> PosterTile | None:
+        return next((t for t in self.tiles if t.rec.item_key == item_key), None)
+
+    def _clear_detail(self) -> None:
+        if self.detail is not None:
+            self.panel_layout.removeWidget(self.detail)
+            self.detail.deleteLater()
+            self.detail = None
 
     def _place(self) -> None:
-        """Lay the cards out row by row in `self.columns` equal columns."""
-        for card in self.cards:
-            self.grid.removeWidget(card)
-        for i, card in enumerate(self.cards):
-            self.grid.addWidget(card, i // self.columns, i % self.columns)
-        for column in range(MAX_COLUMNS):
-            self.grid.setColumnStretch(column, 1 if column < self.columns else 0)
+        """Lay the tiles out row by row, as many across as fit."""
+        for tile in self.tiles:
+            self.grid.removeWidget(tile)
+        for i, tile in enumerate(self.tiles):
+            self.grid.addWidget(tile, i // self.columns, i % self.columns)
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt naming)
-        if obj is self.scroll.viewport() and event.type() == QEvent.Type.Resize:
-            columns = columns_for(event.size().width())
-            if columns != self.columns:
-                self.columns = columns
-                self._place()
-        return super().eventFilter(obj, event)
+    def _fit(self, width: int) -> None:
+        """As many tiles across as fit, then widened so the row fills the panel."""
+        room = width - 2 * GRID_PAD - 2
+        columns = columns_for(room)
+        tile = (room - (columns - 1) * TILE_GAP) // columns // TILE_STEP * TILE_STEP
+        for t in self.tiles:
+            t.set_width(tile)
+        self.tile_width = tile
+        if columns != self.columns:
+            self.columns = columns
+            self._place()
 
 
 class ForYouPage(QWidget):
@@ -322,9 +501,27 @@ class ForYouPage(QWidget):
                 self.lists[kind].set_recs(recs, created is not None)
                 index = self.tabs.indexOf(self.lists[kind])
                 self.tabs.setTabText(index, f"{title} ({len(recs)})" if created else title)
+                if kind == "film":
+                    rated = metrics.get("rated", 0)
+                    self.lists[kind].note.setText(
+                        f"Predicted from your TMDB ratings ({rated} rated films), the same way "
+                        "as anime: the TMDB average, your usual difference from it, and your "
+                        "genre and director leans."
+                        if created
+                        else ""
+                    )
+                if kind == "book":
+                    rated = metrics.get("rated", 0)
+                    self.lists[kind].note.setText(
+                        f"Predicted from your Hardcover stars ({rated} rated books), the same "
+                        "way as anime: the Hardcover average, your usual difference from it, "
+                        "and your genre and author leans."
+                        if created
+                        else ""
+                    )
                 if kind == "anime":
                     self.lists[kind].note.setText(accuracy_text(metrics))
-                    self.lists[kind].note.setToolTip(accuracy_tip(metrics))
+                    self.lists[kind].note.setToolTip(plain_tip(accuracy_tip(metrics)))
                 newest = max(filter(None, (newest, created)), default=None)
             scope = settings.lastfm_scope_note(conn)
             tz_name = settings.get(conn, "timezone")
@@ -357,15 +554,21 @@ class ForYouPage(QWidget):
         return link is not None
 
     def dismiss(self, list_kind: str, item_key: str) -> None:
-        kind = "anime" if list_kind == "anime" else "artist"
+        """Hide a suggestion for good. Its tile fades out, then the grid closes up."""
+        kind = list_kind if list_kind in ("anime", "film", "book") else "artist"
         conn = self.ctx.connect(self.profile_id)
         try:
             recommend.dismiss(conn, kind, item_key)
         finally:
             conn.close()
-        hidden = next((r.title for r in self.lists[list_kind].recs if r.item_key == item_key), "")
+        tab = self.lists[list_kind]
+        hidden = next((r.title for r in tab.recs if r.item_key == item_key), "")
         self.say(f"Hidden {hidden}. It won't be suggested again.")
-        self.reload()
+        tile = tab.tile_for(item_key)
+        if tile is None:
+            self.reload()
+        else:
+            motion.fade_out(tile, self.reload)
 
     # -- refreshing ---------------------------------------------------------
 

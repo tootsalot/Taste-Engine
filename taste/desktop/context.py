@@ -21,6 +21,7 @@ class AppContext:
     clock: Any = None  # tests pin "now" for the Dashboard
     _prepared: set[str] = field(default_factory=set)
     _art: Any = None
+    threads: list[Any] = field(default_factory=list)  # short jobs to wait for at shutdown
 
     def now(self) -> datetime:
         return self.clock() if self.clock is not None else datetime.now(timezone.utc)
@@ -41,8 +42,18 @@ class AppContext:
         self._prepared.add(str(path))
         return conn
 
+    def track(self, thread: Any) -> Any:
+        """Remember a background job (drawing recap cards) so shutdown can wait for it."""
+        self.threads = [t for t in self.threads if t.isRunning()]
+        self.threads.append(thread)
+        return thread
+
     def shutdown(self) -> None:
-        """Stop image downloads when the window closes."""
+        """Stop image downloads and let short jobs finish when the window closes."""
+        for thread in self.threads:
+            if thread.isRunning():
+                thread.wait(15000)
+        self.threads = []
         if self._art is not None:
             self._art.shutdown()
 

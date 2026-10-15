@@ -38,6 +38,9 @@ def test_credits_and_source_links(text):
     assert text.startswith("Taste Engine 9.9.9")
     assert "MyAnimeList" in text and "Last.fm" in text and "isn't affiliated" in text
     assert "Deezer" in text
+    assert "Hardcover (hardcover.app)" in text and "Goodreads" not in text
+    # TMDB's terms ask for this exact line wherever the app credits its sources.
+    assert "This product uses the TMDB API but is not endorsed or certified by TMDB." in text
     assert "can be replaced with modified, compatible versions" in text  # LGPL relinking
     assert "https://download.qt.io/official_releases/QtForPython/" in text
     assert "https://pypi.org/project/requests/" in text

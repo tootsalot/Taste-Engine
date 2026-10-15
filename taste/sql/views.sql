@@ -21,6 +21,9 @@ DROP VIEW IF EXISTS rpt_lastfm_by_hour;
 DROP VIEW IF EXISTS rpt_lastfm_by_weekday;
 DROP VIEW IF EXISTS rpt_lastfm_scope;
 DROP VIEW IF EXISTS rpt_lastfm_plays_local;
+DROP VIEW IF EXISTS rpt_goodreads_books;
+DROP VIEW IF EXISTS rpt_hardcover_books;
+DROP VIEW IF EXISTS rpt_tmdb_ratings;
 DROP VIEW IF EXISTS rpt_settings;
 
 -- One row with every report setting as a typed column.
@@ -353,3 +356,66 @@ LEFT JOIN (
     ON p.local_weekday_num = d.local_weekday_num
 CROSS JOIN (SELECT COUNT(*) AS total_plays FROM rpt_lastfm_plays_local) t
 CROSS JOIN rpt_lastfm_scope sc;
+
+-- ---------------------------------------------------------------------------
+-- Hardcover: every book in my library, my stars next to the Hardcover average.
+-- vs_average compares with the average rounded to the nearest half star, since my
+-- stars are in halves. times_read counts dated read-throughs.
+-- ---------------------------------------------------------------------------
+
+CREATE VIEW rpt_hardcover_books AS
+SELECT
+    i.item_id,
+    i.title,
+    i.release_year AS first_published,
+    cu.value AS status,
+    r.raw_score AS my_stars,
+    cr.mean_score AS hardcover_average,
+    cr.num_raters AS hardcover_ratings,
+    ROUND(r.raw_score - cr.mean_score, 2) AS stars_diff,
+    CASE
+        WHEN r.raw_score IS NULL OR cr.mean_score IS NULL THEN NULL
+        WHEN r.raw_score > ROUND(cr.mean_score * 2, 0) / 2 THEN 'higher'
+        WHEN r.raw_score < ROUND(cr.mean_score * 2, 0) / 2 THEN 'lower'
+        ELSE 'level'
+    END AS vs_average,
+    reads.last_read AS last_read,
+    COALESCE(reads.times_read, 0) AS times_read
+FROM core_items i
+JOIN core_curation cu
+    ON cu.item_id = i.item_id AND cu.source = 'hardcover'
+    AND cu.curation_type = 'list_status' AND cu.list_name = ''
+LEFT JOIN core_ratings r
+    ON r.item_id = i.item_id AND r.source = 'hardcover'
+LEFT JOIN core_community_ratings cr
+    ON cr.item_id = i.item_id AND cr.source = 'hardcover'
+LEFT JOIN (
+    SELECT item_id, MAX(occurred_at_utc) AS last_read, COUNT(*) AS times_read
+    FROM core_behavior_events
+    WHERE source = 'hardcover' AND event_type = 'read_finished'
+    GROUP BY item_id
+) reads ON reads.item_id = i.item_id
+WHERE i.media_type = 'book';
+
+-- ---------------------------------------------------------------------------
+-- TMDB: every film and show I rated, next to the TMDB average. rated_at is when I
+-- rated it, which isn't when I watched it.
+-- ---------------------------------------------------------------------------
+
+CREATE VIEW rpt_tmdb_ratings AS
+SELECT
+    i.item_id,
+    i.media_type,
+    i.title,
+    i.release_year,
+    r.raw_score AS my_rating,
+    cr.mean_score AS tmdb_average,
+    cr.num_raters AS tmdb_votes,
+    ROUND(r.raw_score - cr.mean_score, 2) AS rating_diff,
+    r.source_updated_at AS rated_at
+FROM core_ratings r
+JOIN core_items i
+    ON i.item_id = r.item_id
+LEFT JOIN core_community_ratings cr
+    ON cr.item_id = r.item_id AND cr.source = r.source
+WHERE r.source = 'tmdb';

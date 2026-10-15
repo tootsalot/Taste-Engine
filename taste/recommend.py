@@ -9,6 +9,12 @@ liked, plus related shows (sequels and so on).
 Music: artists I've never played, scored by how similar they are to the ones I
 play most (recent plays count more), plus artists I used to play a lot.
 
+Films and books: predicted the anime way, from TMDB's recommendations and from
+Hardcover's similar books for the ones I rated highest.
+
+Each pick also carries what it is ("about": a synopsis, overview, bio, or book
+description) and how popular it is, for the panel on the For You page.
+
 Every run is saved in rec_runs / rec_items with its scores and reasons.
 """
 
@@ -25,6 +31,7 @@ from urllib.parse import quote_plus
 
 from taste import enrich, settings
 from taste.db import utc_now
+from taste.sources import hardcover, tmdb
 
 GENRE_SHRINK = 5  # a genre's bias counts fully only after several shows
 STUDIO_SHRINK = 3
@@ -72,6 +79,31 @@ class Rec:
     reasons: list[str] = field(default_factory=list)  # plain sentences for the card
     # mal_mean, chance_8_plus, match_label, and details (the numbers, for a tooltip)
     facts: dict[str, Any] = field(default_factory=dict)
+
+
+def short_count(n: int) -> str:
+    """1,234 -> "1.2k", 3,400,000 -> "3.4M"; small numbers as they are."""
+    for size, suffix in ((1_000_000, "M"), (1_000, "k")):
+        if n >= size:
+            value = f"{n / size:.1f}".rstrip("0").rstrip(".")
+            return f"{value}{suffix}"
+    return f"{n:,}"
+
+
+ABOUT_MAX = 900  # characters of a synopsis or bio kept for the panel
+
+
+def about_text(text: str | None) -> str:
+    """A summary trimmed for the panel: at most ABOUT_MAX characters, cut at a sentence
+    when there's one, and without MAL's "[Written by MAL Rewrite]" credit line."""
+    if not text:
+        return ""
+    text = " ".join(text.replace("[Written by MAL Rewrite]", "").split())
+    if len(text) <= ABOUT_MAX:
+        return text
+    cut = text[:ABOUT_MAX]
+    stop = cut.rfind(". ")
+    return cut[: stop + 1] if stop > ABOUT_MAX // 2 else cut.rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +300,18 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
                          f"{f['num_episodes']} eps")  # fmt: skip
         rec.subtitle = " · ".join(p for p in parts if p)
         rec.facts["mal_mean"] = f["community_mean"]
+        rec.facts["about"] = about_text(f.get("synopsis"))
+        rec.facts["popularity"] = [
+            text
+            for text in (
+                f"{short_count(f['num_list_users'])} members on MAL"
+                if f.get("num_list_users")
+                else "",
+                f"#{f['popularity_rank']:,} most popular" if f.get("popularity_rank") else "",
+                f"#{f['score_rank']:,} by score" if f.get("score_rank") else "",
+            )
+            if text
+        ]
         chance = chance_at_least(predicted, residuals, 8)
         if chance is not None:
             rec.facts["chance_8_plus"] = round(chance, 3)
@@ -324,7 +368,10 @@ def _loved(score: float) -> str:
 
 
 def _because(
-    seeds: list[tuple[str, float]], liked_genre: str | None, harsh_genre: str | None
+    seeds: list[tuple[str, float]],
+    liked_genre: str | None,
+    harsh_genre: str | None,
+    noun: str = "anime",
 ) -> list[str]:
     """The card's reasons in plain words, no numbers.
 
@@ -337,14 +384,14 @@ def _because(
         verb = _loved(score)
         clauses.append(title if verb == last_verb else f"{verb} {title}")
         last_verb = verb
-    genre = f"you tend to enjoy {liked_genre.lower()} anime" if liked_genre else ""
+    genre = f"you tend to enjoy {liked_genre.lower()} {noun}" if liked_genre else ""
     if clauses:
         sentence = "Because you " + " and ".join(clauses)
         sentences.append(sentence + (f", and {genre}." if genre else "."))
     elif genre:
         sentences.append(genre[0].upper() + genre[1:] + ".")
     if harsh_genre:
-        sentences.append(f"Heads up: you're usually tougher on {harsh_genre.lower()} anime.")
+        sentences.append(f"Heads up: you're usually tougher on {harsh_genre.lower()} {noun}.")
     return sentences
 
 
@@ -378,6 +425,126 @@ def chance_at_least(predicted: float, residuals: list[float], at_least: int) -> 
 
 
 # ---------------------------------------------------------------------------
+# Films (TMDB)
+# ---------------------------------------------------------------------------
+
+FILM_MIN_VOTES = 200  # TMDB averages from fewer votes than this are too unsettled
+
+
+def _film_facts(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
+    """Every film in staging, with genres and directors in the model's slots."""
+    facts = {}
+    for row in conn.execute("SELECT * FROM stg_tmdb_movies"):
+        directors = [d.get("name") for d in json.loads(row["directors_json"] or "[]")]
+        facts[row["tmdb_id"]] = {
+            **dict(row),
+            "genres": json.loads(row["genres_json"] or "[]"),
+            "studios": [d for d in directors if d],  # directors stand where studios do
+        }
+    return facts
+
+
+def _film_scored(conn: sqlite3.Connection) -> list[tuple[int, float, float]]:
+    return [
+        (r[0], r[1], r[2])
+        for r in conn.execute(
+            "SELECT a.tmdb_id, a.rating, m.vote_average FROM stg_tmdb_account_ratings a "
+            "JOIN stg_tmdb_movies m ON m.tmdb_id = a.tmdb_id WHERE a.media_type = 'movie' "
+            "AND a.removed_at IS NULL AND m.vote_average IS NOT NULL AND m.vote_count > 0"
+        )
+    ]
+
+
+def _runtime(minutes: int | None) -> str:
+    if not minutes:
+        return ""
+    return f"{minutes // 60}h {minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m"
+
+
+def film_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str, Any]]:
+    """Films I haven't rated, predicted the anime way: the TMDB average shifted (or, with
+    enough ratings, scaled) by how I usually differ from it, plus shrunk genre and
+    director leans. Candidates come from TMDB's recommendations for films I liked,
+    plus my watchlist."""
+    cfg = settings.get_all(conn)
+    facts = _film_facts(conn)
+    scored = _film_scored(conn)
+    model = build_model(scored, facts)
+    mine = tmdb.my_film_mean(conn)
+    support = tmdb.candidate_support(conn)
+    dismissed = _dismissed(conn, "film")
+    watchlist = {
+        r[0]
+        for r in conn.execute(
+            "SELECT tmdb_id FROM stg_tmdb_account_lists WHERE media_type = 'movie' "
+            "AND list_name = 'watchlist' AND removed_at IS NULL"
+        )
+    }
+    rated = {
+        r[0]
+        for r in conn.execute(
+            "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = 'movie' "
+            "AND removed_at IS NULL"
+        )
+    }
+    sources: dict[int, list[tuple[float, str, float]]] = {}
+    for rec_id, title, rating, position in conn.execute(
+        "SELECT r.recommended_id, m.title, a.rating, r.position "
+        "FROM stg_tmdb_movie_recommendations r "
+        "JOIN stg_tmdb_account_ratings a ON a.tmdb_id = r.tmdb_id AND a.media_type = 'movie' "
+        "JOIN stg_tmdb_movies m ON m.tmdb_id = r.tmdb_id "
+        "WHERE a.removed_at IS NULL AND a.rating > ?",
+        (mine if mine is not None else 11,),
+    ):
+        weight = (rating - (mine or 0)) / (1 + position / 10)
+        sources.setdefault(rec_id, []).append((weight, title, rating))
+    residuals = holdout_residuals(scored, facts)
+    recs: list[Rec] = []
+    for tmdb_id in (set(support) | watchlist) - rated:
+        f = facts.get(tmdb_id)
+        if not f or f["vote_average"] is None or str(tmdb_id) in dismissed:
+            continue
+        if (f["vote_count"] or 0) < FILM_MIN_VOTES or not f["fetched_at"]:
+            continue  # unsettled, or only known from a list so far (no genres yet)
+        predicted = model.predict(f["vote_average"], f["genres"], f["studios"])
+        rec = Rec(
+            kind="film",
+            item_key=str(tmdb_id),
+            title=f["title"],
+            score=round(predicted, 2),
+            support=round(support.get(tmdb_id, 0.0), 3),
+            image_url=tmdb.poster_url(f["poster_path"]),
+            url=tmdb.TITLE_URL["movie"].format(tmdb_id),
+        )
+        parts = [(f["release_date"] or "")[:4], _runtime(f["runtime"])]
+        if f["studios"]:
+            parts.append(f["studios"][0])
+        rec.subtitle = " · ".join(p for p in parts if p)
+        rec.facts["tmdb_mean"] = f["vote_average"]
+        rec.facts["about"] = about_text(f.get("overview"))
+        rec.facts["popularity"] = (
+            [f"{short_count(f['vote_count'])} votes on TMDB"] if f.get("vote_count") else []
+        )
+        chance = chance_at_least(predicted, residuals, 8)
+        if chance is not None:
+            rec.facts["chance_8_plus"] = round(chance, 3)
+        if tmdb_id in watchlist:
+            rec.badge = "On your watchlist"
+        best = sorted(sources.get(tmdb_id, []), reverse=True)[:MAX_REASON_SEEDS]
+        seeds = [(title, rating) for _, title, rating in best]
+        liked, harsh = _genre_leans(model, f["genres"])
+        rec.reasons.extend(_because(seeds, liked, harsh, noun="films"))
+        details = [f"TMDB recommends it alongside {t}, which you rated {r:g}." for t, r in seeds]
+        for genre in filter(None, (liked, harsh)):
+            details.append(f"You rate {genre} films {model.genre[genre]:+.2f} vs your usual.")
+        rec.facts["details"] = details
+        recs.append(rec)
+    recs.sort(key=lambda r: (-(r.score + 0.15 * math.log1p(r.support)), r.title))
+    metrics = {"model_overall_bias": round(model.overall, 3), "rated": len(scored)}
+    return recs[: cfg["rec_count"]], metrics
+
+
+# ---------------------------------------------------------------------------
 # Music
 # ---------------------------------------------------------------------------
 
@@ -408,6 +575,11 @@ def _artist_cover(conn: sqlite3.Connection, name: str) -> str | None:
     if row and row[0]:
         return row[0]
     return _deezer_photo(conn, name)
+
+
+def artist_picture(conn: sqlite3.Connection, name: str) -> str | None:
+    """An artist's picture for anywhere in the app (the recaps): see _artist_cover."""
+    return _artist_cover(conn, name)
 
 
 def _deezer_photo(conn: sqlite3.Connection, name: str) -> str | None:
@@ -534,10 +706,153 @@ def music_recommendations(
         )
         if len(rediscover) >= cfg["rec_count"]:
             break
+    for rec in discover + rediscover:
+        _add_artist_info(conn, rec)
     return (
         [_with_fallback(conn, r) for r in discover],
         [_with_fallback(conn, r) for r in rediscover],
     )
+
+
+def _add_artist_info(conn: sqlite3.Connection, rec: Rec) -> None:
+    row = conn.execute(
+        "SELECT bio, listeners, playcount FROM stg_lastfm_artist_info WHERE artist_key = ?",
+        (rec.item_key,),
+    ).fetchone()
+    if row is None:
+        return
+    rec.facts["about"] = about_text(row[0])
+    rec.facts["popularity"] = [
+        text
+        for text in (
+            f"{short_count(row[1])} listeners on Last.fm" if row[1] else "",
+            f"{short_count(row[2])} plays" if row[2] else "",
+        )
+        if text
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Books (Hardcover)
+# ---------------------------------------------------------------------------
+
+BOOK_MIN_RATINGS = 20  # Hardcover averages from fewer ratings than this are too unsettled
+BOOK_URL = "https://hardcover.app/books/{}"
+
+
+def _book_facts(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
+    """Every book in staging, with genres and authors in the model's slots."""
+    facts = {}
+    for row in conn.execute("SELECT * FROM stg_hardcover_books"):
+        authors = [a.get("name") for a in json.loads(row["authors_json"] or "[]")]
+        facts[row["book_id"]] = {
+            **dict(row),
+            "genres": json.loads(row["genres_json"] or "[]"),
+            "studios": [a for a in authors if a],  # authors stand where studios do
+        }
+    return facts
+
+
+def _book_scored(conn: sqlite3.Connection) -> list[tuple[int, float, float]]:
+    """(book id, my stars x2, Hardcover average x2): stars doubled onto the anime model's
+    1 to 10 scale, so the same fit and limits apply."""
+    return [
+        (r[0], r[1] * 2, r[2] * 2)
+        for r in conn.execute(
+            "SELECT ub.book_id, ub.rating, b.rating FROM stg_hardcover_user_books ub "
+            "JOIN stg_hardcover_books b ON b.book_id = ub.book_id "
+            "WHERE ub.removed_at IS NULL AND ub.rating IS NOT NULL AND b.rating IS NOT NULL"
+        )
+    ]
+
+
+def book_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str, Any]]:
+    """Books I don't have, predicted the anime way on doubled stars: the Hardcover average
+    shifted (or scaled) by how I usually differ from it, plus genre and author leans.
+    Candidates are Hardcover's similar books for the ones I rated highest, plus my Want
+    to Read."""
+    cfg = settings.get_all(conn)
+    facts = _book_facts(conn)
+    scored = _book_scored(conn)
+    model = build_model(scored, facts)
+    mine = hardcover.my_mean_rating(conn)
+    support = hardcover.candidate_support(conn)
+    dismissed = _dismissed(conn, "book")
+    shelf = dict(
+        conn.execute(
+            "SELECT book_id, status_id FROM stg_hardcover_user_books WHERE removed_at IS NULL"
+        ).fetchall()
+    )
+    wanted = {b for b, status in shelf.items() if status == 1}
+    sources: dict[int, list[tuple[float, str, float]]] = {}
+    if mine is not None:
+        for title, rating, similar in conn.execute(
+            "SELECT b.title, ub.rating, b.similar_json FROM stg_hardcover_user_books ub "
+            "JOIN stg_hardcover_books b ON b.book_id = ub.book_id "
+            "WHERE ub.removed_at IS NULL AND ub.rating > ?",
+            (mine,),
+        ):
+            for position, book_id in enumerate(json.loads(similar or "[]")):
+                weight = (rating - mine) / (1 + position / 10)
+                sources.setdefault(book_id, []).append((weight, title, rating))
+    residuals = holdout_residuals(scored, facts)
+    recs: list[Rec] = []
+    for book_id in set(support) | wanted:
+        f = facts.get(book_id)
+        if not f or not f.get("details_at") or str(book_id) in dismissed:
+            continue  # no details yet (fetched on a later refresh), or dismissed
+        if book_id in shelf and book_id not in wanted:
+            continue  # read, reading, paused, or given up
+        if f["rating"] is None or (f["ratings_count"] or 0) < BOOK_MIN_RATINGS:
+            continue
+        predicted = model.predict(f["rating"] * 2, f["genres"], f["studios"])
+        stars = round(predicted / 2, 2)
+        rec = Rec(
+            kind="book",
+            item_key=str(book_id),
+            title=f["title"],
+            score=stars,
+            support=round(support.get(book_id, 0.0), 3),
+            image_url=f["image_url"],
+            url=BOOK_URL.format(f["slug"]) if f.get("slug") else None,
+        )
+        parts = [f["studios"][0] if f["studios"] else "", str(f["release_year"] or ""),
+                 f"{f['pages']:,} pages" if f["pages"] else ""]  # fmt: skip
+        rec.subtitle = " · ".join(p for p in parts if p)
+        rec.facts["hardcover_mean"] = f["rating"]
+        chance = chance_at_least(predicted, residuals, 8)
+        if chance is not None:
+            rec.facts["chance_4_plus"] = round(chance, 3)
+        rec.facts["about"] = about_text(f.get("description"))
+        rec.facts["popularity"] = [
+            text
+            for text in (
+                f"{short_count(f['users_count'])} readers on Hardcover"
+                if f.get("users_count")
+                else "",
+                f"{short_count(f['ratings_count'])} ratings" if f.get("ratings_count") else "",
+                f"{short_count(f['users_read_count'])} have read it"
+                if f.get("users_read_count")
+                else "",
+            )
+            if text
+        ]
+        if book_id in wanted:
+            rec.badge = "On your Want to Read"
+        best = sorted(sources.get(book_id, []), reverse=True)[:MAX_REASON_SEEDS]
+        seeds = [(title, rating * 2) for _, title, rating in best]  # wording on the 10 scale
+        liked, harsh = _genre_leans(model, f["genres"])
+        rec.reasons.extend(_because(seeds, liked, harsh, noun="books"))
+        details = [
+            f"Hardcover lists it as similar to {t}, which you gave {r:g}★." for _, t, r in best
+        ]
+        for genre in filter(None, (liked, harsh)):
+            details.append(f"You rate {genre} books {model.genre[genre] / 2:+.2f}★ vs your usual.")
+        rec.facts["details"] = details
+        recs.append(rec)
+    recs.sort(key=lambda r: (-(r.score + 0.08 * math.log1p(r.support)), r.title))
+    metrics = {"model_overall_bias": round(model.overall / 2, 3), "rated": len(scored)}
+    return recs[: cfg["rec_count"]], metrics
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +900,7 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
     ).fetchone()
     if run is None:
         return [], {}, None
-    item_kind = "anime" if kind == "anime" else "artist"
+    item_kind = kind if kind in ("anime", "film") else "artist"
     dismissed = _dismissed(conn, item_kind)
     recs = [
         Rec(
@@ -644,7 +959,13 @@ def compute_all(
         discover, rediscover = music_recommendations(conn, now)
         save_run(conn, "music_discover", discover)
         save_run(conn, "music_rediscover", rediscover)
+    if "film" in kinds:
+        films, metrics = film_recommendations(conn)
+        save_run(conn, "film", films, metrics)
+    if "book" in kinds:
+        books, metrics = book_recommendations(conn)
+        save_run(conn, "book", books, metrics)
     return {kind: len(latest(conn, kind)[0]) for kind in LIST_KINDS}
 
 
-LIST_KINDS = ("anime", "music_discover", "music_rediscover")
+LIST_KINDS = ("anime", "music_discover", "music_rediscover", "film", "book")

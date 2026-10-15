@@ -5,7 +5,7 @@ Images download the first time they're shown and are kept in
 file never needs refreshing.
 
 Rules:
-- Only https URLs on the MAL and Last.fm image hosts are fetched. Redirects
+- Only https URLs on the known image hosts (ALLOWED_HOSTS) are fetched. Redirects
   aren't followed, so a redirect can't lead somewhere else.
 - Each file is capped at MAX_FILE_BYTES and must say it's an image.
 - The whole cache is capped (100 MB by default). When it's over, the least
@@ -29,12 +29,17 @@ from taste.config import data_dir
 
 # Real Last.fm responses put covers on lastfm-img.freetls.fastly.net; the other
 # Last.fm host is kept in case it serves them too. Deezer is the artist photo fallback.
+# Book covers come from Hardcover (originals on assets., resized copies on
+# production-img.) and film and TV posters from TMDB.
 ALLOWED_HOSTS = frozenset(
     {
         "cdn.myanimelist.net",
         "lastfm-img.freetls.fastly.net",
         "lastfm.freetls.fastly.net",
         "cdn-images.dzcdn.net",
+        "assets.hardcover.app",
+        "production-img.hardcover.app",
+        "image.tmdb.org",
     }
 )
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -149,13 +154,22 @@ class ImageCache:
         finally:
             response.close()
 
-    def _store(self, url: str, data: bytes) -> Path:
+    def _store(self, url: str, data: bytes) -> Path | None:
         path = self.path_for(url)
         with self._lock:
+            # The same picture can be fetched twice at once (one poster at two sizes).
+            # The first copy wins: on Windows the second can't replace it while it's
+            # open for decoding, and there's no need to.
+            if path.exists():
+                return path
             self.root.mkdir(parents=True, exist_ok=True)
             partial = path.with_name(path.name + f".{threading.get_ident()}{PARTIAL}")
-            partial.write_bytes(data)
-            os.replace(partial, path)  # readers never see a half-written file
+            try:
+                partial.write_bytes(data)
+                os.replace(partial, path)  # readers never see a half-written file
+            except OSError:
+                partial.unlink(missing_ok=True)
+                return path if path.exists() else None
             self._evict(keep=path)
         return path
 

@@ -7,12 +7,14 @@ Conventions used throughout:
 - **Timestamps** are UTC text in the form `YYYY-MM-DD HH:MM:SS`.
 - **Dates** are text `YYYY-MM-DD`. MAL sometimes gives partial dates (`YYYY` or `YYYY-MM`), and those are kept as sent.
 - **Booleans** are INTEGER 0 or 1.
-- **`source`** is a code from `core_sources` (`mal`, `lastfm`, `deezer`).
+- **`source`** is a code from `core_sources` (`mal`, `lastfm`, `deezer`, `hardcover`, `tmdb`).
 - Columns inside unique keys use `''` for "empty" instead of NULL, so the keys behave the same in SQLite and SQL Server.
 
 Table prefixes: `sync_` bookkeeping, `raw_` API pages as fetched, `stg_` per-source staging, `core_` source-agnostic model, `rec_` saved recommendations, `rpt_` report views.
 
 Posters and album covers aren't stored in the database. Only their URLs are (`core_item_images`); the pictures themselves are cached as files in `<data folder>/cache/images`, capped at 100 MB.
+
+Recaps (the Rev page's cards) are image files, not database rows: `<data folder>/recaps/<profile>/<period>/` holds `01-cover.png`, `02-music.png`, and so on, plus `recap.json` with the numbers behind them. `recap_runs` (below) only remembers which were made.
 
 Window preferences shared by every profile (whether the sidebar is collapsed, Simple or Advanced settings, and whether Reports shows plays per week, month, or year) live in `<data folder>/ui_state.json`, not in any database. A missing or unreadable file means the defaults.
 
@@ -99,6 +101,8 @@ One row per anime that has appeared on my list or was fetched as a recommendatio
 | nsfw_rating | TEXT | MAL's `nsfw` value: `white` (safe), `gray`, or `black` (adult). Recommendations leave out `black` shows unless the profile includes NSFW anime. |
 | last_raw_page_id | INTEGER FK raw_api_pages | The raw page this row was last loaded from. |
 | loaded_at | TEXT | When this row was last written. |
+| num_list_users, popularity_rank, score_rank | INTEGER | How many MAL users list it, and its place in MAL's popularity and score rankings. Kept when a later response leaves them out. |
+| synopsis | TEXT | MAL's synopsis, from a details fetch (the list doesn't send it). Shown on For You. |
 
 ### `stg_mal_anime_genres`
 Genres per anime. MAL mixes true genres, themes (Isekai), and demographics (Shounen) in one list and doesn't label which is which.
@@ -180,6 +184,7 @@ Which anime have had their MAL details fetched (`/anime/{id}`), and when. The de
 | mal_anime_id | INTEGER PK | The anime. |
 | fetched_at | TEXT | When the details were last fetched (UTC). |
 | raw_page_id | INTEGER FK raw_api_pages | The raw response. |
+| fields_version | INTEGER | Which set of detail fields the fetch asked for (2 added the synopsis and popularity). A suggested show fetched with an older set is fetched once more. |
 
 ### `stg_mal_anime_recommendations`
 MAL's "users who liked this also recommend" list for a show.
@@ -200,6 +205,17 @@ Sequels, prequels, side stories, and other relations.
 | related_id | INTEGER PK | The related show. |
 | related_title | TEXT | Its title as MAL sent it. |
 | relation_type | TEXT | MAL's relation, for example `sequel`, `prequel`, `side_story`, `summary`. `other` when MAL sends none. |
+
+### `stg_lastfm_artist_info`
+Who a suggested artist is (`artist.getinfo`), for the For You panel. Cached 30 days; a row with every field NULL is a miss.
+
+| Column | Type | Description |
+|---|---|---|
+| artist_key | TEXT PK | The artist. |
+| bio | TEXT | The bio's summary as plain text: Last.fm's "Read more" link and other markup removed. |
+| listeners, playcount | INTEGER | Last.fm's counts for the artist. |
+| raw_page_id | INTEGER FK raw_api_pages | Not set yet (the response is stored raw under the run). |
+| fetched_at | TEXT | When it was looked up (UTC). |
 
 ### `stg_lastfm_artist_fetches`
 When each Last.fm artist method was last called for an artist, so refreshes only fetch what's stale.
@@ -250,6 +266,93 @@ Deezer's artist search, used only for photos of suggested artists. Every suggest
 | name | TEXT | The name Deezer matched. Only an exact (case-insensitive) match counts, so a wrong photo is never used. `''` when there was no match. |
 | picture_url | TEXT | Photo URL. NULL when there was no exact match, or Deezer only had its blank placeholder. |
 | fetched_at | TEXT | When it was looked up (UTC). |
+
+### `stg_lastfm_track_info`
+Track lengths from Last.fm `track.getinfo`, for "about how many hours" on the Dashboard, Reports, and recaps. Scrobbles carry no length. After each Last.fm sync, up to 300 tracks played in the periods whose recaps can still change are looked up, most played first. A length doesn't change, so rows are kept for good, misses too.
+
+| Column | Type | Description |
+|---|---|---|
+| track_key | TEXT PK | The track's `lastfm_track_key` (artist and title, lowercased). |
+| artist_name | TEXT | As scrobbled. |
+| track_name | TEXT | As scrobbled. |
+| duration_ms | INTEGER | Length in milliseconds. NULL when Last.fm has none (it sends 0) or doesn't know the track. |
+| fetched_at | TEXT | When it was looked up (UTC). |
+
+---
+
+## Staging: Hardcover
+
+My library from Hardcover's GraphQL API, read with the tokens from signing in (OAuth with PKCE, read-only scopes). Each sync is one `sync_runs` row with mode `full`; `me` gives my user id, then `user_books` comes 100 to a page, each page one raw page (endpoint `graphql:Library`, request parameters holding only the offset and limit). Tokens are never stored in the database. Profiles from before Hardcover had books from a Goodreads export with Open Library covers; those rows and tables are removed once, the first time the app opens the profile, since Hardcover holds the same history.
+
+### `stg_hardcover_user_books`
+One row per book in my library.
+
+| Column | Type | Meaning |
+|---|---|---|
+| user_book_id | INTEGER PK | Hardcover's id for this book in my library. |
+| book_id | INTEGER | The book (`stg_hardcover_books`). |
+| status_id | INTEGER | 1 want to read, 2 reading, 3 read, 4 paused, 5 did not finish, 6 ignored. |
+| rating | REAL | My stars, 0.5 to 5 in halves. NULL when not rated (Hardcover sends 0 or null). |
+| date_added, first_started_date, first_read_date, last_read_date | TEXT | Days (`YYYY-MM-DD`) as Hardcover keeps them. |
+| read_count | INTEGER | Hardcover's count of finished reads. |
+| owned | INTEGER | 1 when I own a copy. |
+| edition_id, reading_format_id, edition_pages, edition_seconds | INTEGER | The edition I picked: format 1 physical, 2 audio, 3 both, 4 ebook; its pages and audio length. NULL when no edition is picked. |
+| first_seen_at, last_seen_run_id, removed_at, last_raw_page_id | | Bookkeeping, as for MAL list entries. `removed_at` is set when a sync no longer sees the book. |
+
+### `stg_hardcover_reads`
+One row per read-through (Hardcover's `user_book_reads`).
+
+| Column | Type | Meaning |
+|---|---|---|
+| read_id | INTEGER PK | Hardcover's id. |
+| user_book_id | INTEGER | The book in my library. |
+| started_at, finished_at | TEXT | Days I started and finished; NULL when not entered. |
+| edition_id | INTEGER | The edition of that read, when picked. |
+| first_seen_at, last_seen_run_id, removed_at, last_raw_page_id | | Bookkeeping. |
+
+### `stg_hardcover_books`
+The book itself, refreshed on every sync.
+
+| Column | Type | Meaning |
+|---|---|---|
+| book_id | INTEGER PK | Hardcover's book id. |
+| title, subtitle, slug | TEXT | As on Hardcover. |
+| pages, audio_seconds, release_year | INTEGER | The book's usual length and first year. |
+| rating, ratings_count | REAL, INTEGER | The Hardcover average (0 to 5) and how many rated it. |
+| literary_type_id | INTEGER | 1 fiction, 2 nonfiction, NULL when not set. |
+| image_url | TEXT | The cover. |
+| authors_json | TEXT | `[{"id", "name"}]` for contributions credited as author, in order (illustrators and translators left out). |
+| genres_json, moods_json | TEXT | The top five genre and mood tags readers gave the book, most tagged first. |
+| last_raw_page_id, updated_at | | Bookkeeping. |
+| similar_json | TEXT | For books in my library: the first 20 of Hardcover's similar books (ids), most similar first. The book suggestion candidates. |
+| description | TEXT | From a details lookup (`graphql:Books`, mode `enrich`): the book's description as plain text. |
+| users_count, users_read_count | INTEGER | How many Hardcover readers have it, and have read it. |
+| details_at | TEXT | When the details lookup last ran (UTC); refreshed after 30 days. Suggestions also include books only known from these lookups, not in my library. |
+
+## Staging: TMDB
+
+Films and TV come from my TMDB account: ratings (0.5 to 10, in halves), watchlist, and favorites, read whole on every sync (mode `full`), plus details for each title (mode `enrich` when fetched for suggestions). TMDB keeps when I rated something, not when I watched it, so nothing here says "watched". The account token comes from approving the app on themoviedb.org and is kept in the credential store, never in the database.
+
+### `stg_tmdb_account_ratings`
+
+| Column | Type | Description |
+|---|---|---|
+| media_type | TEXT PK | `movie` or `tv`. |
+| tmdb_id | INTEGER PK | TMDB's ID. |
+| season, episode | INTEGER PK | `0` for a film or a show (no NULLs in the key). Episode ratings aren't read yet. |
+| title | TEXT | As listed. |
+| rating | REAL | My rating, 0.5 to 10. |
+| rated_at | TEXT | When I rated it (UTC). Becomes a `rated` event. |
+| first_seen_at, last_seen_run_id, removed_at, last_raw_page_id | | As in the other staging tables: a full read that no longer has a rating sets `removed_at`. |
+
+### `stg_tmdb_account_lists`
+Watchlist and favorites membership. Key: `(media_type, tmdb_id, list_name)`, where `list_name` is `watchlist` or `favorites`. Columns: title, last_seen_run_id, removed_at.
+
+### `stg_tmdb_movies`, `stg_tmdb_tv`
+Details per title: title (name), original title, release or first air date, runtime (episode run time for TV), the TMDB average and vote count, poster path, genres (`genres_json`), directors (`directors_json`, films) or creators (`creators_json`, TV), seasons and episodes and networks (TV), `raw_page_id`, and `fetched_at` (`''` while only a list entry is known; refreshed after 30 days). Films also keep TMDB's `overview` and `popularity`; films fetched before those were kept get them back from their stored raw response.
+
+### `stg_tmdb_movie_recommendations`
+TMDB's recommendations for films I rated above my own average: the film suggestion candidates. Key `(tmdb_id, recommended_id)`, plus recommended_title and position (0 is TMDB's first). `stg_tmdb_fetches` records when each list was fetched, so it's asked again only after 30 days.
 
 ---
 
@@ -411,15 +514,17 @@ Tags on items.
 | event_id | INTEGER PK | Surrogate key. |
 | item_id | INTEGER FK | The track or anime. |
 | source | TEXT | Source of the event. |
-| event_type | TEXT | `play` (Last.fm), `watch_started`, `watch_finished` (MAL). |
+| event_type | TEXT | `play` (Last.fm), `watch_started`, `watch_finished`, `episode_watched` (MAL), `read_finished` (Hardcover), `rated` (TMDB). |
 | occurred_at_utc | TEXT | When it happened. For day, month, or year precision, it's the calendar date I entered with time `00:00:00`, and that date has no time zone. |
 | occurred_at_unix | INTEGER | Unix seconds when the exact moment is known. NULL for date-only events. |
 | time_precision | TEXT | `second`, `day`, `month`, or `year`. |
-| time_basis | TEXT | Where the time came from: `source_timestamp` (Last.fm scrobble time), `user_entered` (a MAL date I typed), or `fallback_list_updated_at` (see below). |
+| time_basis | TEXT | Where the time came from: `source_timestamp` (Last.fm scrobble time), `user_entered` (a date I typed on MAL or Hardcover), `fallback_list_updated_at` (see below), `observed_list_updated_at` (episodes, see below), or `rating_created_at` (TMDB). |
 | capture_scope | TEXT | Last.fm: the profile's capture scope at the time the play was synced. Changing the setting later doesn't relabel old plays. MAL: `self_reported`. |
-| source_event_key | TEXT | Dedupe key, unique per source. Last.fm: `uts\|artist\|track`. MAL: `{anime_id}:started` or `{anime_id}:finished`. |
+| source_event_key | TEXT | Dedupe key, unique per source. Last.fm: `uts\|artist\|track`. MAL: `{anime_id}:started`, `{anime_id}:finished`, or `{anime_id}:ep:{w or r1, r2, ...}:{episode}`. Hardcover: `{user_book_id}:read:{read_id}` per read-through, or `{user_book_id}:read` for a book marked read with only a last read date. TMDB: `{movie or tv}:{id}:rated`. |
 
-**About `fallback_list_updated_at`:** when a completed MAL entry has no finish date, its `watch_finished` event uses the last time I edited the entry. That's an upper bound, not the real finish date. Most of these stand-in dates land on one bulk-edit day, so for timelines, filter to `user_entered` or treat fallbacks as "finished on or before." Fallbacks are never skipped. Start dates have no fallback.
+**About `fallback_list_updated_at`:** when a completed MAL entry has no finish date, its `watch_finished` event uses the last time I edited the entry. That's an upper bound, not the real finish date. Most of these stand-in dates land on one bulk-edit day, so for timelines, filter to `user_entered` or treat fallbacks as "finished on or before." Fallbacks are never skipped. Start dates have no fallback. Monthly recaps and "this month" numbers count a fallback only when that edit happened after the profile's first MAL sync (seen close to when it happened); all-time numbers count every one.
+
+**About episodes:** MAL keeps only how many episodes I've watched, not when. When a sync sees the count go up, it records one `episode_watched` event per new episode, dated at the entry's last edit (an upper bound). A first sync records none. Periods before this tracking count a finished show's episodes in the month it finished.
 
 ### `core_curation`
 **What I chose to save or list.**
@@ -429,10 +534,10 @@ Tags on items.
 | curation_id | INTEGER PK | Surrogate key. |
 | item_id | INTEGER FK | The item. |
 | source | TEXT | Source. |
-| curation_type | TEXT | `list_status` (MAL). Later `favorite`, `loved`, `list_member`, `shelf`. |
-| list_name | TEXT | For named lists later. `''` when not applicable. |
-| value | TEXT | For `list_status`: `watching`, `completed`, `on_hold`, `dropped`, `plan_to_watch`. |
-| progress | INTEGER | Episodes watched. Later pages read, and so on. |
+| curation_type | TEXT | `list_status` (MAL and Hardcover), `owned` (Hardcover, when I own a copy), `watchlist` and `favorite` (TMDB). |
+| list_name | TEXT | `''` (no source uses named lists yet). |
+| value | TEXT | For `list_status`: `watching`, `completed`, `on_hold`, `dropped`, `plan_to_watch` (MAL), or `want_to_read`, `reading`, `read`, `paused`, `did_not_finish`, `ignored` (Hardcover). |
+| progress | INTEGER | Episodes watched, or pages for a book I've read. |
 | progress_total | INTEGER | Total episodes. NULL if unknown. |
 | is_repeat | INTEGER | 1 if currently rewatching. |
 | repeat_count | INTEGER | Number of completed rewatches. |
@@ -508,9 +613,26 @@ The suggestions in a run, best first.
 
 | Column | Type | Description |
 |---|---|---|
-| kind | TEXT PK | `anime` or `artist`. |
-| item_key | TEXT PK | MAL anime ID or Last.fm artist key. |
+| kind | TEXT PK | `anime`, `artist`, or `film`. |
+| item_key | TEXT PK | MAL anime ID, Last.fm artist key, or TMDB film ID. |
 | dismissed_at | TEXT | When it was dismissed (UTC). |
+
+---
+
+## Recaps
+
+### `recap_runs`
+One row per recap the app made by itself (the Rev page). A month's recap is made on the first launch or sync after the month ends and rebuilt during the next 14 days whenever its numbers change; after that it's final. Years work the same way, in January.
+
+| Column | Type | Description |
+|---|---|---|
+| period_kind | TEXT PK | `month` or `year`. |
+| period_key | TEXT PK | `YYYY-MM` or `YYYY`. |
+| built_at | TEXT | When it was last made (UTC). |
+| fingerprint | TEXT | SHA-256 of the numbers on the cards. A rebuild happens only when it changes. |
+| cards | INTEGER | How many cards it has. |
+| final | INTEGER | 1 once the late-data window has passed: no more automatic rebuilds. |
+| announced | INTEGER | 1 once the Dashboard banner has mentioned it. |
 
 ---
 
@@ -535,5 +657,7 @@ All views read from core, plus `app_settings` through `rpt_settings`. Every Last
 | `rpt_lastfm_top_tracks_by_month` | local_month, play_rank (`top_n_per_month`, default 10), track, artist, plays, data_scope, capture_scopes |
 | `rpt_lastfm_by_hour` | local_hour (all 24), plays, pct_of_plays, data_scope, capture_scopes |
 | `rpt_lastfm_by_weekday` | local_weekday_num, weekday (all 7), plays, pct_of_plays, data_scope, capture_scopes |
+| `rpt_hardcover_books` | item_id, title, first_published, status, my_stars, hardcover_average, hardcover_ratings, stars_diff, vs_average (`higher`, `level`, or `lower` against the average rounded to the nearest half star; NULL when either is missing), last_read, times_read |
+| `rpt_tmdb_ratings` | item_id, media_type (`film` or `tv_show`), title, release_year, my_rating, tmdb_average, tmdb_votes, rating_diff, rated_at (when I rated it, not when I watched) |
 
 Ties in the ranked views are broken alphabetically, so the order is stable.

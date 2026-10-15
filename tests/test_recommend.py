@@ -425,8 +425,10 @@ def test_refresh_recommendations_end_to_end(conn):
     counts = runner.refresh_recommendations(
         conn, "me", store=store, out=messages.append, client_factory=client_factory, now=NOW_DT
     )
-    assert counts == {"anime": 4, "music_discover": 4, "music_rediscover": 1}
-    assert messages[-1] == ("Recommendations ready: 4 anime, 4 new artists, 1 to rediscover.")
+    assert counts == {"anime": 4, "music_discover": 4, "music_rediscover": 1, "film": 0, "book": 0}
+    assert messages[-1] == (
+        "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover, 0 films, 0 books."
+    )
     # Suggested artists without a played album get their top album's cover.
     discover, _, _ = recommend.latest(conn, "music_discover")
     covers = {r.title: r.image_url for r in discover}
@@ -453,10 +455,25 @@ def test_refresh_without_data_is_empty_not_an_error(conn):
         conn, "me", store=SecretStore(backend=FakeKeyring()), out=quiet,
         now=datetime(2026, 10, 1, tzinfo=timezone.utc),
     )  # fmt: skip
-    assert counts == {"anime": 0, "music_discover": 0, "music_rediscover": 0}
+    assert counts == {"anime": 0, "music_discover": 0, "music_rediscover": 0, "film": 0, "book": 0}
 
 
 def test_reasons_read_like_sentences(conn, anime_world):
     _, recs = anime_keys(conn)
     assert recs[206].reasons == ["Because you really liked Example Action F."]
     assert recs[206].facts["details"] == ["1 MAL user who liked Example Action F recommends this."]
+
+
+def test_summaries_are_plain_and_short():
+    from taste import enrich
+
+    assert recommend.short_count(999) == "999"
+    assert recommend.short_count(1234) == "1.2k" and recommend.short_count(3_400_000) == "3.4M"
+    assert recommend.short_count(2000) == "2k"
+    bio = 'Example Band &amp; co. <a href="https://www.last.fm/music/x">Read more on Last.fm</a>'
+    assert enrich.plain_bio(bio) == "Example Band & co."
+    assert enrich.plain_bio('<a href="x">Read more on Last.fm</a>') is None
+    long = "First sentence here. " * 80
+    trimmed = recommend.about_text(long)
+    assert len(trimmed) <= recommend.ABOUT_MAX and trimmed.endswith(".")
+    assert recommend.about_text("A story.\n\n[Written by MAL Rewrite]") == "A story."

@@ -313,6 +313,14 @@ def delete_event(conn: sqlite3.Connection, source: str, source_event_key: str) -
     )
 
 
+def delete_events_with_prefix(conn: sqlite3.Connection, source: str, key_prefix: str) -> None:
+    """Delete a source's events whose key starts with `key_prefix` (one show's episodes)."""
+    conn.execute(
+        "DELETE FROM core_behavior_events WHERE source = ? AND substr(source_event_key, 1, ?) = ?",
+        (source, len(key_prefix), key_prefix),
+    )
+
+
 def upsert_curation(
     conn: sqlite3.Connection,
     *,

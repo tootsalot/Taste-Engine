@@ -181,3 +181,52 @@ def test_long_names_end_in_an_ellipsis(font):
     assert len(lines) == 2 and lines[1].endswith("…")
     assert all(metrics.horizontalAdvance(line) <= 104 for line in lines)
     assert elided_lines("Monster", font, 104, 2) == "Monster"
+
+
+def test_tooltips_show_api_text_as_written():
+    from taste.desktop.widgets import plain_tip
+
+    assert plain_tip("") == ""
+    assert plain_tip("<b>Example</b> & co\nline two") == (
+        "<qt>&lt;b&gt;Example&lt;/b&gt; &amp; co<br>line two</qt>"
+    )
+
+
+def test_sparse_labels_land_on_their_own_bars(qtbot):
+    from taste.desktop.widgets import BarChart
+
+    chart = BarChart()
+    qtbot.addWidget(chart)
+    chart.resize(300, 200)
+    labels = [f"{(i + 1) // 2}" if i % 2 == 1 else "" for i in range(20)]
+    chart.set_data(list(range(1, 21)), labels)
+    shown = [text for _, _, text in chart.axis_labels()]
+    assert shown and all(shown) and shown[0] == "1"
+
+
+def test_deleting_a_widget_mid_fade_warns_about_nothing(qtbot, monkeypatch):
+    from PySide6.QtCore import QEventLoop, QTimer, qInstallMessageHandler
+    from PySide6.QtWidgets import QWidget
+
+    from taste.desktop import motion
+
+    monkeypatch.setattr(motion, "override", "full")
+    messages = []
+    previous = qInstallMessageHandler(lambda mode, context, text: messages.append(text))
+    try:
+        parent = QWidget()
+        qtbot.addWidget(parent)
+        parent.show()
+        children = [QWidget(parent) for _ in range(5)]
+        for child in children:
+            child.show()
+        motion.fade_in(children)
+        motion.fade_out(children[0], lambda: None)
+        for child in children:
+            child.deleteLater()
+        loop = QEventLoop()
+        QTimer.singleShot(500, loop.quit)
+        loop.exec()
+    finally:
+        qInstallMessageHandler(previous)
+    assert not [m for m in messages if "animation" in m]

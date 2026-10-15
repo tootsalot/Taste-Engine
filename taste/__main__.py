@@ -112,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sync = sub.add_parser("sync", help="pull data from a source")
-    sync.add_argument("source", choices=["mal", "lastfm", "all"])
+    sync.add_argument("source", choices=["mal", "lastfm", "tmdb", "hardcover", "all"])
     rep = sub.add_parser("report", help="print a summary and write CSV files")
     rep.add_argument("--out", type=Path, help="folder for CSV files (default reports/<profile>)")
     sub.add_parser("status", help="row counts and last sync per source")

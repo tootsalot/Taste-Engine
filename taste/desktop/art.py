@@ -11,6 +11,7 @@ first letter) until its picture arrives, and keeps it if the picture can't be ha
 
 from __future__ import annotations
 
+import contextlib
 import traceback
 
 from PySide6.QtCore import QObject, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal
@@ -26,7 +27,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from taste import images
-from taste.desktop import theme
+from taste.desktop import motion, theme
+from taste.desktop.widgets import plain_tip
 
 MEMORY_CACHE_KB = 20 * 1024
 THREADS = 4
@@ -66,7 +68,9 @@ class _Job(QRunnable):
         except Exception:
             traceback.print_exc()  # a bug, not a missing picture: keep it visible in a console
         # Signals emitted here are delivered on the UI thread (the loader lives there).
-        self.loader._finished.emit(self.key, image)
+        # The loader can be deleted while a picture decodes (the app closing).
+        with contextlib.suppress(RuntimeError):
+            self.loader._finished.emit(self.key, image)
 
 
 class ArtLoader(QObject):
@@ -136,6 +140,8 @@ class ArtTile(QWidget):
         self.fallback: str | None = None
         self.letter = ""
         self._pixmap: QPixmap | None = None
+        self._opacity = 1.0  # below 1 while a picture that just arrived fades in
+        self._fade = None
         self.setFixedSize(size)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         loader.loaded.connect(self._on_loaded)
@@ -145,11 +151,25 @@ class ArtTile(QWidget):
         """`fallback` is tried when `url` can't be had (missing, refused, too big)."""
         self.url = url
         self.fallback = fallback
+        self._opacity = 1.0
         self.letter = (title.strip()[:1] or "?").upper()
-        self.setToolTip(title)
+        self.setToolTip(plain_tip(title))
         self._pixmap = self.loader.pixmap(url, self.art_size)
         if self._pixmap is None and not self._waiting():
             self._use_fallback()
+        self.update()
+
+    def set_size(self, size: QSize) -> None:
+        """Show the picture at a new size. The old one is drawn scaled until the new
+        one is decoded, so growing a shelf never flashes the placeholder."""
+        if size == self.art_size:
+            return
+        self.art_size = QSize(size)
+        self.setFixedSize(size)
+        if self.url:
+            found = self.loader.pixmap(self.url, self.art_size)
+            if found is not None:
+                self._pixmap = found
         self.update()
 
     def has_picture(self) -> bool:
@@ -166,8 +186,19 @@ class ArtTile(QWidget):
 
     def _on_loaded(self, key: str) -> None:
         if self.url and key == cache_key(self.url, self.art_size):
+            first = self._pixmap is None
             self._pixmap = self.loader.pixmap(self.url, self.art_size)
+            if first and self.isVisible():
+                # Arrived after the placeholder was on screen: fade it in over it.
+                self._opacity = 0.0
+                self._fade = motion.tween(
+                    0.0, 1.0, self._set_opacity, motion.duration(260), owner=self
+                )
             self.update()
+
+    def _set_opacity(self, value: float) -> None:
+        self._opacity = value
+        self.update()
 
     def _on_failed(self, key: str) -> None:
         if self.url and key == cache_key(self.url, self.art_size):
@@ -182,6 +213,9 @@ class ArtTile(QWidget):
         clip = QPainterPath()
         clip.addRoundedRect(rect, self.radius, self.radius)
         painter.setClipPath(clip)
+        if self._pixmap is not None and self._opacity < 1.0:
+            self._paint_placeholder(painter, rect)
+            painter.setOpacity(self._opacity)
         if self._pixmap is not None:
             # Fill the box, cropping the overflow evenly (posters and square covers differ).
             pm = self._pixmap
@@ -190,6 +224,9 @@ class ArtTile(QWidget):
             target = QRectF((rect.width() - w) / 2, (rect.height() - h) / 2, w, h)
             painter.drawPixmap(target, pm, QRectF(pm.rect()))
             return
+        self._paint_placeholder(painter, rect)
+
+    def _paint_placeholder(self, painter: QPainter, rect: QRectF) -> None:
         painter.fillRect(rect, QColor(theme.RAISED))
         painter.setPen(self.accent)
         painter.setFont(theme.heading_font(max(int(min(rect.width(), rect.height()) / 3), 10)))

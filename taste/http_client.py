@@ -45,6 +45,8 @@ class Transport(Protocol):
 
     def get(self, url: str, **kwargs: Any) -> Any: ...
 
+    def request(self, method: str, url: str, **kwargs: Any) -> Any: ...
+
 
 # A checker inspects a parsed response and raises ApiError if it's an error.
 ResponseChecker = Callable[[int, Any], None]
@@ -105,13 +107,36 @@ class HttpClient:
         params: dict[str, Any] | None,
         headers: dict[str, str] | None,
         checker: ResponseChecker,
+        method: str = "GET",
+        body: dict[str, Any] | None = None,
+        form: dict[str, Any] | None = None,
     ) -> tuple[Response | None, ApiError | None, float | None]:
         """One request. Returns (response, None, None) or (None, error, retry_after)."""
         self._throttle()
         try:
-            resp = self.transport.get(
-                url, params=params, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS
-            )
+            if method == "GET":
+                resp = self.transport.get(
+                    url, params=params, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS
+                )
+            elif form is not None:
+                # Form-encoded (OAuth token endpoints want this, not JSON).
+                resp = self.transport.request(
+                    method,
+                    url,
+                    params=params,
+                    data=form,
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+            else:
+                resp = self.transport.request(
+                    method,
+                    url,
+                    params=params,
+                    json=body,
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
         except (requests.Timeout, requests.ConnectionError) as exc:
             # Only the exception type is kept. Its message includes the URL, which can hold a key.
             return None, ApiError(f"network error: {type(exc).__name__}", retryable=True), None
@@ -144,9 +169,26 @@ class HttpClient:
         checker: ResponseChecker = default_checker,
     ) -> Response:
         """GET a JSON resource, retrying retryable failures with exponential backoff."""
+        return self.request_json("GET", url, params=params, headers=headers, checker=checker)
+
+    def request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+        form: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        checker: ResponseChecker = default_checker,
+    ) -> Response:
+        """Any method with an optional JSON body (TMDB's sign-in uses POST and DELETE), or
+        a form-encoded one (`form`, for OAuth token endpoints)."""
         last_error: ApiError | None = None
         for attempt in range(self.max_retries + 1):
-            response, error, retry_after = self._attempt(url, params, headers, checker)
+            response, error, retry_after = self._attempt(
+                url, params, headers, checker, method, body, form
+            )
             if response is not None:
                 return response
             assert error is not None

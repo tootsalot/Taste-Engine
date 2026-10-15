@@ -19,7 +19,10 @@ from typing import Any
 from taste.db import TIMESTAMP_FORMAT, utc_now
 
 # Request parameters that must never be stored.
-SECRET_PARAMS = {"api_key", "api_sig", "sk", "token", "client_id"}
+SECRET_PARAMS = {
+    "api_key", "api_sig", "sk", "token", "client_id", "request_token", "access_token",
+    "refresh_token", "code", "code_verifier",
+}  # fmt: skip
 
 # Staging columns that point at raw pages. A referenced page is never deleted.
 REFERENCES = [
@@ -27,6 +30,13 @@ REFERENCES = [
     ("stg_mal_anime", "last_raw_page_id"),
     ("stg_mal_list_entries", "last_raw_page_id"),
     ("stg_mal_anime_details", "raw_page_id"),
+    ("stg_hardcover_user_books", "last_raw_page_id"),
+    ("stg_hardcover_reads", "last_raw_page_id"),
+    ("stg_hardcover_books", "last_raw_page_id"),
+    ("stg_lastfm_artist_info", "raw_page_id"),
+    ("stg_tmdb_account_ratings", "last_raw_page_id"),
+    ("stg_tmdb_movies", "raw_page_id"),
+    ("stg_tmdb_tv", "raw_page_id"),
 ]
 
 

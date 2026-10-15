@@ -117,7 +117,7 @@ def on_repeat(
     return [Album(title=r[0], artist=r[1], plays=r[2], cover_url=r[3]) for r in rows]
 
 
-def genre_lean(conn: sqlite3.Connection, n: int = 3) -> tuple[list[GenreLean], list[GenreLean]]:
+def genre_lean(conn: sqlite3.Connection, n: int = 10) -> tuple[list[GenreLean], list[GenreLean]]:
     """(most generous, harshest) genres against the MAL community, n of each.
 
     Same numbers as the Reports page, so only genres with at least the minimum

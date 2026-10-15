@@ -21,8 +21,24 @@ from typing import Any
 from taste.profiles import profiles_dir, validate_id
 
 SERVICE = "taste-engine"
-KEY_NAMES = ("MAL_CLIENT_ID", "LASTFM_API_KEY")
-KEY_LABELS = {"MAL_CLIENT_ID": "MyAnimeList client ID", "LASTFM_API_KEY": "Last.fm API key"}
+# Keys typed in on the Settings page.
+KEY_NAMES = ("MAL_CLIENT_ID", "LASTFM_API_KEY", "TMDB_READ_TOKEN")
+KEY_LABELS = {
+    "MAL_CLIENT_ID": "MyAnimeList client ID",
+    "LASTFM_API_KEY": "Last.fm API key",
+    "TMDB_READ_TOKEN": "TMDB API read access token",
+}
+# Stored the same way, but never typed in: what connecting a TMDB or Hardcover account
+# returns. Hardcover's refresh token changes every time it's used, so a refresh saves
+# the new pair before anything else.
+ACCOUNT_NAMES = (
+    "TMDB_USER_TOKEN",
+    "TMDB_ACCOUNT_ID",
+    "HARDCOVER_ACCESS_TOKEN",
+    "HARDCOVER_REFRESH_TOKEN",
+    "HARDCOVER_TOKEN_EXPIRES",
+)
+STORED_NAMES = KEY_NAMES + ACCOUNT_NAMES
 
 
 class SecretStoreError(RuntimeError):
@@ -107,7 +123,7 @@ class SecretStore:
 
     def delete_all(self, profile_id: str) -> None:
         validate_id(profile_id)
-        for name in KEY_NAMES:
+        for name in STORED_NAMES:
             self.delete(profile_id, name)
         self._file(profile_id).unlink(missing_ok=True)
 
@@ -116,7 +132,7 @@ class SecretStore:
     @staticmethod
     def _check(profile_id: str, name: str) -> None:
         validate_id(profile_id)
-        if name not in KEY_NAMES:
+        if name not in STORED_NAMES:
             raise SecretStoreError(f"Unknown key name: {name}")
 
     def _get_stored(self, profile_id: str, name: str) -> str | None:

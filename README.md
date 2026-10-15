@@ -1,10 +1,10 @@
 # Taste Engine
 
-A desktop app that pulls my anime list (MyAnimeList) and listening history (Last.fm) into one SQLite database, shows how my taste compares to everyone else's, and suggests what to watch and listen to next. It runs on my own computer and keeps everything there.
+A desktop app that pulls my anime list (MyAnimeList), listening history (Last.fm), books (Hardcover), and film and TV ratings (TMDB) into one SQLite database, shows how my taste compares to everyone else's, suggests what to watch and listen to next, and makes a recap of every month and year. It runs on my own computer and keeps everything there.
 
 ```mermaid
 flowchart LR
-    APIs[MAL + Last.fm APIs] --> Raw[raw pages] --> Staging[per-source tables] --> Core[shared model] --> Out[reports, recommendations, desktop app]
+    APIs[MAL, Last.fm, Hardcover, TMDB APIs] --> Raw[raw pages] --> Staging[per-source tables] --> Core[shared model] --> Out[reports, recommendations, desktop app]
 ```
 
 ## Run it
@@ -22,19 +22,23 @@ python -m taste.desktop
 ## Use it
 
 1. Create a profile. Each profile has its own keys, settings, and data.
-2. On **Settings**, enter your usernames and API keys: a [MAL client ID](https://myanimelist.net/apiconfig) and a [Last.fm API key](https://www.last.fm/api/account/create). Use **Test connection** to check them. Settings opens in **Simple**, with the everyday settings and a sentence under each saying what it does; **Advanced** adds report limits, syncing, and storage.
+2. On **Settings**, I enter my usernames and API keys: a [MAL client ID](https://myanimelist.net/apiconfig) and a [Last.fm API key](https://www.last.fm/api/account/create). Use **Test connection** to check them. Settings opens in **Simple**, with the everyday settings and a sentence under each saying what it does; **Advanced** adds report limits, syncing, and storage.
+   For books, **Connect my Hardcover account…** opens [Hardcover](https://hardcover.app/) in the browser to approve read-only access, and the app picks up where the browser sends me back. Goodreads closed its public API in 2020, but Hardcover can import a Goodreads export, and from then on its API keeps everything current. For films and TV, I save a free TMDB read access token there, then **Connect my TMDB account…**, which also opens the browser to approve read-only access.
+   Settings also has **Motion**: Full (pages fade and rise, panels slide, pictures fade in), Reduced (quick fades only), or Off. When Windows' own animation effects are off, the app doesn't animate either.
 3. On the **Dashboard**, click **Sync everything**. The first time, it also fetches what the recommendations need, which takes a few minutes for a big list. After that it's seconds.
-4. The **Dashboard** shows what I finished lately, the albums on repeat this month, how I score compared to the MAL crowd, and which genres I'm most generous or harshest with.
-5. **For You** has anime suggestions, each with a predicted score for me next to the MAL mean, the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, labeled Strong match, Good match, or Worth a try, and old favorites to rediscover.
-6. **Reports** is all charts: my average score for shows at each level of the MAL mean, where I tend to drop shows, genres I rate closest to and furthest below MAL, plays per week, month, or year (as many as fit the window), top artists and tracks, and plays by hour and day. Short charts show their counts and long ones a scale. The numbers behind them are in **Export CSV**, one report at a time or all at once.
+4. The **Dashboard** opens with **Your taste**: a one-line description of me worked out from all of it ("The night-owl, tough-grading anime fan with a soft spot for fantasy"), and the traits behind it, each with its number, like "41% of plays between 10 PM and 4 AM". Fixed rules, no AI service; a medium without enough data says nothing. Below it: what I finished lately, the albums on repeat this month, how I score compared to the MAL crowd, which genres I'm most generous or harshest with, plays per week, and this month so far. Once books and films are in, their shelves join it. The cards share the window's height, so full screen gives bigger posters and more genres instead of empty space, and a new profile gets a short getting-started panel instead of empty cards.
+5. **For You** is a grid of picks with a panel beside it for the one I've clicked. The panel says what the pick is (MAL's synopsis, the artist's Last.fm bio, the film's TMDB overview, or the book's Hardcover description) and how popular it is (MAL members and rank, Last.fm listeners, TMDB votes, Hardcover readers). Anime suggestions each come with a predicted score for me next to the MAL mean, the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, labeled Strong match, Good match, or Worth a try, and old favorites to rediscover. **Films** works like anime: TMDB's recommendations for the films I rated highest, each with a predicted rating for me next to the TMDB average. **Books** too: Hardcover's similar books for the ones I rated highest (plus my Want to Read), with predicted stars next to the Hardcover average.
+6. **Reports** is all charts, one page per medium under Reports in the sidebar, and every page has the same shape: All time or any one year, six numbers across the top, the pictures beside the main chart, three more charts, then the people I keep coming back to. **Anime**: the shows I finished with my score on each, my average for shows at each level of the MAL mean, my scores 1 to 10, genres I rate closest to and furthest below MAL, where I tend to drop shows, and the studios I watch most. **Music**: the albums I played most, plays per week, month, or year (as many as fit the window), top tracks, plays by hour and day, and my top artists with their plays month by month. **Books** borrows from Hardcover's own stats page, for all time or any one year: books, pages, and hours listened, the covers I read (rereads marked), books per year, genres and moods, fiction against nonfiction and paper against ebook and audio, my stars in half steps next to Hardcover's average, book lengths, and my most read authors with my stars for each of their books in reading order. **Films and TV** works like Books, for all time or a year: films and shows rated, hours of film, my average against TMDB's, the posters with my rating on each, my ratings (Films or TV), genres, decades, and the directors I keep coming back to. Short charts show their counts and long ones a scale. The tiles across the top get a second line (like "+4 finished this month") and, for points against MAL, a small line by year. The numbers behind everything are in **Export CSV**, one report at a time or all at once.
+7. **Rev** is my month or year as a deck of up to seven phone-sized cards, swiped through with the arrows (or the arrow keys): the month at a glance, my music (plays, about how many hours, top artists and albums), when I listened, shows finished and how I scored them against MAL, books, films and TV, and a last card comparing it with the month before plus one closing sentence. Each recap makes itself after its month ends (on the next launch or sync) and keeps itself up to date for two weeks while late plays and dates come in, and the Dashboard says when one is ready. **Save this card** asks for a folder the first time and saves straight there after that; **Save all** saves the whole deck. Nothing is uploaded; sharing a card is up to me.
 
-The sidebar collapses to icons with the button at its top or **Ctrl+B**, and the app remembers which way I left it. Settings sits at the bottom, with when I last synced just above it.
+The sidebar has Dashboard, For You, and Rev at the top, then the four report pages under **Reports**. It collapses to icons with the button at its top or **Ctrl+B**, and the app remembers which way I left it. Settings sits at the bottom, with when I last synced just above it.
 
-Keys are stored in Windows Credential Manager, never in plain text on Windows or macOS, and never shown again after saving. Data lives in `%LOCALAPPDATA%\taste-engine` for the packaged app, or `data/` when run from source.
+Keys and sign-in tokens are stored in Windows Credential Manager, never in plain text, and never shown again after saving. Data lives in `%LOCALAPPDATA%\taste-engine` for the packaged app, or `data/` when run from source.
 
 There's also a command line:
 ```
 python -m taste --profile me sync all
+python -m taste --profile me sync hardcover
 python -m taste --profile me report
 python -m taste --profile me status
 python -m taste profiles
@@ -61,18 +65,22 @@ The reason on each card names the shows I liked that point to it, using English 
 - **Tracks are matched by artist and title**, because MusicBrainz IDs are often missing. Different spellings of the same song count as different tracks.
 - **Last.fm has no artist photos.** It returns the same blank image for every artist, so an artist's picture is the cover of their most played album (or their top album, for artists I've never played). When Last.fm has no cover at all, the picture is a photo from Deezer, and a Deezer photo also stands in when a cover can't be downloaded. Only an exact name match counts, so a few artists still get a lettered placeholder rather than a photo of someone else.
 - **Music suggestions only know what Last.fm thinks is similar.** They come from Last.fm's similar artists, weighted by how much and how recently I play each artist.
+- **Hours of music are estimates.** Scrobbles have no length, so the app looks lengths up on Last.fm for the tracks in recent months, and a track without a known length counts as a typical one. That's why it always says "about".
+- **MAL doesn't keep a watch history.** For episodes per month, the app notes each time a sync sees my episode count go up. Before that, a finished show's episodes all count in the month it finished.
+- **Book dates are whatever I entered on Hardcover.** A book counts in a month or year only if a read of it has a finish date. Books marked read with no date at all count in All time only, and the page says how many. Genres and moods are what Hardcover's readers tagged, so a book nobody tagged has none.
+- **TMDB knows when I rated something, not when I watched it.** Films and TV are counted by the day I rated them and always say "rated", and rewatches aren't known.
 - **No matching across sources yet** (for example an anime and its soundtrack).
 
 ## Credits
 
 - Built with Python and [Qt for Python](https://doc.qt.io/qtforpython/) (PySide6, used under the LGPL 3.0), plus [requests](https://requests.readthedocs.io/), [keyring](https://github.com/jaraco/keyring), [python-dotenv](https://github.com/theskumar/python-dotenv), and [tzdata](https://github.com/python/tzdata).
 - Fonts: [Space Grotesk](https://github.com/floriankarsten/space-grotesk) and [Inter](https://rsms.me/inter/), both under the SIL Open Font License.
-- Anime data and posters come from [MyAnimeList](https://myanimelist.net/), music data and album covers from [Last.fm](https://www.last.fm/), and artist photos from [Deezer](https://www.deezer.com/) when Last.fm has none. Taste Engine isn't affiliated with any of them.
+- Anime data and posters come from [MyAnimeList](https://myanimelist.net/), music data and album covers from [Last.fm](https://www.last.fm/), artist photos from [Deezer](https://www.deezer.com/) when Last.fm has none, books and their covers from [Hardcover](https://hardcover.app/), and film and TV data and posters from [TMDB](https://www.themoviedb.org/). Taste Engine isn't affiliated with any of them. This product uses the TMDB API but is not endorsed or certified by TMDB.
 - The Windows download includes the full license texts in `THIRD_PARTY_NOTICES.txt`.
 
 ## Privacy
 
-Everything the app collects stays in files on my computer. It talks to three services: MyAnimeList and Last.fm, with my usernames and API keys, to fetch my list and plays; and Deezer's public artist search, which gets the names of suggested artists (no key or account) to find their photos. Pictures are downloaded only from those services' image servers. Nothing else leaves the computer.
+Everything the app collects stays in files on my computer, recaps included. It talks to these services: MyAnimeList and Last.fm, with my usernames and API keys, to fetch my list and plays (and the synopses, bios, and counts for suggestions); TMDB and Hardcover, with the tokens from approving the app (read-only), to read my ratings, lists, and library; and Deezer's public artist search, which gets the names of suggested artists (no key or account) to find their photos. Hardcover's sign-in comes back to the app through a one-time listener on 127.0.0.1, which closes as soon as it's done. Pictures are downloaded only from those services' image servers. Nothing else leaves the computer.
 
 ## More
 

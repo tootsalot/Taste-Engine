@@ -54,7 +54,7 @@ ANIME_TYPES = {
 }
 
 # Headings on the Settings page, in order. Every setting names one.
-GROUPS = ["Profile", "Last.fm", "Reports", "Recommendations", "Syncing and storage"]
+GROUPS = ["Profile", "Last.fm", "Reports", "Recommendations", "Recaps", "Syncing and storage"]
 
 
 @dataclass(frozen=True)
@@ -230,6 +230,25 @@ SETTINGS: list[Setting] = [
         minimum=5,
         maximum=200,
         group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
+        "recap_monthly",
+        "Make a recap every month",
+        "bool",
+        True,
+        "After a month ends, make its recap cards by themselves the next time the app opens "
+        "or syncs, and keep them up to date for two weeks while late plays and dates come in.",
+        group="Recaps",
+        advanced=True,
+    ),
+    Setting(
+        "recap_yearly",
+        "Make a recap every year",
+        "bool",
+        True,
+        "The same for each year, made in January.",
+        group="Recaps",
         advanced=True,
     ),
     Setting(

@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 from statistics import mean, quantiles
 from zoneinfo import ZoneInfo
 
-from taste import overview, settings
+from taste import activity, overview, settings
 
 PERIODS = ("week", "month", "year")
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -27,6 +27,9 @@ class Tile:
     value: str
     caption: str
     kind: str  # "anime" or "music": which accent color
+    detail: str = ""  # a second, smaller line: "+4 this month"
+    trend: tuple[float, ...] = ()  # a tiny line beside the number, oldest first
+    trend_tip: str = ""  # what the tiny line shows, on hover
 
 
 @dataclass(frozen=True)
@@ -42,21 +45,17 @@ class Band:
 
 @dataclass
 class ReportData:
-    tiles: list[Tile]
-    bands: list[Band]
     usual: float | None  # my average difference from the MAL mean
     generous: list[overview.GenreLean]
     harsh: list[overview.GenreLean]
     drops: list[int]  # dropped shows by how far in I stopped: 0 to 9%, 10 to 19%, ...
     periods: dict[str, list[tuple[str, int]]]  # plays per week, month, year (plays_by_period)
     partial: dict[str, bool]  # whether each series ends in the period in progress
-    top_artists: list[tuple[str, int]]
-    top_tracks: list[tuple[str, str, int]]  # track, artist, plays
-    hours: list[int]  # 24, local time
-    weekdays: list[tuple[str, int]]  # Sunday first
     scope_note: str = ""
     mixed_scopes: bool = False
     tz_name: str = ""
+    has_books: bool = False  # the Books page loads its own numbers (taste.bookstats)
+    has_screen: bool = False  # the Films and TV page loads its own (taste.screenstats)
 
 
 def score_bands(points: list[tuple[float, float]]) -> list[Band]:
@@ -77,28 +76,13 @@ def score_bands(points: list[tuple[float, float]]) -> list[Band]:
 
 
 def load(conn: sqlite3.Connection, now: datetime | None = None) -> ReportData:
+    """What every Reports page shares: the all-time anime parts, plays over time, and the
+    Last.fm scope. Each page loads its own span's numbers (animestats, musicstats,
+    bookstats, screenstats)."""
     summary = conn.execute("SELECT * FROM rpt_mal_critic_summary").fetchone()
     scored = summary["shows_scored"] if summary else 0
-    plays = conn.execute(
-        "SELECT COUNT(*) FROM core_behavior_events WHERE source = 'lastfm' AND event_type = 'play'"
-    ).fetchone()[0]
-    weekdays = [
-        (r["weekday"], r["plays"])
-        for r in conn.execute(
-            "SELECT weekday, plays FROM rpt_lastfm_by_weekday ORDER BY local_weekday_num"
-        )
-    ]
-    busiest = max(weekdays, key=lambda d: d[1], default=("-", 0))
-    tiles = [
-        Tile(f"{scored:,}", "scored shows", "anime"),
-        Tile(
-            f"{summary['avg_diff'] + 0.0:+.2f}" if scored else "-",
-            "points vs the MAL average",
-            "anime",
-        ),
-        Tile(f"{plays:,}", "Last.fm plays", "music"),
-        Tile(busiest[0] if busiest[1] else "-", "busiest day", "music"),
-    ]
+    tz_name = settings.get(conn, "timezone")
+    today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(tz_name)).date()
 
     drops = [0] * 10
     for (pct,) in conn.execute(
@@ -109,49 +93,44 @@ def load(conn: sqlite3.Connection, now: datetime | None = None) -> ReportData:
 
     generous, harsh = overview.genre_lean(conn, n=TOP_SHOWN)
     scope = conn.execute("SELECT * FROM rpt_lastfm_scope").fetchone()
-    tz_name = settings.get(conn, "timezone")
-    today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(tz_name)).date()
     periods, partial = plays_by_period(conn, today)
     return ReportData(
-        tiles=tiles,
-        bands=score_bands(
-            [
-                (r[0], r[1])
-                for r in conn.execute(
-                    "SELECT community_mean, my_score FROM rpt_mal_score_vs_community"
-                )
-            ]
-        ),
         usual=summary["avg_diff"] + 0.0 if scored else None,
         generous=generous,
         harsh=harsh,
         drops=drops,
         periods=periods,
         partial=partial,
-        top_artists=[
-            (r[0], r[1])
-            for r in conn.execute(
-                "SELECT artist, plays FROM rpt_lastfm_top_artists_all_time "
-                "ORDER BY play_rank LIMIT ?",
-                (TOP_SHOWN,),
-            )
-        ],
-        top_tracks=[
-            (r[0], r[1], r[2])
-            for r in conn.execute(
-                "SELECT track, artist, plays FROM rpt_lastfm_top_tracks_all_time "
-                "ORDER BY play_rank LIMIT ?",
-                (TOP_SHOWN,),
-            )
-        ],
-        hours=[
-            r[0] for r in conn.execute("SELECT plays FROM rpt_lastfm_by_hour ORDER BY local_hour")
-        ],
-        weekdays=[(d[:3], p) for d, p in weekdays],
         scope_note=settings.lastfm_scope_note(conn),
         mixed_scopes=bool(scope and scope["capture_scopes"] == "mixed"),
         tz_name=tz_name,
+        has_books=activity.has_books(conn),
+        has_screen=activity.has_tmdb(conn),
     )
+
+
+TREND_YEARS = 8
+TREND_MIN_SHOWS = 3  # a year with fewer scored finishes than this isn't on the line
+
+
+def diff_by_year(conn: sqlite3.Connection) -> list[tuple[str, float]]:
+    """My average difference from MAL by the year I finished the show, oldest first.
+
+    Uses every finish date, guessed ones included: this is the all-time picture.
+    """
+    rows = conn.execute(
+        "SELECT substr(e.occurred_at_utc, 1, 4) AS year, AVG(sc.score_diff), COUNT(*) "
+        "FROM core_behavior_events e JOIN rpt_mal_score_vs_community sc "
+        "ON sc.item_id = e.item_id WHERE e.source = 'mal' AND e.event_type = 'watch_finished' "
+        "GROUP BY substr(e.occurred_at_utc, 1, 4) ORDER BY year"
+    ).fetchall()
+    found = [(r[0], round(r[1], 2)) for r in rows if r[2] >= TREND_MIN_SHOWS]
+    return found[-TREND_YEARS:]
+
+
+def hour_name(hour: int) -> str:
+    """ "10 PM", "12 AM"."""
+    return f"{hour % 12 or 12} {'AM' if hour < 12 else 'PM'}"
 
 
 def week_start(day: date) -> date:

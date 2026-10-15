@@ -58,6 +58,15 @@ class FakeTransport:
             raise result
         return result
 
+    def request(self, method, url, params=None, json=None, headers=None, timeout=None, data=None):
+        """Other methods reach the handler with "_method" and the JSON or form body in params."""
+        merged = {**dict(params or {}), **dict(json or {}), **dict(data or {}), "_method": method}
+        self.calls.append({"url": url, "params": merged, "headers": dict(headers or {})})
+        result = self.handler(url, merged)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
 
 class SleepRecorder:
     def __init__(self) -> None:
@@ -78,11 +87,44 @@ def isolate_local_state(monkeypatch, tmp_path):
     """
     monkeypatch.setenv("TASTE_DATA_DIR", str(tmp_path / "taste-data"))
     monkeypatch.setattr("taste.secrets_store._default_backend", lambda: None)
-    for name in ("MAL_CLIENT_ID", "MAL_USERNAME", "LASTFM_API_KEY", "LASTFM_USERNAME"):
+    for name in (
+        "MAL_CLIENT_ID",
+        "MAL_USERNAME",
+        "LASTFM_API_KEY",
+        "LASTFM_USERNAME",
+        "TMDB_READ_TOKEN",
+    ):
         monkeypatch.delenv(name, raising=False)
     # A real .env on a dev machine must never feed real keys into tests.
     monkeypatch.setattr("taste.config.load_env", lambda: None)
     monkeypatch.setattr("taste.__main__.load_env", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def delete_windows_after():
+    """Delete every window a test left behind, while Python is still running.
+
+    Otherwise they live until the interpreter shuts down, and Qt tearing them down
+    then can call an event filter whose Python side is already gone (a crash at exit
+    after every test had passed).
+    """
+    yield
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        widget.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.fixture(autouse=True)
+def no_motion(monkeypatch):
+    """Animations off, so no test waits on one or sees a half-faded widget. Tests of
+    the transitions themselves set `motion.override` back on."""
+    monkeypatch.setattr("taste.desktop.motion.override", "off")
 
 
 class FakeKeyring:

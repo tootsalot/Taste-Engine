@@ -21,7 +21,7 @@ def test_status_and_report_end_to_end(tmp_path, make_client, capsys):
     assert cli.main(["--db", str(db_path), "report", "--out", str(out_dir)]) == 0
     out = capsys.readouterr().out
     assert "how critical am I" in out
-    assert "Wrote 12 CSV files" in out
+    assert "Wrote 14 CSV files" in out
     assert (out_dir / "lastfm_by_hour.csv").exists()
 
 

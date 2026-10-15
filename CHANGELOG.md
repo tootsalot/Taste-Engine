@@ -2,6 +2,45 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [2.0.0]
+
+Books and films join anime and music, every month and year gets a recap, and the whole app was reworked to fill the window and move smoothly.
+
+New sources
+- Books from a Hardcover account, connected in the browser with read-only access (OAuth with PKCE, through a one-time listener on 127.0.0.1): my stars in half steps, statuses, every read-through, genres, moods, formats, and covers
+- Films and TV from a TMDB account, connected with read-only access: ratings, watchlist, and favorites, counted by the day I rated them
+- Hours of music, from Last.fm track lengths looked up after each sync and kept for good, always shown as "about"
+- Episodes per month, from the episode counts each MAL sync sees go up
+
+New and redesigned pages
+- Rev: a recap of a month or a year as a deck of up to seven phone-sized cards (1080 x 1920) in the After Hours look, swiped through with arrows or the arrow keys; Save this card asks for a folder once and remembers it, and Save all saves the deck; recaps make themselves after each month and year and stay up to date for two weeks while late data comes in, with a Dashboard banner when one is ready
+- Reports is a page per medium (Anime, Music, Books, Films and TV), grouped under a Reports heading in the sidebar, all on one shape: All time or a year, six tiles, a picture wall beside the main chart, three charts, and the studios, artists, authors, or directors I keep coming back to
+- A Books page modeled on Hardcover's stats, for all time or any year: books, pages, and hours listened, the covers read with rereads marked, books per year, genres, moods, fiction and format, stars, lengths, and most read authors
+- For You is a grid of picks with a panel for the selected one, which says what the pick is (synopsis, bio, overview, or description) and how popular it is
+- Film suggestions from TMDB's recommendations for the films I rated highest, and book suggestions from Hardcover's similar books for the ones I rated highest, both predicted the same way as anime
+- Your taste, across the top of the Dashboard: a one-line description from all my data and the traits behind it, each with its number
+- Films and TV rebuilt like Books, for all time or a year: posters with my ratings, ratings for Films or TV, genres, decades, and repeat directors
+- Dashboard: a "This month so far" card, a plays-per-week strip, shelves for books, films, and TV, and a getting-started panel for a new profile
+- Reports tiles get a second line, and points against MAL a small line by year
+
+Everywhere
+- Every page uses the whole window: the Dashboard's cards share its height, Settings flows into columns, and a test keeps bare background under 15% at 2560 x 1380 and 1920 x 1040
+- Smooth motion: pages fade and rise, the sidebar and panels slide, pictures fade in, and suggestions arrive and leave gently; Settings has Full, Reduced, or Off, and the app follows Windows when its animations are off
+- Books, films, and TV in the CSV export
+
+Fixes
+- Tooltips show titles from the services exactly as written, never as markup
+- Closing the app no longer risks a crash while windows are torn down, and a recap finishing after its page closed no longer touches it
+- Status messages no longer draw over the version line
+- Most rated directors no longer lists the same person once per film
+- Charts whose labels skip a bar (whole stars over half stars) no longer lose every label
+- Pictures fetched twice at once no longer fail on Windows ("Access is denied" in the console)
+- Fades on widgets that are rebuilt mid-fade no longer flood the console with Qt warnings
+- A full-screen Dashboard fits without scrolling again, Your taste and all four media included
+
+Upgrading
+- Books imported from a Goodreads export (with Open Library covers) are removed the first time 2.0.0 opens a profile, since Hardcover holds the same history; connect Hardcover in Settings to bring them back. The export file itself isn't touched.
+
 ## [0.2.0]
 
 First packaged release: a desktop app with profiles, recommendations, and artwork.

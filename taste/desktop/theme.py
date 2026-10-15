@@ -23,6 +23,8 @@ TEXT = "#EDEAF7"
 MUTED = "#B4B0CC"
 LILAC = "#B69CFF"  # anime and primary actions
 CORAL = "#FF7A59"  # music
+TEAL = "#6FD3C6"  # films and TV (lilac and coral stay anime and music only)
+AMBER = "#F2C46D"  # books
 ON_ACCENT = "#120F1F"  # text on lilac or coral
 DANGER = "#FF8A8A"
 GOOD = "#86E0A8"
@@ -62,6 +64,18 @@ def icon(name: str, color: str = MUTED, selected: str = LILAC) -> QIcon:
         result.addPixmap(lit, mode, QIcon.State.On)
     result.addPixmap(lit, QIcon.Mode.Selected)
     return result
+
+
+def tmdb_logo(height: int) -> QPixmap:
+    """TMDB's official logo (assets/tmdb.svg, from themoviedb.org/about/logos-attribution),
+    drawn at `height` px and 2x for sharp edges."""
+    reader = QImageReader(str(ASSETS / "tmdb.svg"))
+    size = reader.size()
+    width = round(size.width() * height / size.height()) if size.height() > 0 else height * 8
+    reader.setScaledSize(QSize(width * 2, height * 2))
+    pixmap = QPixmap.fromImage(reader.read())
+    pixmap.setDevicePixelRatio(2)
+    return pixmap
 
 
 def number_font(size: int) -> QFont:
@@ -122,13 +136,15 @@ QLabel[role="muted"] {{ color: {MUTED}; }}
 QLabel[role="scope"] {{ color: {CORAL}; }}
 QLabel[role="error"] {{ color: {DANGER}; }}
 QLabel[role="ok"] {{ color: {GOOD}; }}
-QLabel[role="big"] {{ font-size: 30px; font-weight: 800; }}
 
 #TopBar {{ background: {PANEL}; border-bottom: 1px solid {LINE}; }}
 #NavPanel {{ background: {PANEL}; border: none; border-right: 1px solid {LINE}; }}
 QPushButton[role="nav"] {{ background: transparent; border: 1px solid transparent;
                            border-radius: 8px; padding: 0 0 0 9px; text-align: left;
                            color: {MUTED}; min-height: 0; }}
+QLabel[role="nav-heading"] {{ color: {MUTED}; font-size: 11px; font-weight: 700;
+                              letter-spacing: 1.5px; padding: 0 0 4px 11px; }}
+QFrame[role="nav-line"] {{ background: {LINE}; margin: 6px 10px; }}
 QPushButton[role="nav"]:hover {{ background: {SURFACE}; color: {TEXT}; }}
 QPushButton[role="nav"]:checked {{ background: {RAISED}; color: {TEXT}; font-weight: 700; }}
 QPushButton[role="nav"]:focus {{ border-color: {LILAC}; }}
@@ -137,15 +153,38 @@ QPushButton[role="segment"] {{ background: transparent; border: 1px solid transp
                                border-radius: 13px; padding: 3px 14px; color: {MUTED};
                                min-height: 0; }}
 QPushButton[role="segment"]:hover {{ color: {TEXT}; }}
-QPushButton[role="segment"]:checked {{ background: {LILAC}; color: {ON_ACCENT};
+QPushButton[role="segment"]:checked {{ background: transparent; color: {ON_ACCENT};
                                        font-weight: 700; }}
-QPushButton[role="segment"][accent="music"]:checked {{ background: {CORAL}; }}
 QPushButton[role="segment"]:focus {{ border-color: {TEXT}; }}
 
 QFrame[role="card"] {{ background: {SURFACE}; border-radius: 14px; }}
+QFrame[role="card"][raised="true"] {{ background: {RAISED}; border-radius: 10px; }}
+QFrame[role="tile"] {{ background: transparent; border: 2px solid transparent;
+                       border-radius: 14px; }}
+QFrame[role="tile"]:hover {{ background: {SURFACE}; }}
+QFrame[role="tile"]:focus {{ border-color: {EDGE}; }}
+QFrame[role="tile"][selected="true"] {{ background: {SURFACE}; border-color: {LILAC}; }}
+QFrame[role="tile"][selected="true"][accent="music"] {{ border-color: {CORAL}; }}
+QFrame[role="tile"][selected="true"][accent="film"] {{ border-color: {TEAL}; }}
+QLabel[role="tile-score"] {{ color: {LILAC}; font-weight: 800; font-size: 14px; }}
+QLabel[role="tile-score"][accent="music"] {{ color: {CORAL}; }}
+QLabel[role="tile-score"][accent="film"] {{ color: {TEAL}; }}
+QFrame[role="step"] {{ background: {RAISED}; border-radius: 12px; }}
+QFrame[role="trait"] {{ background: {RAISED}; border-radius: 10px; }}
+QFrame[role="banner"] {{ background: {RAISED}; border: 1px solid {LILAC}; border-radius: 12px; }}
 QLabel[role="badge"] {{ background: {RAISED}; color: {LILAC}; border-radius: 9px;
                         padding: 2px 10px; font-size: 12px; font-weight: 700; }}
+QLabel[role="badge"][accent="books"] {{ background: {ON_ACCENT}; color: {AMBER};
+                                       padding: 1px 6px; font-size: 11px; }}
+QLabel[role="badge"][accent="screen"] {{ background: {ON_ACCENT}; color: {TEAL};
+                                        padding: 1px 6px; font-size: 11px; }}
+QLabel[role="badge"][accent="anime"] {{ background: {ON_ACCENT}; color: {LILAC};
+                                       padding: 1px 6px; font-size: 11px; }}
+QLabel[role="badge"][accent="music"] {{ background: {ON_ACCENT}; color: {CORAL};
+                                       padding: 1px 6px; font-size: 11px; }}
 QLabel[role="reason"] {{ color: {TEXT}; font-size: 13px; }}
+QLabel[role="chip"] {{ background: {RAISED}; color: {TEXT}; border-radius: 8px;
+                       padding: 5px 10px; font-size: 12px; }}
 QLabel[role="match"] {{ background: #2A1E26; color: {CORAL}; border-radius: 10px;
                         padding: 3px 10px; font-size: 12px; font-weight: 700; }}
 QLabel[role="section"] {{ color: {MUTED}; font-size: 12px; font-weight: 700;
@@ -161,6 +200,13 @@ QPushButton {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: 1
 QPushButton:hover {{ border-color: {LILAC}; }}
 QPushButton:focus {{ border-color: {LILAC}; background: {RAISED}; }}
 QPushButton:disabled {{ color: {MUTED}; border-color: {RAISED}; }}
+QPushButton[role="deck-arrow"] {{ background: {RAISED}; color: {TEXT}; border: 1px solid {LINE};
+                                  border-radius: 24px; min-width: 48px; max-width: 48px;
+                                  min-height: 48px; max-height: 48px; padding: 0;
+                                  font-size: 24px; }}
+QPushButton[role="deck-arrow"]:hover {{ border-color: {LILAC}; }}
+QPushButton[role="deck-arrow"]:focus {{ border: 2px solid {TEXT}; }}
+QPushButton[role="deck-arrow"]:disabled {{ background: transparent; color: {LINE}; }}
 QPushButton[role="primary"] {{ background: {LILAC}; color: {ON_ACCENT}; border: none;
                                font-weight: 700; }}
 QPushButton[role="primary"]:hover {{ background: #C7B3FF; }}

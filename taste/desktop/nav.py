@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from taste.desktop import theme
-from taste.desktop.widgets import label
+from taste.desktop.widgets import label, plain_tip
 
 ICON = QSize(20, 20)
 
@@ -41,10 +41,22 @@ def nav_button(icon: str, text: str = "") -> QPushButton:
 class NavList(QWidget):
     currentRowChanged = Signal(int)
 
-    def __init__(self, pages: Sequence[tuple[str, str]], bottom: int) -> None:
-        """`pages` are (name, icon). Pages from index `bottom` on sit at the bottom."""
+    def __init__(
+        self,
+        pages: Sequence[tuple[str, str]],
+        bottom: int,
+        groups: dict[int, tuple[str, int]] | None = None,
+    ) -> None:
+        """`pages` are (name, icon). Pages from index `bottom` on sit at the bottom.
+
+        `groups` starts a section with a small heading: {first row: (heading, rows)}
+        (Reports: Anime, Music, Books, Films and TV). Its rows line up with the others;
+        the heading and the space above it set them apart. Collapsed to icons, the
+        heading becomes a thin line.
+        """
         super().__init__()
         self.names = [name for name, _ in pages]
+        self.headings: list[tuple[QWidget, QWidget]] = []
         self.collapsed = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -70,6 +82,16 @@ class NavList(QWidget):
             if index == bottom:
                 layout.addStretch(1)
                 layout.addWidget(self.status)
+            if groups and index in groups:
+                text = label(groups[index][0].upper(), role="nav-heading")
+                line = QFrame()
+                line.setProperty("role", "nav-line")
+                line.setFixedHeight(1)
+                layout.addSpacing(14)
+                layout.addWidget(text)
+                layout.addWidget(line)
+                line.setVisible(False)
+                self.headings.append((text, line))
             button = nav_button(icon, name)
             button.setCheckable(True)
             button.installEventFilter(self)
@@ -121,12 +143,15 @@ class NavList(QWidget):
             button.setText("" if collapsed else name)
             button.setToolTip(name if collapsed else "")
         self.status_text.setVisible(not collapsed)
+        for text, line in self.headings:
+            text.setVisible(not collapsed)
+            line.setVisible(collapsed)
 
     def set_status(self, text: str, state: str, details: str = "") -> None:
         """The last sync, under the pages. Collapsed, only the dot shows; hover for words."""
         self.status_text.setText(text)
         self.status_dot.setToolTip("\n".join(filter(None, (text, details))))
-        self.status_text.setToolTip(details)
+        self.status_text.setToolTip(plain_tip(details))
         self.status_dot.setProperty("state", state)
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)

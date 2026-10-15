@@ -1,4 +1,4 @@
-"""Reports: charts only. The numbers behind them are one click away as CSV files.
+"""Reports: a page of charts per medium. The numbers behind them are one click away as CSV.
 
 The data comes from taste.charts (Qt-free); this page only lays it out. Every
 report view can be exported, one at a time or all at once, from the Export menu.
@@ -14,88 +14,112 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QMenu,
     QScrollArea,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from taste import charts, reports
-from taste.desktop import theme, ui_state
+from taste.desktop import motion, ui_state
+from taste.desktop.anime_view import AnimeView
+from taste.desktop.books_view import BooksView
 from taste.desktop.context import AppContext
+from taste.desktop.music_view import MusicView
+from taste.desktop.screen_view import ScreenView
 from taste.desktop.widgets import (
-    BandChart,
-    BarChart,
     Card,
-    GenreCard,
-    RankList,
-    Segmented,
     heading,
     label,
-    section,
 )
 
-DROP_LABELS = [f"{i * 10}%" for i in range(10)]
-PERIOD_NAMES = {"week": "Week", "month": "Month", "year": "Year"}
 PERIOD_NOTES = {"week": "Weeks start on Sunday, your time."}
-PLAYS_MIN_BAR = 18  # narrower than this and the bars stop reading as bars
 
 
-class StatTile(Card):
-    def __init__(self) -> None:
-        super().__init__()
-        self.value = label("-")
-        self.value.setFont(theme.number_font(26))
-        self.body.addWidget(self.value)
-        self.caption = label("", role="muted")
-        self.body.addWidget(self.caption)
+class SectionContent:
+    """A page's charts, or a card saying how to fill them, never both."""
 
-    def set(self, tile: charts.Tile) -> None:
-        self.value.setText(tile.value)
-        self.caption.setText(tile.caption)
-        color = theme.LILAC if tile.kind == "anime" else theme.CORAL
-        self.value.setStyleSheet(f"color: {color};")
+    def __init__(self, grid: QGridLayout, empty: Card) -> None:
+        self.grid = grid
+        self.empty = empty
+
+    def show_data(self, has_data: bool) -> None:
+        for i in range(self.grid.count()):
+            item = self.grid.itemAt(i)
+            widget = item.widget()
+            if widget is not None and widget is not self.empty:
+                widget.setVisible(has_data)
+            elif item.layout() is not None:
+                for j in range(item.layout().count()):
+                    child = item.layout().itemAt(j).widget()
+                    if child is not None:
+                        child.setVisible(has_data)
+        self.empty.setVisible(not has_data)
+
+    def isVisible(self) -> bool:  # noqa: N802 (Qt naming, like the widget it replaced)
+        return not self.empty.isVisible()
 
 
-def chart_card(title: str, chart: QWidget, note: str = "", side: QWidget | None = None) -> Card:
-    """A small title (with `side`, such as a switch, at the right), a note, and a chart."""
+def empty_or(grid: QGridLayout, text: str) -> SectionContent:
     card = Card()
-    card.title = section(title)
-    if side is None:
-        card.body.addWidget(card.title)
-    else:
-        row = QHBoxLayout()
-        # The title takes the free width: its size hint leaves out the theme's letter
-        # spacing, so held to it the last letter or two were cut off.
-        row.addWidget(card.title, 1)
-        row.addWidget(side)
-        card.body.addLayout(row)
-    card.note = label(note, role="muted", wrap=True)
-    card.body.addWidget(card.note)
-    card.note.setVisible(bool(note))  # after it has a parent, or it opens as its own window
-    card.body.addWidget(chart, 1)
-    return card
+    card.body.setContentsMargins(40, 36, 40, 36)
+    card.body.addWidget(heading("Nothing here yet", 24))
+    card.body.addWidget(label(text, role="muted", wrap=True))
+    card.body.addStretch()
+    grid.addWidget(card, 0, 0, grid.rowCount(), max(grid.columnCount(), 1))
+    content = SectionContent(grid, card)
+    content.show_data(False)
+    return content
+
+
+SECTIONS = {
+    "anime": "Anime",
+    "music": "Music",
+    "books": "Books",
+    "screen": "Films and TV",
+}
+EMPTY_SECTION = {
+    "books": (
+        "No books yet. Connect your Hardcover account on the Settings page, then sync, and "
+        "your reading shows up here: books per year, your stars against everyone's, and the "
+        "authors you read most."
+    ),
+    "screen": (
+        "No films or TV yet. Connect your TMDB account on the Settings page, then sync, and "
+        "your ratings show up here: how you rate, how that compares with TMDB, and the "
+        "directors you watch most."
+    ),
+}
+
+
+def section_page(layout_parent: QWidget) -> tuple[QScrollArea, QGridLayout]:
+    """A scrolling page whose rows share the window's height."""
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    body = QWidget()
+    scroll.setWidget(body)
+    grid = QGridLayout(body)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setSpacing(12)
+    return scroll, grid
 
 
 class ReportsPage(QWidget):
+    """Reports, one page per medium. The sidebar's Reports group picks the page."""
+
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
         self.profile_id: str | None = None
+        self.current = "anime"
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        outer.addWidget(scroll)
-        body = QWidget()
-        scroll.setWidget(body)
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(28, 20, 28, 24)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 20, 28, 20)
         layout.setSpacing(12)
-
         top = QHBoxLayout()
-        top.addWidget(heading("Reports", 28))
+        self.title = heading("Anime", 28)
+        top.addWidget(self.title)
         top.addStretch()
         self.export_button = QToolButton()
         self.export_button.setText("Export CSV")
@@ -111,78 +135,71 @@ class ReportsPage(QWidget):
         self.export_button.setMenu(self.export_menu)
         top.addWidget(self.export_button)
         layout.addLayout(top)
-
-        tiles = QHBoxLayout()
-        tiles.setSpacing(12)
-        self.tiles = [StatTile() for _ in range(4)]
-        for tile in self.tiles:
-            tiles.addWidget(tile)
-        layout.addLayout(tiles)
-
-        # Anime
-        layout.addWidget(section("Anime"))
-        anime = QGridLayout()
-        anime.setSpacing(12)
-        self.scores = BandChart()
-        anime.addWidget(
-            chart_card("Your score vs MAL", self.scores, "Your average for shows MAL rates "
-                       "about the same. Bars cover the middle half of your scores."),
-            0,
-            0,
-        )  # fmt: skip
-        self.drop_chart = BarChart(theme.LILAC, empty_text="No dropped shows", value_labels=True)
-        self.drop_chart.setMinimumHeight(200)
-        anime.addWidget(
-            chart_card("Where you drop shows", self.drop_chart,
-                       "How far into a show you were when you dropped it. Each bar spans ten "
-                       "points: 20% means 20 to 29% watched."),
-            0,
-            1,
-        )  # fmt: skip
-        self.genres = GenreCard(columns=2)
-        anime.addWidget(self.genres, 1, 0, 1, 2)
-        anime.setColumnStretch(0, 1)
-        anime.setColumnStretch(1, 1)
-        layout.addLayout(anime)
-
-        # Music
-        layout.addWidget(section("Music"))
-        self.scope = label("", role="scope", wrap=True)
-        layout.addWidget(self.scope)
-        music = QGridLayout()
-        music.setSpacing(12)
-        # Week, month, or year: as many of the latest as fit the width.
-        self.plays_chart = BarChart(theme.CORAL, scale=True, min_bar=PLAYS_MIN_BAR)
-        self.plays_chart.setMinimumHeight(170)
-        self.period_switch = Segmented(list(PERIOD_NAMES.items()), accent="music")
-        self.period_switch.changed.connect(self.set_period)
-        self.plays_card = chart_card("Plays", self.plays_chart, side=self.period_switch)
-        music.addWidget(self.plays_card, 0, 0, 1, 2)
-        self.top_artists = RankList(empty_text="No plays yet")
-        music.addWidget(chart_card("Top artists", self.top_artists), 1, 0)
-        self.top_tracks = RankList(empty_text="No plays yet")
-        music.addWidget(chart_card("Top tracks", self.top_tracks), 1, 1)
-        self.hour_chart = BarChart(theme.CORAL, scale=True)
-        self.hour_card = chart_card("Plays by hour", self.hour_chart, "In your time zone.")
-        music.addWidget(self.hour_card, 2, 0)
-        self.day_chart = BarChart(theme.CORAL, value_labels=True)
-        music.addWidget(
-            chart_card(
-                "Plays by day of week", self.day_chart, "Days start at midnight, your time."
-            ),
-            2,
-            1,
-        )
-        music.setColumnStretch(0, 1)
-        music.setColumnStretch(1, 1)
-        layout.addLayout(music)
-
+        self.stack = QStackedWidget()
+        layout.addWidget(self.stack, 1)
         self.status = label("", role="muted")
         layout.addWidget(self.status)
-        layout.addStretch(1)
+        self.pages: dict[str, QScrollArea] = {}
+        # Every medium on one skeleton (span switch, six tiles, pictures beside the main
+        # chart, three charts, then the people I keep coming back to), each its own view.
+        scroll, anime = section_page(self)
+        self.pages["anime"] = scroll
+        self.anime = AnimeView(ctx)
+        anime.addWidget(self.anime, 0, 0)
+        anime.setRowStretch(0, 1)
+
+        scroll, music = section_page(self)
+        self.pages["music"] = scroll
+        self.music = MusicView(ctx)
+        music.addWidget(self.music, 0, 0)
+        music.setRowStretch(0, 1)
+        # The charts the page itself drives (plays over time), and short names for tests.
+        self.plays_chart = self.music.plays_chart
+        self.plays_card = self.music.plays_card
+        self.period_switch = self.music.period_switch
+        self.period_switch.changed.connect(self.set_period)
+        self.scope = self.music.scope
+        self.hour_chart, self.hour_card = self.music.hour_chart, self.music.hour_card
+        self.scores, self.drop_chart = self.anime.scores, self.anime.drop_chart
+        self.genres = self.anime.genres
+
+        # Books: its own view (books_view.py), after Hardcover's stats page.
+        scroll, books = section_page(self)
+        self.pages["books"] = scroll
+        self.books = BooksView(ctx)
+        books.addWidget(self.books, 0, 0)
+        books.setRowStretch(0, 1)
+        self.books_section = empty_or(books, EMPTY_SECTION["books"])
+
+        # Films and TV: its own view (screen_view.py), built like Books.
+        scroll, screen = section_page(self)
+        self.pages["screen"] = scroll
+        self.screen = ScreenView(ctx)
+        screen.addWidget(self.screen, 0, 0)
+        screen.setRowStretch(0, 1)
+        self.screen_section = empty_or(screen, EMPTY_SECTION["screen"])
+
+        for key in SECTIONS:
+            self.stack.addWidget(self.pages[key])
         self.data: charts.ReportData | None = None
         self.period = ""
         self.set_period(ui_state.load().get("plays_period", "month"), remember=False)
+
+    def show_section(self, key: str) -> None:
+        """One medium's page. The sidebar calls this."""
+        key = key if key in SECTIONS else "anime"
+        if key == self.current and self.stack.currentWidget() is self.pages[key]:
+            return
+        self.current = key
+        self.title.setText(SECTIONS[key])
+
+        def switch() -> None:
+            self.stack.setCurrentWidget(self.pages[key])
+
+        if self.isVisible():
+            motion.crossfade(self.stack, switch)
+        else:
+            switch()
 
     # -- data ---------------------------------------------------------------
 
@@ -200,38 +217,29 @@ class ReportsPage(QWidget):
         finally:
             conn.close()
 
-        for tile, value in zip(self.tiles, data.tiles, strict=True):
-            tile.set(value)
-        self.scores.set_bands(data.bands)
-        if any(data.drops):
-            self.drop_chart.set_data(data.drops, DROP_LABELS, unit="shows")
-        else:
-            self.drop_chart.set_data([], [])
-        self.genres.set_genres(
-            data.generous,
-            data.harsh,
-            "Sync MyAnimeList to see which genres you rate above or below the crowd.",
-            usual=data.usual,
-        )
-        mixed = (
-            " Plays were captured under more than one scope setting." if data.mixed_scopes else ""
-        )
-        self.scope.setText(f"Last.fm: {data.scope_note}{mixed}")
         self.data = data
+        for view in (self.anime, self.music):
+            if view.profile_id != self.profile_id:
+                view.set_profile(self.profile_id)
+        self.anime.refresh(data)
+        self.music.refresh(data)
         self._show_plays()
-        self.top_artists.set_rows(data.top_artists)
-        self.top_tracks.set_rows(
-            [(track, plays) for track, _, plays in data.top_tracks],
-            tips=[f"{track} by {artist}" for track, artist, _ in data.top_tracks],
-        )
-        hour_labels = [f"{h % 12 or 12}{'a' if h < 12 else 'p'}" for h in range(24)]
-        self.hour_chart.set_data(data.hours if any(data.hours) else [], hour_labels, unit="plays")
-        self.day_chart.set_data(
-            [p for _, p in data.weekdays] if any(p for _, p in data.weekdays) else [],
-            [d for d, _ in data.weekdays],
-            unit="plays",
-        )
-        self.hour_card.note.setText(f"In your time zone, {data.tz_name}.")
+        self._show_media(data)
+
+    def _show_media(self, data: charts.ReportData) -> None:
+        """The Books and Films and TV pages, or what fills them before there's data."""
+        self.books_section.show_data(data.has_books)
+        if data.has_books:
+            if self.books.profile_id != self.profile_id:
+                self.books.set_profile(self.profile_id)
+            else:
+                self.books.refresh()
+        self.screen_section.show_data(data.has_screen)
+        if data.has_screen:
+            if self.screen.profile_id != self.profile_id:
+                self.screen.set_profile(self.profile_id)
+            else:
+                self.screen.refresh()
 
     def set_period(self, period: str, remember: bool = True) -> None:
         """Plays per week, month, or year. The choice is kept for every profile."""

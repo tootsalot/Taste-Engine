@@ -43,6 +43,11 @@ def test_before_a_sync_every_card_says_what_fills_it(window):
     assert "Sync MyAnimeList" in dash.genres.empty.text()
     assert dash.strip.text.text() == "MyAnimeList: never synced. Last.fm: never synced."
     assert dash.log.isHidden() and dash.strip.toggle.isHidden()
+    # With nothing synced, a getting-started panel fills the page instead of empty cards.
+    assert not dash.welcome.isHidden() and dash.recent.isHidden()
+    assert set(dash.welcome.buttons) == {"Open Settings", "Sync everything"}
+    dash.welcome.buttons["Open Settings"].click()
+    assert window.stack.currentWidget() is window.settings
 
 
 def test_a_sync_fills_the_cards(window, qtbot, images):
@@ -52,6 +57,16 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     dash = window.dashboard
 
     assert dash.critic_value.text() == "-0.28"
+    assert dash.welcome.isHidden() and not dash.recent.isHidden()
+    # This month so far: the ten plays at "now"; the one ten days earlier was in September.
+    assert dash.month.numbers["plays"][0].text() == "10"
+    assert dash.month.top_artist.text() == "Top artist: Example Seed One, 10 plays"
+    # No finish dates on the fake list, and its last edits came before the first sync,
+    # so no show counts as finished this month.
+    assert dash.month.numbers["shows"][0].text() == "0"
+    # Ten four-minute plays: 40 minutes, from the track lengths the sync looked up.
+    assert dash.month.numbers["hours"][0].text() == "<1"
+    assert dash.week_chart.values[-1] == 10 and dash.week_chart.partial_last
     assert dash.counts.text() == "6 on your list · 4 scored · 69 Last.fm plays"
     assert dash.score_chart.values == [0, 0, 0, 0, 1, 0, 1, 1, 1, 0]
     assert dash.score_chart.value_labels  # each bar shows its count
@@ -90,6 +105,8 @@ def test_shelves_fill_the_width_and_download_only_what_shows(window, qtbot, imag
     window.resize(1000, 800)
     window.show()
     qtbot.waitExposed(window)
+    window.dashboard.show_cards(True)  # a new profile shows the getting-started panel
+    qtbot.wait(100)  # let the cards take their place first
     shelf = window.dashboard.recent
     urls = [MAL_CDN.format(300 + i) for i in range(SHELF_MAX)]
     shelf.set_items([(url, f"Show {i}", "You 8", "") for i, url in enumerate(urls)], "")

@@ -13,6 +13,8 @@ import sqlite3
 from taste import settings
 from taste.config import ConfigError, LastfmSettings, MalSettings
 from taste.secrets_store import KEY_LABELS, SecretStore
+from taste.sources.hardcover import Tokens
+from taste.sources.tmdb import TmdbSettings
 
 
 def _username(conn: sqlite3.Connection, setting_key: str, env_name: str) -> str:
@@ -50,3 +52,47 @@ def lastfm(conn: sqlite3.Connection, profile_id: str, store: SecretStore) -> Las
     if missing:
         raise _missing("Last.fm", missing)
     return LastfmSettings(api_key, username)
+
+
+def tmdb(conn: sqlite3.Connection, profile_id: str, store: SecretStore) -> TmdbSettings:
+    """The read token, plus the account's token and id when it's connected."""
+    read_token = store.get(profile_id, "TMDB_READ_TOKEN")
+    if not read_token:
+        raise _missing("TMDB", [KEY_LABELS["TMDB_READ_TOKEN"]])
+    return TmdbSettings(
+        read_token,
+        store.get(profile_id, "TMDB_USER_TOKEN"),
+        store.get(profile_id, "TMDB_ACCOUNT_ID"),
+    )
+
+
+def tmdb_connected(profile_id: str, store: SecretStore) -> bool:
+    """Whether a TMDB account is connected (its token is stored, not just the read token)."""
+    return bool(store.has_stored(profile_id, "TMDB_USER_TOKEN"))
+
+
+HARDCOVER_NAMES = ("HARDCOVER_ACCESS_TOKEN", "HARDCOVER_REFRESH_TOKEN", "HARDCOVER_TOKEN_EXPIRES")
+
+
+def hardcover_connected(profile_id: str, store: SecretStore) -> bool:
+    """Whether a Hardcover account is signed in for this profile."""
+    return bool(store.has_stored(profile_id, "HARDCOVER_REFRESH_TOKEN"))
+
+
+def hardcover(profile_id: str, store: SecretStore) -> Tokens:
+    access, refresh, expires = (store.get(profile_id, n) for n in HARDCOVER_NAMES)
+    if not access or not refresh:
+        raise ConfigError("Hardcover: connect your Hardcover account on the Settings page first.")
+    return Tokens(access, refresh, expires or "")
+
+
+def save_hardcover(profile_id: str, store: SecretStore, tokens: Tokens) -> None:
+    """Store a fresh pair. The refresh token rotates, so this runs before anything else."""
+    store.set(profile_id, "HARDCOVER_REFRESH_TOKEN", tokens.refresh)
+    store.set(profile_id, "HARDCOVER_ACCESS_TOKEN", tokens.access)
+    store.set(profile_id, "HARDCOVER_TOKEN_EXPIRES", tokens.expires_at)
+
+
+def forget_hardcover(profile_id: str, store: SecretStore) -> None:
+    for name in HARDCOVER_NAMES:
+        store.delete(profile_id, name)

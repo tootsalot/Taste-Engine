@@ -4,19 +4,24 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
-from taste import credentials, enrich, raw, recommend, settings
+from taste import activity, credentials, enrich, raw, recommend, settings
 from taste.config import ConfigError
 from taste.db import transaction
 from taste.http_client import ApiError, HttpClient
 from taste.secrets_store import SecretStore
-from taste.sources import lastfm, mal
+from taste.sources import hardcover, lastfm, mal, tmdb
 
-SOURCES = ("mal", "lastfm")
-SOURCE_LABELS = {"mal": "MyAnimeList", "lastfm": "Last.fm"}
+SOURCES = ("mal", "lastfm", "tmdb", "hardcover")
+SOURCE_LABELS = {
+    "mal": "MyAnimeList",
+    "lastfm": "Last.fm",
+    "tmdb": "TMDB",
+    "hardcover": "Hardcover",
+}
 
 ClientFactory = Callable[[list[str]], HttpClient]
 
@@ -41,10 +46,24 @@ def sync_sources(
     """
     store = store or SecretStore()
     targets = list(SOURCES) if source == "all" else [source]
+    if source == "all" and not credentials.tmdb_connected(profile_id, store):
+        targets.remove("tmdb")  # never set up: not a failure, just not part of "all" yet
+    if source == "all" and not credentials.hardcover_connected(profile_id, store):
+        targets.remove("hardcover")
     results: dict[str, bool] = {}
     for name in targets:
         try:
-            if name == "mal":
+            if name == "hardcover":
+                tokens = hardcover_tokens(profile_id, store, client_factory, sync_kwargs.get("now"))
+                client = client_factory([tokens.access, tokens.refresh])
+                results[name] = hardcover.sync(conn, client, tokens.access, out).status == "success"
+            elif name == "tmdb":
+                cfg = credentials.tmdb(conn, profile_id, store)
+                if not cfg.user_token or not cfg.account_id:
+                    raise ConfigError("connect your TMDB account on the Settings page first.")
+                client = client_factory([cfg.read_token, cfg.user_token])
+                results[name] = tmdb.sync(conn, client, cfg, out=out).status == "success"
+            elif name == "mal":
                 cfg = credentials.mal(conn, profile_id, store)
                 client = client_factory([cfg.client_id])
                 results[name] = mal.sync(conn, client, cfg, out=out).status == "success"
@@ -53,7 +72,17 @@ def sync_sources(
                 client = client_factory([cfg.api_key])
                 result = lastfm.sync(conn, client, cfg, out=out, **sync_kwargs)
                 results[name] = result.status == "success"
+                if results[name]:
+                    # Lengths for "about how many hours" in the recaps still open.
+                    clock = sync_kwargs.get("now")
+                    now = datetime.fromtimestamp(clock(), timezone.utc) if clock else None
+                    enrich.fetch_track_lengths(
+                        conn, client, cfg, activity.open_spans(conn, now), out, now=now
+                    )
         except ConfigError as exc:
+            out(f"{SOURCE_LABELS[name]}: {exc}")
+            results[name] = False
+        except ApiError as exc:  # only Hardcover's sign-in refresh gets here
             out(f"{SOURCE_LABELS[name]}: {exc}")
             results[name] = False
     pruned = raw.prune(conn, settings.get(conn, "raw_retention_days"))
@@ -74,6 +103,13 @@ def check_connection(
     store = store or SecretStore()
     label = SOURCE_LABELS[source]
     try:
+        if source == "tmdb":
+            cfg = credentials.tmdb(conn, profile_id, store)
+            client = client_factory([cfg.read_token])
+            client.max_retries = 1
+            tmdb.check_token(client, cfg.read_token)
+            account = " Your account is connected." if cfg.user_token else ""
+            return True, f"{label}: the read access token works.{account}"
         if source == "mal":
             cfg = credentials.mal(conn, profile_id, store)
             client = client_factory([cfg.client_id])
@@ -130,15 +166,23 @@ def refresh_recommendations(
 
     store = store or SecretStore()
     lastfm_cfg = None
-    pending = ["anime", "music"]
+    pending = ["anime", "music", "film", "book"]
     if fetch:
         try:
             mal_cfg = credentials.mal(conn, profile_id, store)
         except ConfigError:
             out("Recommendations: skipping MyAnimeList (no key or username).")
         else:
-            enrich.enrich_mal(conn, client_factory([mal_cfg.client_id]), mal_cfg, out, now=now)
+            mal_client = client_factory([mal_cfg.client_id])
+            enrich.enrich_mal(conn, mal_client, mal_cfg, out, now=now)
             compute(pending.pop(0))
+            # Synopses for the shows on the list whose details came before synopses did.
+            shown, _, _ = recommend.latest(conn, "anime")
+            missing = [
+                int(r.item_key) for r in shown if not r.facts.get("about") and r.item_key.isdigit()
+            ]
+            if enrich.fetch_synopses(conn, mal_client, mal_cfg, missing, out, now=now):
+                compute("anime")
         try:
             lastfm_cfg = credentials.lastfm(conn, profile_id, store)
             enrich.enrich_lastfm(
@@ -151,6 +195,20 @@ def refresh_recommendations(
             )
         except ConfigError:
             out("Recommendations: skipping Last.fm (no key or username).")
+    if fetch and credentials.tmdb_connected(profile_id, store):
+        tmdb_cfg = credentials.tmdb(conn, profile_id, store)
+        tmdb.enrich_recommendations(
+            conn, client_factory([tmdb_cfg.read_token]), tmdb_cfg, out, now=now
+        )
+    if fetch and credentials.hardcover_connected(profile_id, store):
+        try:
+            clock = (lambda: now.timestamp()) if now else None
+            tokens = hardcover_tokens(profile_id, store, client_factory, clock)
+            hardcover.enrich_recommendations(
+                conn, client_factory([tokens.access, tokens.refresh]), tokens.access, out, now=now
+            )
+        except (ConfigError, ApiError) as exc:
+            out(f"Recommendations: skipping Hardcover ({exc}).")
     counts = compute(*pending)
     if lastfm_cfg is not None:
         # Covers for suggested artists I've never played, then recompute so they show.
@@ -169,8 +227,35 @@ def refresh_recommendations(
         names = [r.title for r in discover + rediscover]
         if names and enrich.fetch_deezer_pictures(conn, client_factory([]), names, now):
             counts = compute("music")
+    if fetch and lastfm_cfg is not None:
+        # Who each suggested artist is, and how many people listen (cached 30 days).
+        discover, _, _ = recommend.latest(conn, "music_discover")
+        rediscover, _, _ = recommend.latest(conn, "music_rediscover")
+        names = [r.title for r in discover + rediscover]
+        if names and enrich.fetch_artist_info(
+            conn, client_factory([lastfm_cfg.api_key]), lastfm_cfg, names, now
+        ):
+            counts = compute("music")
     out(
         f"Recommendations ready: {counts['anime']} anime, {counts['music_discover']} new "
-        f"artists, {counts['music_rediscover']} to rediscover."
+        f"artists, {counts['music_rediscover']} to rediscover, {counts['film']} films, "
+        f"{counts['book']} books."
     )
     return counts
+
+
+def hardcover_tokens(
+    profile_id: str,
+    store: SecretStore,
+    client_factory: ClientFactory = _default_client,
+    clock: Callable[[], float] | None = None,
+) -> hardcover.Tokens:
+    """The stored Hardcover tokens, refreshed first when the access token is close to
+    running out. The new pair is saved before it's used: the old refresh token is dead."""
+    tokens = credentials.hardcover(profile_id, store)
+    now = datetime.fromtimestamp(clock(), timezone.utc) if clock else datetime.now(timezone.utc)
+    if tokens.due(now):
+        client = client_factory([tokens.access, tokens.refresh])
+        tokens = hardcover.refresh(client, tokens.refresh, now)
+        credentials.save_hardcover(profile_id, store, tokens)
+    return tokens

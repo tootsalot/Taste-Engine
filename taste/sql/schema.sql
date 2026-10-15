@@ -23,7 +23,11 @@ VALUES
      'Self-reported list. Scores, statuses, and dates were entered by hand.'),
     ('lastfm', 'Last.fm', 'unknown', NULL),
     ('deezer', 'Deezer', 'not_applicable',
-     'Artist photos only, for suggested artists Last.fm has no picture for.')
+     'Artist photos only, for suggested artists Last.fm has no picture for.'),
+    ('hardcover', 'Hardcover', 'self_reported',
+     'My Hardcover library. Ratings, statuses, and read dates were entered by hand.'),
+    ('tmdb', 'TMDB', 'self_reported',
+     'Ratings from my TMDB account. TMDB keeps the date of each rating, not when I watched.')
 ON CONFLICT (source) DO UPDATE SET
     display_name = excluded.display_name;
 
@@ -110,7 +114,11 @@ CREATE TABLE IF NOT EXISTS stg_mal_anime (
     main_picture_url    TEXT,
     nsfw_rating         TEXT,
     last_raw_page_id    INTEGER REFERENCES raw_api_pages (raw_page_id),
-    loaded_at           TEXT NOT NULL
+    loaded_at           TEXT NOT NULL,
+    num_list_users      INTEGER,
+    popularity_rank     INTEGER,
+    score_rank          INTEGER,
+    synopsis            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS stg_mal_anime_genres (
@@ -166,6 +174,164 @@ CREATE TABLE IF NOT EXISTS stg_lastfm_scrobbles (
     raw_page_id    INTEGER NOT NULL REFERENCES raw_api_pages (raw_page_id),
     loaded_at      TEXT NOT NULL,
     CONSTRAINT uq_stg_lastfm_scrobbles UNIQUE (played_at_unix, artist_name, track_name)
+);
+
+-- ---------------------------------------------------------------------------
+-- Staging: Hardcover (my library through its GraphQL API, signed in with OAuth)
+-- ---------------------------------------------------------------------------
+
+-- One row per book in my library. status_id: 1 want to read, 2 reading, 3 read,
+-- 4 paused, 5 did not finish, 6 ignored. rating is 0.5 to 5 in halves, NULL when
+-- not rated. The edition is the one I picked, when I picked one. A full read that
+-- no longer has the book sets removed_at.
+CREATE TABLE IF NOT EXISTS stg_hardcover_user_books (
+    user_book_id       INTEGER NOT NULL PRIMARY KEY,
+    book_id            INTEGER NOT NULL,
+    status_id          INTEGER NOT NULL,
+    rating             REAL,
+    date_added         TEXT,
+    first_started_date TEXT,
+    first_read_date    TEXT,
+    last_read_date     TEXT,
+    read_count         INTEGER NOT NULL DEFAULT 0,
+    owned              INTEGER NOT NULL DEFAULT 0,
+    edition_id         INTEGER,
+    reading_format_id  INTEGER,
+    edition_pages      INTEGER,
+    edition_seconds    INTEGER,
+    first_seen_at      TEXT NOT NULL,
+    last_seen_run_id   INTEGER NOT NULL REFERENCES sync_runs (sync_run_id),
+    removed_at         TEXT,
+    last_raw_page_id   INTEGER REFERENCES raw_api_pages (raw_page_id)
+);
+
+-- One row per read-through (Hardcover's user_book_reads): the days I started and
+-- finished. A book read twice has two rows.
+CREATE TABLE IF NOT EXISTS stg_hardcover_reads (
+    read_id           INTEGER NOT NULL PRIMARY KEY,
+    user_book_id      INTEGER NOT NULL,
+    started_at        TEXT,
+    finished_at       TEXT,
+    edition_id        INTEGER,
+    first_seen_at     TEXT NOT NULL,
+    last_seen_run_id  INTEGER NOT NULL REFERENCES sync_runs (sync_run_id),
+    removed_at        TEXT,
+    last_raw_page_id  INTEGER REFERENCES raw_api_pages (raw_page_id)
+);
+
+-- The book itself, as Hardcover describes it. literary_type_id: 1 fiction,
+-- 2 nonfiction. rating is the Hardcover average (0 to 5). authors_json holds the
+-- contributions credited as author, in order; genres_json and moods_json the top
+-- tags readers gave the book.
+CREATE TABLE IF NOT EXISTS stg_hardcover_books (
+    book_id          INTEGER NOT NULL PRIMARY KEY,
+    title            TEXT NOT NULL,
+    subtitle         TEXT,
+    slug             TEXT,
+    pages            INTEGER,
+    audio_seconds    INTEGER,
+    release_year     INTEGER,
+    rating           REAL,
+    ratings_count    INTEGER,
+    literary_type_id INTEGER,
+    image_url        TEXT,
+    authors_json     TEXT NOT NULL DEFAULT '[]',
+    genres_json      TEXT NOT NULL DEFAULT '[]',
+    moods_json       TEXT NOT NULL DEFAULT '[]',
+    last_raw_page_id INTEGER REFERENCES raw_api_pages (raw_page_id),
+    updated_at       TEXT NOT NULL,
+    similar_json     TEXT NOT NULL DEFAULT '[]',
+    description      TEXT,
+    users_count      INTEGER,
+    users_read_count INTEGER,
+    details_at       TEXT
+);
+
+-- ---------------------------------------------------------------------------
+-- Staging: TMDB (my account's ratings and lists, and details per title)
+-- ---------------------------------------------------------------------------
+
+-- media_type: movie or tv. season and episode are 0 for a film or a show (no NULLs in
+-- the key). A full read that no longer has a rating sets removed_at.
+CREATE TABLE IF NOT EXISTS stg_tmdb_account_ratings (
+    media_type       TEXT NOT NULL,
+    tmdb_id          INTEGER NOT NULL,
+    season           INTEGER NOT NULL DEFAULT 0,
+    episode          INTEGER NOT NULL DEFAULT 0,
+    title            TEXT NOT NULL,
+    rating           REAL NOT NULL,
+    rated_at         TEXT,
+    first_seen_at    TEXT NOT NULL,
+    last_seen_run_id INTEGER NOT NULL REFERENCES sync_runs (sync_run_id),
+    removed_at       TEXT,
+    last_raw_page_id INTEGER REFERENCES raw_api_pages (raw_page_id),
+    PRIMARY KEY (media_type, tmdb_id, season, episode)
+);
+
+-- Watchlist and favorites membership.
+CREATE TABLE IF NOT EXISTS stg_tmdb_account_lists (
+    media_type       TEXT NOT NULL,
+    tmdb_id          INTEGER NOT NULL,
+    list_name        TEXT NOT NULL,
+    title            TEXT NOT NULL,
+    last_seen_run_id INTEGER NOT NULL REFERENCES sync_runs (sync_run_id),
+    removed_at       TEXT,
+    PRIMARY KEY (media_type, tmdb_id, list_name)
+);
+
+CREATE TABLE IF NOT EXISTS stg_tmdb_movies (
+    tmdb_id           INTEGER NOT NULL PRIMARY KEY,
+    title             TEXT NOT NULL,
+    original_title    TEXT,
+    release_date      TEXT,
+    runtime           INTEGER,
+    vote_average      REAL,
+    vote_count        INTEGER,
+    poster_path       TEXT,
+    original_language TEXT,
+    imdb_id           TEXT,
+    genres_json       TEXT NOT NULL DEFAULT '[]',
+    directors_json    TEXT NOT NULL DEFAULT '[]',
+    raw_page_id       INTEGER REFERENCES raw_api_pages (raw_page_id),
+    fetched_at        TEXT NOT NULL,
+    overview          TEXT,
+    popularity        REAL
+);
+
+CREATE TABLE IF NOT EXISTS stg_tmdb_tv (
+    tmdb_id          INTEGER NOT NULL PRIMARY KEY,
+    name             TEXT NOT NULL,
+    original_name    TEXT,
+    first_air_date   TEXT,
+    last_air_date    TEXT,
+    status           TEXT,
+    seasons          INTEGER,
+    episodes         INTEGER,
+    episode_run_time INTEGER,
+    vote_average     REAL,
+    vote_count       INTEGER,
+    poster_path      TEXT,
+    networks_json    TEXT NOT NULL DEFAULT '[]',
+    genres_json      TEXT NOT NULL DEFAULT '[]',
+    creators_json    TEXT NOT NULL DEFAULT '[]',
+    raw_page_id      INTEGER REFERENCES raw_api_pages (raw_page_id),
+    fetched_at       TEXT NOT NULL
+);
+
+-- TMDB's recommendations for films I rated highly: the film suggestion candidates.
+CREATE TABLE IF NOT EXISTS stg_tmdb_movie_recommendations (
+    tmdb_id           INTEGER NOT NULL,
+    recommended_id    INTEGER NOT NULL,
+    recommended_title TEXT NOT NULL,
+    position          INTEGER NOT NULL,
+    PRIMARY KEY (tmdb_id, recommended_id)
+);
+
+CREATE TABLE IF NOT EXISTS stg_tmdb_fetches (
+    tmdb_id    INTEGER NOT NULL,
+    method     TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (tmdb_id, method)
 );
 
 -- ---------------------------------------------------------------------------
@@ -308,6 +474,10 @@ CREATE TABLE IF NOT EXISTS core_event_local_times (
     local_weekday_num INTEGER NOT NULL
 );
 
+-- Period lookups (this month, a recap's month) filter on the local day.
+CREATE INDEX IF NOT EXISTS ix_core_event_local_times_date
+    ON core_event_local_times (local_date);
+
 CREATE TABLE IF NOT EXISTS core_curation (
     curation_id       INTEGER PRIMARY KEY,
     item_id           INTEGER NOT NULL REFERENCES core_items (item_id),
@@ -327,10 +497,13 @@ CREATE TABLE IF NOT EXISTS core_curation (
 -- Enrichment: details fetched for recommendations and art
 -- ---------------------------------------------------------------------------
 
+-- fields_version: which set of detail fields the fetch asked for (2 adds the synopsis
+-- and popularity), so details from before can be fetched again once, when needed.
 CREATE TABLE IF NOT EXISTS stg_mal_anime_details (
-    mal_anime_id INTEGER NOT NULL PRIMARY KEY,
-    fetched_at   TEXT NOT NULL,
-    raw_page_id  INTEGER REFERENCES raw_api_pages (raw_page_id)
+    mal_anime_id   INTEGER NOT NULL PRIMARY KEY,
+    fetched_at     TEXT NOT NULL,
+    raw_page_id    INTEGER REFERENCES raw_api_pages (raw_page_id),
+    fields_version INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS stg_mal_anime_recommendations (
@@ -347,6 +520,18 @@ CREATE TABLE IF NOT EXISTS stg_mal_related_anime (
     related_title TEXT NOT NULL,
     relation_type TEXT NOT NULL,
     PRIMARY KEY (mal_anime_id, related_id)
+);
+
+-- Who a suggested artist is (artist.getinfo), for the For You panel: the bio's summary
+-- as plain text (Last.fm sends a little HTML) and how many people listen. Cached 30
+-- days; a miss is a row with every field NULL.
+CREATE TABLE IF NOT EXISTS stg_lastfm_artist_info (
+    artist_key  TEXT NOT NULL PRIMARY KEY,
+    bio         TEXT,
+    listeners   INTEGER,
+    playcount   INTEGER,
+    raw_page_id INTEGER REFERENCES raw_api_pages (raw_page_id),
+    fetched_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS stg_lastfm_artist_fetches (
@@ -377,6 +562,17 @@ CREATE TABLE IF NOT EXISTS stg_lastfm_artist_top_album (
     album_name TEXT NOT NULL,
     image_url  TEXT,
     fetched_at TEXT NOT NULL
+);
+
+-- Track lengths from Last.fm track.getinfo, for "about how many hours". Scrobbles
+-- carry no length. duration_ms NULL means Last.fm has none (it sends 0) or doesn't
+-- know the track; a length doesn't change, so rows are kept for good.
+CREATE TABLE IF NOT EXISTS stg_lastfm_track_info (
+    track_key   TEXT NOT NULL PRIMARY KEY,
+    artist_name TEXT NOT NULL,
+    track_name  TEXT NOT NULL,
+    duration_ms INTEGER,
+    fetched_at  TEXT NOT NULL
 );
 
 -- Deezer artist search, only for photos. picture_url NULL means no exact match (or no
@@ -432,6 +628,25 @@ CREATE TABLE IF NOT EXISTS rec_items (
     reasons_json TEXT NOT NULL DEFAULT '[]',
     facts_json   TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (rec_run_id, rank)
+);
+
+-- ---------------------------------------------------------------------------
+-- Recaps: the monthly and yearly cards, made by the app on its own
+-- ---------------------------------------------------------------------------
+
+-- One row per recap made automatically. fingerprint is a hash of the numbers behind
+-- the cards: during the late-data window a recap is rebuilt only when it changes.
+-- final: past that window, no more automatic rebuilds. announced: the Dashboard
+-- banner has shown it.
+CREATE TABLE IF NOT EXISTS recap_runs (
+    period_kind TEXT NOT NULL,
+    period_key  TEXT NOT NULL,
+    built_at    TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    cards       INTEGER NOT NULL,
+    final       INTEGER NOT NULL DEFAULT 0,
+    announced   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (period_kind, period_key)
 );
 
 -- "Not interested". App state, not a taste signal yet.

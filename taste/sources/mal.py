@@ -68,6 +68,9 @@ ANIME_FIELDS = [
     "average_episode_duration",
     "main_picture",
     "nsfw",
+    "num_list_users",
+    "popularity",
+    "rank",
 ]
 FIELDS = f"list_status{{{','.join(LIST_STATUS_FIELDS)}}},{','.join(ANIME_FIELDS)}"
 
@@ -197,12 +200,14 @@ def _load(conn: sqlite3.Connection, run: SyncRun, pages: list[tuple[int, dict[st
         for entry in payload["data"]:
             node, list_status = entry["node"], entry["list_status"]
             upsert_stg_anime(conn, node, raw_id, now)
-            change = _upsert_stg_list_entry(conn, node["id"], list_status, run.run_id, raw_id, now)
+            change, before = _upsert_stg_list_entry(
+                conn, node["id"], list_status, run.run_id, raw_id, now
+            )
             if change == "inserted":
                 run.rows_inserted += 1
             elif change == "updated":
                 run.rows_updated += 1
-            _load_core(conn, node["id"])
+            _load_core(conn, node["id"], before)
     # Only reached when every page came back, so a missing entry really was removed.
     return _apply_removals(conn, run.run_id, now)
 
@@ -225,8 +230,9 @@ def upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: int
         "INSERT INTO stg_mal_anime (mal_anime_id, title, title_en, title_ja, synonyms_json, "
         "media_type, num_episodes, start_season_year, start_season, airing_status, start_date, "
         "end_date, content_rating, source_material, avg_episode_seconds, community_mean, "
-        "num_scoring_users, main_picture_url, nsfw_rating, last_raw_page_id, loaded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "num_scoring_users, main_picture_url, nsfw_rating, last_raw_page_id, loaded_at, "
+        "num_list_users, popularity_rank, score_rank, synopsis) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (mal_anime_id) DO UPDATE SET title = excluded.title, "
         "title_en = excluded.title_en, title_ja = excluded.title_ja, "
         "synonyms_json = excluded.synonyms_json, media_type = excluded.media_type, "
@@ -239,7 +245,12 @@ def upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: int
         "num_scoring_users = excluded.num_scoring_users, "
         "main_picture_url = COALESCE(excluded.main_picture_url, stg_mal_anime.main_picture_url), "
         "nsfw_rating = COALESCE(excluded.nsfw_rating, stg_mal_anime.nsfw_rating), "
-        "last_raw_page_id = excluded.last_raw_page_id, loaded_at = excluded.loaded_at",
+        "last_raw_page_id = excluded.last_raw_page_id, loaded_at = excluded.loaded_at, "
+        "num_list_users = COALESCE(excluded.num_list_users, stg_mal_anime.num_list_users), "
+        "popularity_rank = COALESCE(excluded.popularity_rank, stg_mal_anime.popularity_rank), "
+        "score_rank = COALESCE(excluded.score_rank, stg_mal_anime.score_rank), "
+        # The list doesn't send synopses (details do), so a list sync keeps the one we have.
+        "synopsis = COALESCE(excluded.synopsis, stg_mal_anime.synopsis)",
         (
             anime_id,
             node["title"],
@@ -262,6 +273,10 @@ def upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: int
             node.get("nsfw"),
             raw_id,
             now,
+            node.get("num_list_users"),
+            node.get("popularity"),
+            node.get("rank"),
+            _none_if_blank((node.get("synopsis") or "").strip()),
         ),
     )
     conn.execute("DELETE FROM stg_mal_anime_genres WHERE mal_anime_id = ?", (anime_id,))
@@ -304,8 +319,9 @@ def _upsert_stg_list_entry(
     run_id: int,
     raw_id: int,
     now: str,
-) -> str:
-    """Upsert one list entry. Returns 'inserted', 'updated', or 'unchanged'."""
+) -> tuple[str, int | None]:
+    """Upsert one list entry. Returns ('inserted', 'updated', or 'unchanged') and the
+    episodes watched before this sync (None for an entry seen for the first time)."""
     values = {
         "status": ls["status"],
         "score": ls.get("score") or None,  # MAL uses 0 for "not scored"
@@ -333,7 +349,7 @@ def _upsert_stg_list_entry(
             f"VALUES ({', '.join('?' for _ in cols)})",
             (anime_id, *values.values(), now, run_id, raw_id),
         )
-        return "inserted"
+        return "inserted", None
 
     changed = existing["removed_at"] is not None or any(
         existing[col] != values[col] for col in _TRACKED
@@ -344,7 +360,8 @@ def _upsert_stg_list_entry(
         "last_raw_page_id = ?, removed_at = NULL WHERE mal_anime_id = ?",
         (*values.values(), run_id, raw_id, anime_id),
     )
-    return "updated" if changed else "unchanged"
+    before = None if existing["removed_at"] is not None else existing["num_episodes_watched"]
+    return ("updated" if changed else "unchanged"), before
 
 
 def date_event_time(value: str | None) -> tuple[str, str] | None:
@@ -424,7 +441,7 @@ def load_anime_core(conn: sqlite3.Connection, anime_id: int) -> int:
     return item_id
 
 
-def _load_core(conn: sqlite3.Connection, anime_id: int) -> None:
+def _load_core(conn: sqlite3.Connection, anime_id: int, episodes_before: int | None = None) -> None:
     """Load one anime and my list entry for it from staging into core."""
     item_id = load_anime_core(conn, anime_id)
     anime = conn.execute(
@@ -461,6 +478,41 @@ def _load_core(conn: sqlite3.Connection, anime_id: int) -> None:
     )
 
     _load_events(conn, item_id, anime_id, entry)
+    _load_episode_events(conn, item_id, anime_id, entry, episodes_before)
+
+
+def _load_episode_events(
+    conn: sqlite3.Connection,
+    item_id: int,
+    anime_id: int,
+    entry: sqlite3.Row,
+    before: int | None,
+) -> None:
+    """One episode_watched event per episode my progress went up by since the last sync.
+
+    MAL keeps only the current count, not a history, so each new episode is dated at
+    the entry's last edit (an upper bound: I may have watched it a little earlier). A
+    first sync records nothing: there's no telling when the episodes already on the
+    list were watched. Rewatches get their own keys, so watching again counts again.
+    """
+    after = entry["num_episodes_watched"] or 0
+    if before is None or after <= before:
+        return
+    watch = f"r{(entry['num_times_rewatched'] or 0) + 1}" if entry["is_rewatching"] else "w"
+    occurred_at = entry["mal_updated_at"]
+    for episode in range(before + 1, after + 1):
+        core.upsert_event(
+            conn,
+            item_id=item_id,
+            source=SOURCE,
+            event_type="episode_watched",
+            occurred_at_utc=occurred_at,
+            occurred_at_unix=utc_to_unix(occurred_at),
+            time_precision="second",
+            time_basis="observed_list_updated_at",
+            capture_scope=CAPTURE_SCOPE,
+            source_event_key=f"{anime_id}:ep:{watch}:{episode}",
+        )
 
 
 def _load_events(conn: sqlite3.Connection, item_id: int, anime_id: int, entry: sqlite3.Row) -> None:
@@ -519,7 +571,7 @@ def _apply_removals(conn: sqlite3.Connection, run_id: int, now: str) -> int:
     """Entries this complete run didn't see were removed from my list.
 
     Staging keeps the row (with removed_at set). Core drops my current-state
-    signals for it: rating, curation, and watch events.
+    signals for it: rating, curation, and watch and episode events.
     """
     gone = conn.execute(
         "SELECT mal_anime_id FROM stg_mal_list_entries "
@@ -538,4 +590,5 @@ def _apply_removals(conn: sqlite3.Connection, run_id: int, now: str) -> int:
             core.delete_curation(conn, item_id, SOURCE)
             core.delete_event(conn, SOURCE, f"{anime_id}:started")
             core.delete_event(conn, SOURCE, f"{anime_id}:finished")
+            core.delete_events_with_prefix(conn, SOURCE, f"{anime_id}:ep:")
     return len(gone)

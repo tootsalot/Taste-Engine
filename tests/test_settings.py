@@ -68,6 +68,7 @@ def test_every_setting_belongs_to_a_group_in_display_order():
         "Last.fm",
         "Reports",
         "Recommendations",
+        "Recaps",
         "Syncing and storage",
     ]
 

@@ -295,3 +295,23 @@ def test_two_tiles_share_one_download(qtbot, cache, session):
     qtbot.waitUntil(lambda: a.has_picture() and b.has_picture(), timeout=5000)
     assert session.urls() == [POSTER]
     loader.shutdown()
+
+
+def test_the_same_picture_stored_twice_keeps_the_first(cache, session, monkeypatch):
+    """Two threads can fetch one picture at once (a poster at two sizes). On Windows the
+    second rename failed while the first copy was open; now the first copy wins."""
+    first = cache.get(POSTER)
+    handle = first.open("rb")  # held open, like a decode in progress
+    try:
+        assert cache._store(POSTER, b"a second download") == first
+    finally:
+        handle.close()
+    assert first.read_bytes() == session.files[POSTER][2]
+    assert not list(first.parent.glob("*.part"))
+
+    def refuse(src, dst):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr("taste.images.os.replace", refuse)
+    assert cache._store(COVER, b"x") is None  # no picture, no traceback
+    assert not list(first.parent.glob("*.part"))

@@ -143,8 +143,13 @@ def build(version: str) -> str:
         f"Taste Engine {version}\n"
         "Copyright (c) 2026 Tootsalot. Released under the MIT License (see LICENSE.txt).\n\n"
         "Anime data comes from MyAnimeList (myanimelist.net), music data from Last.fm\n"
-        "(last.fm), and some artist photos from Deezer (deezer.com), through their public\n"
-        "APIs. Taste Engine isn't affiliated with or endorsed by any of them.\n\n"
+        "(last.fm), some artist photos from Deezer (deezer.com), books and their covers\n"
+        "from Hardcover (hardcover.app), and film and TV data and posters from TMDB\n"
+        "(themoviedb.org), through their public APIs.\n"
+        "Taste Engine isn't affiliated with or endorsed by any of them.\n\n"
+        "This product uses the TMDB API but is not endorsed or certified by TMDB.\n"
+        "The TMDB logo in Settings, About is TMDB's own, shown as its attribution\n"
+        "guidelines ask (themoviedb.org/about/logos-attribution).\n\n"
         "Taste Engine includes the software below. Thank you to everyone who made it.\n\n"
         + "\n".join(f"  - {line}" for line in contents)
     ]

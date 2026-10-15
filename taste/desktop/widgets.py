@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import math
 from collections.abc import Sequence
 
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QToolTip,
     QVBoxLayout,
@@ -21,7 +23,16 @@ from PySide6.QtWidgets import (
 )
 
 from taste import charts, overview
-from taste.desktop import theme
+from taste.desktop import motion, theme
+
+
+def plain_tip(text: str) -> str:
+    """Tooltip text shown exactly as written. Qt guesses whether a tooltip is rich text,
+    so a title from an API that looks like markup would be drawn as markup; escaping it
+    inside <qt> makes the guess irrelevant (the tooltip twin of label()'s plain text)."""
+    if not text:
+        return ""
+    return "<qt>" + html.escape(text).replace("\n", "<br>") + "</qt>"
 
 
 def label(text: str = "", role: str | None = None, wrap: bool = False) -> QLabel:
@@ -99,15 +110,48 @@ def nice_ticks(top: float) -> list[int]:
     return list(range(step, int(top) + 1, step))
 
 
+ACCENTS = {
+    "anime": theme.LILAC,
+    "music": theme.CORAL,
+    "books": theme.AMBER,
+    "screen": theme.TEAL,
+}
+
+
+class _Pill(QWidget):
+    """The lit shape behind the chosen segment: a fully rounded bar in the accent color."""
+
+    def __init__(self, parent: QWidget, accent: str) -> None:
+        super().__init__(parent)
+        self.color = QColor(ACCENTS.get(accent, theme.LILAC))
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self.color)
+        radius = self.height() / 2
+        painter.drawRoundedRect(QRectF(self.rect()), radius, radius)
+
+
 class Segmented(QFrame):
-    """A row of pill buttons where exactly one is on, like Simple | Advanced."""
+    """A row of pill buttons where exactly one is on, like Simple | Advanced.
+
+    The lit pill is a separate shape behind the buttons, so it can slide from one
+    to the next instead of jumping.
+    """
 
     changed = Signal(str)
 
     def __init__(self, options: Sequence[tuple[str, str]], accent: str = "anime") -> None:
-        """`options` are (key, text). `accent` "music" lights the chosen one coral."""
+        """`options` are (key, text). `accent` lights the chosen one: "anime" lilac,
+        "music" coral, "books" amber."""
         super().__init__()
         self.setProperty("role", "segmented")
+        self.pill = _Pill(self, accent)
+        self.pill.hide()
+        self._slide = None
         row = QHBoxLayout(self)
         row.setContentsMargins(2, 2, 2, 2)
         row.setSpacing(0)
@@ -120,15 +164,72 @@ class Segmented(QFrame):
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _=False, k=key: self.changed.emit(k))
+            # The chosen one is bold; leave room for that, or its first letter is cut off.
+            bold = QFont(button.font())
+            bold.setBold(True)
+            button.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(text) + 32)
             self.group.addButton(button)
             row.addWidget(button)
             self.buttons[key] = button
 
+        self.group.buttonToggled.connect(lambda button, on: on and self._move_pill(True))
+
     def set_value(self, key: str) -> None:
         self.buttons[key].setChecked(True)
+        self._move_pill(animate=False)
 
     def value(self) -> str:
         return next((k for k, b in self.buttons.items() if b.isChecked()), "")
+
+    def _target(self):
+        button = self.group.checkedButton()
+        return button.geometry() if button is not None else None
+
+    def _move_pill(self, animate: bool) -> None:
+        target = self._target()
+        if target is None or target.width() <= 0:
+            return
+        start = self.pill.geometry()
+        self.pill.show()
+        self.pill.lower()
+        if not animate or not self.isVisible() or start.width() <= 0:
+            self.pill.setGeometry(target)
+            return
+
+        def step(t: float) -> None:
+            self.pill.setGeometry(
+                round(start.x() + (target.x() - start.x()) * t),
+                target.y(),
+                round(start.width() + (target.width() - start.width()) * t),
+                target.height(),
+            )
+
+        self._slide = motion.tween(0.0, 1.0, step, motion.duration(220), owner=self)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().resizeEvent(event)
+        self._move_pill(animate=False)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().showEvent(event)
+        self._move_pill(animate=False)
+
+
+class ScrollArea(QScrollArea):
+    """A scroll area that says when the width its content really gets changes (the
+    viewport, which also narrows when a scroll bar appears).
+
+    Pages used an event filter on the viewport for this, but Qt could still call a
+    filter while a closing window was being torn down, after its Python side was gone.
+    A signal is dropped as soon as either end is deleted.
+    """
+
+    viewport_resized = Signal(int)  # the viewport's new width
+
+    def viewportEvent(self, event) -> bool:  # noqa: N802 (Qt naming)
+        if event.type() == QEvent.Type.Resize:
+            self.viewport_resized.emit(event.size().width())
+        return super().viewportEvent(event)
 
 
 class Card(QFrame):
@@ -216,7 +317,7 @@ class BarChart(QWidget):
         if event.type() == QEvent.Type.ToolTip:
             text = self.tip_at(event.pos().x())
             if text:
-                QToolTip.showText(event.globalPos(), text, self)
+                QToolTip.showText(event.globalPos(), plain_tip(text), self)
             else:
                 QToolTip.hideText()
             return True
@@ -337,6 +438,19 @@ class BarChart(QWidget):
         pitch = rects[1].left() - rects[0].left() if len(rects) > 1 else rects[0].width()
         step = max(1, math.ceil((max(widths) + self.LABEL_GAP) / pitch))
         y = self._plot().bottom() + 4
+        if step > 1 and not all(labels):
+            # Sparse labels by design (whole stars over half-star bars): place each one
+            # under its own bar wherever it fits, instead of every nth bar, which could
+            # land only on the blanks.
+            boxes, last_right = [], -math.inf
+            for rect, text, width in zip(rects, labels, widths, strict=False):
+                left = rect.center().x() - width / 2
+                if not text or left < last_right + self.LABEL_GAP or left + width > self.width():
+                    continue
+                boxes.append((QRectF(left, y, width + 1, self.LABEL_H), Qt.AlignmentFlag.AlignLeft,
+                              text))  # fmt: skip
+                last_right = left + width
+            return boxes
         if step == 1:
             center = Qt.AlignmentFlag.AlignHCenter
             return [
@@ -351,6 +465,45 @@ class BarChart(QWidget):
             box = QRectF(left, y, widths[i] + 1, self.LABEL_H)
             boxes.append((box, Qt.AlignmentFlag.AlignLeft, labels[i]))
         return boxes
+
+
+class Sparkline(QWidget):
+    """A tiny line of a few values, oldest first, with a dot on the newest."""
+
+    def __init__(self, color: str = theme.LILAC) -> None:
+        super().__init__()
+        self.color = QColor(color)
+        self.values: list[float] = []
+        self.setFixedSize(84, 30)
+
+    def set_values(self, values: Sequence[float]) -> None:
+        self.values = list(values)
+        self.setVisible(len(self.values) > 1)
+        self.update()
+
+    def points(self) -> list[QPointF]:
+        if len(self.values) < 2:
+            return []
+        low, high = min(self.values), max(self.values)
+        span = (high - low) or 1.0
+        width, height = self.width() - 6, self.height() - 6
+        step = width / (len(self.values) - 1)
+        return [
+            QPointF(3 + i * step, 3 + height - (v - low) / span * height)
+            for i, v in enumerate(self.values)
+        ]
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        points = self.points()
+        if not points:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(self.color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawPolyline(QPolygonF(points))
+        painter.setBrush(self.color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(points[-1], 3, 3)
 
 
 class LeanBar(QWidget):
@@ -465,9 +618,16 @@ class GenreCard(Card):
     """
 
     NAME_W = 130
+    MIN_ROWS = 3  # genres per list it always has room for, when it fits its height
 
-    def __init__(self, title: str = "Genres vs the MAL crowd", columns: int = 1) -> None:
+    def __init__(
+        self, title: str = "Genres vs the MAL crowd", columns: int = 1, fit: bool = False
+    ) -> None:
+        """`fit`: show as many genres as the card's height has room for (the Dashboard,
+        where rows share the window height). Otherwise every genre given is shown."""
         super().__init__()
+        self.fit = fit
+        self._row_widgets: dict[str, list[list[QWidget]]] = {"generous": [], "harsh": []}
         self.body.setSpacing(6)
         self.body.addWidget(section(title))
         self.note = label("", role="muted", wrap=True)
@@ -493,8 +653,63 @@ class GenreCard(Card):
         self.usual: float | None = None
 
     def rows(self, kind: str) -> list[tuple[str, str]]:
-        """(genre, value text) as shown, for tests."""
+        """(genre, value text) for every genre given, for tests."""
         return list(self._rows[kind])
+
+    def shown_rows(self, kind: str) -> list[tuple[str, str]]:
+        """The rows on screen (fewer than `rows` when the card fits its height)."""
+        shown = [not widgets[0].isHidden() for widgets in self._row_widgets[kind]]
+        return [row for row, visible in zip(self._rows[kind], shown, strict=True) if visible]
+
+    def _row_height(self) -> int:
+        return max(self.fontMetrics().height() + 2, 16) + self.grids[0].verticalSpacing()
+
+    def _overhead(self) -> int:
+        """Height taken by everything but the genre rows."""
+        margins = self.body.contentsMargins()
+        height = margins.top() + margins.bottom() + self.body.itemAt(0).widget().sizeHint().height()
+        if not self.note.isHidden():
+            width = max(self.width() - margins.left() - margins.right(), 100)
+            height += self.note.heightForWidth(width) + self.body.spacing()
+        return height + self.body.spacing()
+
+    def _fit_rows(self) -> None:
+        """Show as many rows as fit, sharing them between the two lists."""
+        if not self.fit:
+            return
+        groups = [k for k in ("generous", "harsh") if self._row_widgets[k]]
+        room = (self.height() - self._overhead()) // self._row_height() - len(groups)
+        room = max(room, self.MIN_ROWS * len(groups))
+        sizes = {k: len(self._row_widgets[k]) for k in groups}
+        counts = {k: min(n, room) for k, n in sizes.items()}
+        if len(groups) == 2:
+            first, second = groups
+            # Half each, and a short list hands its spare rows to the other one.
+            counts[first] = min(sizes[first], max(room // 2, room - sizes[second]))
+            counts[second] = min(sizes[second], room - counts[first])
+        for kind in groups:
+            for i, widgets in enumerate(self._row_widgets[kind]):
+                for widget in widgets:
+                    widget.setVisible(i < counts[kind])
+
+    def _base_height(self) -> int:
+        groups = [k for k in ("generous", "harsh") if self._row_widgets[k]]
+        rows = sum(min(len(self._row_widgets[k]), self.MIN_ROWS) for k in groups) + len(groups)
+        return self._overhead() + max(rows, 2) * self._row_height()
+
+    def sizeHint(self):  # noqa: N802 (Qt naming)
+        hint = super().sizeHint()
+        if self.fit:
+            hint.setHeight(self.minimumHeight())
+        return hint
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 (Qt naming)
+        # Fitting its height, the card mustn't ask its rows how tall to be.
+        return not self.fit and super().hasHeightForWidth()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().resizeEvent(event)
+        self._fit_rows()
 
     def headings(self) -> list[str]:
         return list(self._headings)
@@ -512,6 +727,7 @@ class GenreCard(Card):
                 if widget is not None:
                     widget.deleteLater()
         self._rows = {"generous": [], "harsh": []}
+        self._row_widgets = {"generous": [], "harsh": []}
         self._headings = []
         self.usual = usual
         ends = [g.avg_diff for g in generous + harsh] + [0.0]
@@ -545,9 +761,10 @@ class GenreCard(Card):
                 number.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 number.setFixedWidth(48)
                 for col, widget in enumerate((name, bar, number)):
-                    widget.setToolTip(tip)
+                    widget.setToolTip(plain_tip(tip))
                     grid.addWidget(widget, line, col)
                 self._rows[kind].append((g.genre, value))
+                self._row_widgets[kind].append([name, bar, number])
                 line += 1
             lines[column] = line
         if usual is not None:
@@ -558,6 +775,11 @@ class GenreCard(Card):
         self.note.setVisible(usual is not None and bool(generous or harsh))
         self.empty.setText(empty)
         self.empty.setVisible(not (generous or harsh))
+        if self.fit:
+            # The layout mustn't size the card from every row, or a tall window's rows
+            # would hold it tall after the window shrinks. It fits rows to its height.
+            self.setMinimumHeight(self._base_height())
+            self._fit_rows()
 
 
 class RankList(QWidget):
@@ -594,7 +816,7 @@ class RankList(QWidget):
             text = label()
             text.setFixedWidth(self.NAME_W)
             text.setText(elided(name, text.font(), self.NAME_W))
-            text.setToolTip(tips[line] if line < len(tips) else name)
+            text.setToolTip(plain_tip(tips[line] if line < len(tips) else name))
             bar = LeanBar(value, 0.0, float(top), self.color)
             number = label(f"{value:,}")
             number.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -659,7 +881,7 @@ class BandChart(QWidget):
         if event.type() == QEvent.Type.ToolTip:
             text = self.tip_at(event.pos().x())
             if text:
-                QToolTip.showText(event.globalPos(), text, self)
+                QToolTip.showText(event.globalPos(), plain_tip(text), self)
             else:
                 QToolTip.hideText()
             return True
@@ -729,3 +951,66 @@ class BandChart(QWidget):
         for band, center in zip(self.bands, centers, strict=True):
             radius = 4.5 if band.shows >= charts.MIDDLE_MIN_SHOWS else 3.0
             painter.drawEllipse(center, radius, radius)
+
+
+# Report pages: a row of big numbers, and charts on cards.
+
+
+def tile_row(tiles: list[QWidget]) -> QHBoxLayout:
+    row = QHBoxLayout()
+    row.setSpacing(12)
+    for tile in tiles:
+        row.addWidget(tile, 1)
+    return row
+
+
+class StatTile(Card):
+    """A big number, what it counts, and a second line (sometimes with a tiny trend)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        top = QHBoxLayout()
+        self.value = label("-")
+        self.value.setFont(theme.number_font(26))
+        top.addWidget(self.value)
+        top.addStretch()
+        self.trend = Sparkline()
+        top.addWidget(self.trend, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.body.addLayout(top)
+        self.caption = label("", role="muted")
+        self.body.addWidget(self.caption)
+        self.detail = label("", role="caption")
+        self.body.addWidget(self.detail)
+        self.trend.setVisible(False)
+
+    def set(self, tile: charts.Tile) -> None:
+        self.value.setText(tile.value)
+        self.caption.setText(tile.caption)
+        self.detail.setText(tile.detail)
+        color = {"anime": theme.LILAC, "books": theme.AMBER, "screen": theme.TEAL}.get(
+            tile.kind, theme.CORAL
+        )
+        self.value.setStyleSheet(f"color: {color};")
+        self.trend.color = QColor(color)
+        self.trend.set_values(tile.trend)
+        self.trend.setToolTip(tile.trend_tip)
+
+
+def chart_card(title: str, chart: QWidget, note: str = "", side: QWidget | None = None) -> Card:
+    """A small title (with `side`, such as a switch, at the right), a note, and a chart."""
+    card = Card()
+    card.title = section(title)
+    if side is None:
+        card.body.addWidget(card.title)
+    else:
+        row = QHBoxLayout()
+        # The title takes the free width: its size hint leaves out the theme's letter
+        # spacing, so held to it the last letter or two were cut off.
+        row.addWidget(card.title, 1)
+        row.addWidget(side)
+        card.body.addLayout(row)
+    card.note = label(note, role="muted", wrap=True)
+    card.body.addWidget(card.note)
+    card.note.setVisible(bool(note))  # after it has a parent, or it opens as its own window
+    card.body.addWidget(chart, 1)
+    return card

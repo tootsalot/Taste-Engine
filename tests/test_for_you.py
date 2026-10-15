@@ -3,7 +3,7 @@
 import pytest
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QPixmapCache
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLabel, QWidget
 
 from taste import recommend, settings
 from taste.desktop.context import AppContext
@@ -125,8 +125,17 @@ def refreshed(win, qtbot):
     return blocker.args[0]
 
 
-def cards(win, kind):
-    return win.for_you.lists[kind].cards
+def tiles(win, kind):
+    return win.for_you.lists[kind].tiles
+
+
+def detail(win, kind):
+    """The panel showing the selected suggestion in full."""
+    return win.for_you.lists[kind].detail
+
+
+def texts(card, role):
+    return [w.text() for w in card.findChildren(QLabel) if w.property("role") == role]
 
 
 def test_for_you_is_second_in_the_sidebar(window):
@@ -154,7 +163,13 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
         assert not window.dashboard.sync_buttons["all"].isEnabled()
         assert not page.progress.isHidden()
         assert not window.profile_picker.isEnabled()
-    assert blocker.args[0] == {"anime": 4, "music_discover": 4, "music_rediscover": 1}
+    assert blocker.args[0] == {
+        "anime": 4,
+        "music_discover": 4,
+        "music_rediscover": 1,
+        "film": 0,
+        "book": 0,
+    }
     assert page.refresh_button.isEnabled()
     assert window.dashboard.sync_buttons["all"].isEnabled()
     assert page.progress.isHidden()
@@ -163,49 +178,51 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
     assert page.updated.text().startswith("Updated ")
     assert "UTC" not in page.updated.text()  # in the profile's time zone, in plain words
 
-    anime = cards(window, "anime")
-    assert [c.rec.item_key for c in anime] == ["201", "203", "104", "206"]
-    first = anime[0]
+    anime = tiles(window, "anime")
+    assert [t.rec.item_key for t in anime] == ["201", "203", "104", "206"]
+    assert anime[0].score.text() == "8.2" and anime[0].property("selected")
+    # The first suggestion is open in the panel: everything the old card said, and more room.
+    first = detail(window, "anime")
+    assert first.rec.item_key == "201"
     assert first.title.text() == "Example Candidate One"
     assert first.score.text() == "8.2"
     assert first.caption.text() == "for you · MAL 8.20"
     assert first.chance.isHidden()  # four scored shows are too few to estimate it
     assert first.open_button.text() == "Open on MyAnimeList"
-    reasons = [
-        w.text() for w in first.findChildren(type(first.title)) if w.property("role") == "reason"
-    ]
-    assert reasons == [
+    assert texts(first, "reason") == [
         "Because you loved Example Drama A and really liked Example Action F, and you tend "
         "to enjoy drama anime."
     ]
+    # The numbers behind the reason are on the panel itself, and a hover away.
+    assert "20 MAL users who liked Example Drama A recommend this." in texts(first, "caption")
     assert "20 MAL users who liked Example Drama A recommend this." in first.toolTip()
-    badges = [
-        w.text() for w in anime[2].findChildren(type(first.title)) if w.property("role") == "badge"
-    ]
-    assert badges == ["On your Plan to Watch"]
+    qtbot.mouseClick(anime[2], Qt.MouseButton.LeftButton)  # click a tile: it opens instead
+    assert detail(window, "anime").rec.item_key == "104"
+    assert anime[2].property("selected") and not anime[0].property("selected")
+    assert texts(detail(window, "anime"), "badge") == ["On your Plan to Watch"]
     assert page.tabs.tabText(0) == "Anime (4)"
 
 
-def test_cards_take_as_many_columns_as_fit(window, qtbot):
-    assert [columns_for(w) for w in (400, 900, 1400, 1900, 5000)] == [1, 2, 3, 4, 4]
+def test_tiles_take_as_many_columns_as_fit(window, qtbot):
+    tile = 150 + 2 * 8 + 10  # picture, padding, and the gap
+    assert [columns_for(w) for w in (100, tile * 3, tile * 8)] == [1, 3, 8]
     synced(window, qtbot)
     refreshed(window, qtbot)
     window.sidebar.setCurrentRow(PAGES.index("For You"))
     tab = window.for_you.lists["anime"]
 
     def rows_and_columns():
-        return [tab.grid.getItemPosition(tab.grid.indexOf(card))[:2] for card in tab.cards]
+        return [tab.grid.getItemPosition(tab.grid.indexOf(t))[:2] for t in tab.tiles]
 
     window.resize(2560, 1400)  # the full-screen size this was designed for
     window.show()
     qtbot.waitExposed(window)
-    qtbot.waitUntil(lambda: tab.columns == 4, timeout=3000)
+    qtbot.waitUntil(lambda: tab.columns >= 4, timeout=3000)
     assert rows_and_columns() == [(0, 0), (0, 1), (0, 2), (0, 3)]
-    # A short list leaves spare height below the cards; the cards don't stretch into it.
-    assert all(card.height() <= card.sizeHint().height() + 8 for card in tab.cards)
-    window.resize(1300, 800)  # narrower: the same cards, two to a row
-    qtbot.waitUntil(lambda: tab.columns == 2, timeout=3000)
-    assert rows_and_columns() == [(0, 0), (0, 1), (1, 0), (1, 1)]
+    assert not tab.panel.isHidden()  # the selected one, in full, beside the grid
+    window.resize(1100, 800)  # narrower: the same tiles, fewer to a row
+    qtbot.waitUntil(lambda: tab.columns < 4, timeout=3000)
+    assert rows_and_columns()[tab.columns] == (1, 0)
 
 
 def test_music_tabs_build_when_shown_and_carry_the_scope_note(window, qtbot):
@@ -213,28 +230,31 @@ def test_music_tabs_build_when_shown_and_carry_the_scope_note(window, qtbot):
     refreshed(window, qtbot)
     page = window.for_you
     discover = page.lists["music_discover"]
-    assert discover.dirty and discover.cards == []  # not built until someone looks
+    assert discover.dirty and discover.tiles == []  # not built until someone looks
     page.tabs.setCurrentWidget(discover)
-    assert [c.rec.title for c in discover.cards][:2] == ["Example New X", "Example Dismissed Z"]
-    assert discover.cards[0].score.text() == "Strong match"
-    assert "Match strength 0.95" in discover.cards[0].toolTip()
-    assert discover.cards[0].open_button.text() == "Open on Last.fm"
+    assert [t.rec.title for t in discover.tiles][:2] == ["Example New X", "Example Dismissed Z"]
+    assert discover.tiles[0].score.text() == "Strong match"
+    assert discover.detail.score.text() == "Strong match"
+    assert "Match strength 0.95" in discover.detail.toolTip()
+    assert discover.detail.open_button.text() == "Open on Last.fm"
     assert "Desktop listening only" in discover.note.text()
     page.tabs.setCurrentWidget(page.lists["music_rediscover"])
     rediscover = page.lists["music_rediscover"]
-    assert [c.rec.title for c in rediscover.cards] == ["Example Old Favorite"]
-    assert rediscover.cards[0].score.text() == "20"
+    assert [t.rec.title for t in rediscover.tiles] == ["Example Old Favorite"]
+    assert rediscover.tiles[0].score.text() == "20 plays"
+    assert rediscover.detail.score.text() == "20"
     assert "Desktop listening only" in rediscover.note.text()
 
 
 def test_posters_load_in_the_background(window, qtbot, images):
     synced(window, qtbot)
     refreshed(window, qtbot)
-    first = cards(window, "anime")[0]
+    first = tiles(window, "anime")[0]
     qtbot.waitUntil(first.art.has_picture, timeout=5000)
-    # Cards without a downloadable picture keep their placeholder letter.
+    qtbot.waitUntil(detail(window, "anime").art.has_picture, timeout=5000)
+    # Suggestions without a downloadable picture keep their placeholder letter.
     qtbot.waitUntil(window.ctx.art.is_idle, timeout=5000)
-    assert not cards(window, "anime")[1].art.has_picture()
+    assert not tiles(window, "anime")[1].art.has_picture()
     # Only known hosts (the Dashboard asks for album covers too), and nothing for
     # the music tabs, which nobody has opened yet.
     urls = images.urls()
@@ -247,13 +267,16 @@ def test_not_interested_hides_a_card_for_good(window, qtbot):
     synced(window, qtbot)
     refreshed(window, qtbot)
     page = window.for_you
-    target = next(c for c in cards(window, "anime") if c.rec.item_key == "203")
-    qtbot.mouseClick(target.dismiss_button, Qt.MouseButton.LeftButton)
-    assert [c.rec.item_key for c in cards(window, "anime")] == ["201", "104", "206"]
+    tab = page.lists["anime"]
+    tab.select(1)
+    assert detail(window, "anime").rec.item_key == "203"
+    qtbot.mouseClick(detail(window, "anime").dismiss_button, Qt.MouseButton.LeftButton)
+    assert [t.rec.item_key for t in tiles(window, "anime")] == ["201", "104", "206"]
+    assert detail(window, "anime").rec.item_key == "104"  # the next one opens in its place
     assert page.tabs.tabText(0) == "Anime (3)"
     assert "Hidden Example Drama A Season 2" in page.status.text()
     refreshed(window, qtbot)  # and it stays hidden after a refresh
-    assert "203" not in [c.rec.item_key for c in cards(window, "anime")]
+    assert "203" not in [t.rec.item_key for t in tiles(window, "anime")]
 
 
 def test_open_link_goes_to_the_browser(window, qtbot, monkeypatch):
@@ -263,7 +286,7 @@ def test_open_link_goes_to_the_browser(window, qtbot, monkeypatch):
     )
     synced(window, qtbot)
     refreshed(window, qtbot)
-    qtbot.mouseClick(cards(window, "anime")[0].open_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(detail(window, "anime").open_button, Qt.MouseButton.LeftButton)
     assert opened == ["https://myanimelist.net/anime/201"]
     assert not window.for_you.open_link("https://example.com/phish")
     assert opened == ["https://myanimelist.net/anime/201"]
@@ -277,7 +300,7 @@ def test_changing_a_rec_setting_recomputes_without_the_network(window, qtbot):
     with qtbot.waitSignal(page.refresh_finished, timeout=15000) as blocker:
         assert window.settings.save_settings()
     assert blocker.args[0]["anime"] == 3
-    assert "104" not in [c.rec.item_key for c in cards(window, "anime")]
+    assert "104" not in [t.rec.item_key for t in tiles(window, "anime")]
 
     # Other settings don't trigger a recompute.
     window.settings.inputs["top_n_all_time"].setValue(40)
@@ -340,7 +363,8 @@ def test_card_text_is_never_html(window, qtbot):
     conn.close()
     with qtbot.waitSignal(window.for_you.refresh_finished, timeout=15000):
         window.for_you.start_refresh(fetch=False)
-    title = cards(window, "anime")[0].title
+    title = detail(window, "anime").title
+    assert tiles(window, "anime")[0].title.textFormat() == Qt.TextFormat.PlainText
     assert title.textFormat() == Qt.TextFormat.PlainText
     assert title.text() == "<b>bold</b>"
 
@@ -385,9 +409,11 @@ def test_sync_everything_also_refreshes_recommendations(window, qtbot):
     assert blocker.args[0] == {"mal": True, "lastfm": True}
     log = dash.log.toPlainText()
     assert "Recommendations: details for shows you liked, 2 of 2" in log
-    assert "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover." in log
+    assert (
+        "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover, 0 films, 0 books." in log
+    )
     assert window.for_you.tabs.tabText(0) == "Anime (4)"  # For You picked them up
-    assert len(cards(window, "anime")) == 4
+    assert len(tiles(window, "anime")) == 4
     assert progress  # the bar followed the recommendation steps too
 
 
@@ -425,3 +451,19 @@ def test_syncing_one_source_leaves_recommendations_alone(window, qtbot):
         window.dashboard.start_sync("mal")
     assert "Recommendations" not in window.dashboard.log.toPlainText()
     assert window.for_you.updated.text() == "Never refreshed"
+
+
+def test_the_panel_says_what_a_pick_is_and_how_popular(window, qtbot):
+    synced(window, qtbot)
+    refreshed(window, qtbot)
+    page = window.for_you
+    page.tabs.setCurrentWidget(page.lists["anime"])
+    card = detail(window, "anime")
+    assert card.about.text().startswith("A made-up story about")
+    assert "Written by MAL Rewrite" not in card.about.text()
+    assert any("members on MAL" in t for t in texts(card, "chip"))
+    page.tabs.setCurrentWidget(page.lists["music_discover"])
+    card = detail(window, "music_discover")
+    assert card.about.text().endswith("is a made-up band & friends.")
+    assert texts(card, "chip")[0] == "123.5k listeners on Last.fm"
+    assert page.tabs.tabText(page.tabs.count() - 1).startswith("Books")

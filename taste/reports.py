@@ -55,6 +55,8 @@ REPORTS = [
     ),
     Report("rpt_lastfm_by_hour", "local_hour", "Plays by hour of day", True),
     Report("rpt_lastfm_by_weekday", "local_weekday_num", "Plays by day of week", True),
+    Report("rpt_hardcover_books", "last_read DESC, title", "Books and my stars"),
+    Report("rpt_tmdb_ratings", "rated_at DESC, title", "Films and TV I rated"),
 ]
 
 

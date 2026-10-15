@@ -44,6 +44,18 @@ ADDED_COLUMNS = [
     ("stg_mal_anime", "nsfw_rating", "TEXT"),
     ("stg_lastfm_scrobbles", "image_url", "TEXT"),
     ("rec_items", "facts_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("stg_mal_anime", "num_list_users", "INTEGER"),
+    ("stg_mal_anime", "popularity_rank", "INTEGER"),
+    ("stg_mal_anime", "score_rank", "INTEGER"),
+    ("stg_mal_anime", "synopsis", "TEXT"),
+    ("stg_mal_anime_details", "fields_version", "INTEGER NOT NULL DEFAULT 0"),
+    ("stg_tmdb_movies", "overview", "TEXT"),
+    ("stg_tmdb_movies", "popularity", "REAL"),
+    ("stg_hardcover_books", "similar_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("stg_hardcover_books", "description", "TEXT"),
+    ("stg_hardcover_books", "users_count", "INTEGER"),
+    ("stg_hardcover_books", "users_read_count", "INTEGER"),
+    ("stg_hardcover_books", "details_at", "TEXT"),
 ]
 
 
@@ -54,12 +66,70 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+# Books came from a Goodreads export, with Open Library covers, until Hardcover
+# replaced both (2026-10-15). Hardcover holds the same history, so keeping the old rows
+# would count every book twice. They're removed once; the export file isn't touched.
+RETIRED_SOURCES = ("goodreads", "openlibrary")
+RETIRED_TABLES = ("stg_goodreads_books", "stg_openlibrary_books")
+_ITEM_TABLES = (
+    "core_behavior_events", "core_community_ratings", "core_curation", "core_item_creators",
+    "core_item_external_ids", "core_item_images", "core_item_tags", "core_ratings",
+)  # fmt: skip
+
+
+def _retire_old_sources(conn: sqlite3.Connection) -> None:
+    marks = ", ".join("?" for _ in RETIRED_SOURCES)
+    found = conn.execute(
+        f"SELECT 1 FROM core_sources WHERE source IN ({marks})", RETIRED_SOURCES
+    ).fetchone()
+    if found is None:
+        return
+    old = RETIRED_SOURCES
+    items = f"(SELECT item_id FROM core_items WHERE source IN ({marks}))"
+    creators = f"(SELECT creator_id FROM core_creators WHERE source IN ({marks}))"
+    with transaction(conn):
+        for table in RETIRED_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute(
+            "DELETE FROM core_event_local_times WHERE event_id IN ("
+            f"SELECT event_id FROM core_behavior_events WHERE source IN ({marks}) "
+            f"OR item_id IN {items})",
+            old + old,
+        )
+        for table in _ITEM_TABLES:
+            conn.execute(
+                f"DELETE FROM {table} WHERE source IN ({marks}) OR item_id IN {items}", old + old
+            )
+        conn.execute(
+            f"DELETE FROM core_item_links WHERE source IN ({marks}) "
+            f"OR child_item_id IN {items} OR parent_item_id IN {items}",
+            old * 3,
+        )
+        conn.execute(
+            f"DELETE FROM core_item_similarity WHERE source IN ({marks}) "
+            f"OR item_id IN {items} OR similar_item_id IN {items}",
+            old * 3,
+        )
+        conn.execute(f"DELETE FROM core_item_creators WHERE creator_id IN {creators}", old)
+        conn.execute(
+            f"DELETE FROM core_creator_external_ids WHERE source IN ({marks}) "
+            f"OR creator_id IN {creators}",
+            old + old,
+        )
+        conn.execute(f"DELETE FROM core_items WHERE source IN ({marks})", old)
+        conn.execute(f"DELETE FROM core_creators WHERE source IN ({marks})", old)
+        conn.execute(f"DELETE FROM raw_api_pages WHERE source IN ({marks})", old)
+        conn.execute(f"DELETE FROM sync_runs WHERE source IN ({marks})", old)
+        conn.execute(f"DELETE FROM core_sources WHERE source IN ({marks})", old)
+
+
 def apply_schema(conn: sqlite3.Connection) -> None:
     # Local imports: both modules import this one.
     from taste import local_time, settings
 
     conn.executescript((SQL_DIR / "schema.sql").read_text(encoding="utf-8"))
     _add_missing_columns(conn)
+    _retire_old_sources(conn)
     settings.ensure_defaults(conn)
     settings.apply_source_notes(conn)
     # One transaction, so another connection reading a report while this one starts
