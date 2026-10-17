@@ -10,6 +10,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from taste import bookstats, screenstats
+
 ON_REPEAT_DAYS = 30
 
 # The Dashboard runs these on the UI thread, so they must stay index lookups
@@ -139,3 +141,87 @@ def genre_lean(conn: sqlite3.Connection, n: int = 10) -> tuple[list[GenreLean], 
     ]
     split = min(n, (len(rows) + 1) // 2)
     return rows[:split], list(reversed(rows[split:]))[:n]
+
+
+# ---------------------------------------------------------------------------
+# You vs the crowd: one number per source, how far I sit from its crowd
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CrowdNumber:
+    kind: str  # anime, screen, books, music: the color it's drawn in
+    value: str  # "-0.88", "-1.1★", "40%"
+    caption: str  # "vs MAL · 343 shows"
+    tip: str  # what it means, on hover
+
+
+def artist_play_counts(conn: sqlite3.Connection) -> list[int]:
+    """Plays per artist, most first. Your taste and You vs the crowd both read it, so the
+    Dashboard counts once and hands it to each."""
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT COUNT(*) AS n FROM stg_lastfm_scrobbles GROUP BY lower(artist_name) "
+            "ORDER BY n DESC"
+        )
+    ]
+
+
+def vs_crowd(
+    conn: sqlite3.Connection,
+    *,
+    books: bookstats.BookStats | None = None,
+    counts: list[int] | None = None,
+) -> list[CrowdNumber]:
+    """MAL, TMDB, and Hardcover: my average against the crowd's for the same titles.
+    Last.fm has no crowd score, so it's how much I play beyond my ten most played
+    artists. A source with nothing synced is left out."""
+    found: list[CrowdNumber] = []
+    summary = conn.execute("SELECT * FROM rpt_mal_critic_summary").fetchone()
+    if summary and summary["shows_scored"]:
+        found.append(
+            CrowdNumber(
+                "anime",
+                f"{summary['avg_diff'] + 0.0:+.2f}",
+                f"vs MAL · {summary['shows_scored']:,} shows",
+                f"Points {'below' if summary['avg_diff'] < 0 else 'above'} the MAL community "
+                f"on average. You go lower than MAL on {summary['share_scored_below']:.0%} of "
+                f"your scored shows and higher on {summary['share_scored_above']:.0%}. Lower and "
+                "higher compare your score with MAL's average rounded to a whole number, the "
+                "closest score you could give.",
+            )
+        )
+    screen = screenstats.load(conn)
+    if screen.film_diff is not None:
+        found.append(
+            CrowdNumber(
+                "screen",
+                f"{screen.film_diff:+.1f}",
+                f"vs TMDB · {screen.films:,} films",
+                "Your film ratings against TMDB's average for the same films, out of 10.",
+            )
+        )
+    books = books or bookstats.load(conn)
+    if books.my_average is not None and books.hardcover_average is not None:
+        found.append(
+            CrowdNumber(
+                "books",
+                f"{books.my_average - books.hardcover_average:+.1f}★",
+                f"vs Hardcover · {books.unique:,} books",
+                "Your stars against Hardcover's average for the same books, out of 5.",
+            )
+        )
+    counts = artist_play_counts(conn) if counts is None else counts
+    if counts:
+        outside = 1 - sum(counts[:10]) / sum(counts)
+        found.append(
+            CrowdNumber(
+                "music",
+                f"{outside:.0%}",
+                "of plays outside your top 10 artists",
+                "Last.fm has no crowd score to compare with, so this is how far your listening "
+                "goes beyond your ten most played artists.",
+            )
+        )
+    return found

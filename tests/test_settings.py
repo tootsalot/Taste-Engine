@@ -26,7 +26,8 @@ def test_defaults_exist_for_every_setting(conn):
         ("lastfm_lookback_days", "400", "at most 365"),
         ("display_name", "x" * 201, "too long"),
         ("not_a_setting", "1", "Unknown setting"),
-        ("rec_media_types", "tv,tvv", "Unknown anime type: tvv"),
+        ("rec_media_types", "tv,tvv", "Anime types to suggest: no choice called tvv"),
+        ("dashboard_cards", "crowd,clock", "Dashboard cards: no choice called clock"),
         ("rec_media_types", " , ", "at least one"),
     ],
 )
@@ -61,9 +62,12 @@ def test_every_setting_belongs_to_a_group_in_display_order():
         "rec_min_raters",
         "rec_media_types",
         "rec_include_plan_to_watch",
+        "film_prior_votes",
         "rec_seed_artists",
     ]
+    assert by_group["Sources"] == ["mal_username", "lastfm_username"]  # the Sources card
     assert settings.GROUPS == [
+        "Sources",
         "Profile",
         "Last.fm",
         "Reports",

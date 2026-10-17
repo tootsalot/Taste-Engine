@@ -1,7 +1,7 @@
 """Transitions: pages, the sidebar, the sync log, banners, pictures, and cards.
 
 One place decides how much the app moves:
-- "full": fades with a little travel, slides, and staggers (DURATION ms).
+- "full": fades, slides, and staggers (DURATION ms).
 - "reduced": quick fades only, nothing that travels or bounces.
 - "off": everything changes at once.
 
@@ -23,20 +23,20 @@ from collections.abc import Callable
 from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
-    QParallelAnimationGroup,
-    QPoint,
     QSequentialAnimationGroup,
     Qt,
     QVariantAnimation,
 )
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
+from shiboken6 import isValid
 
 from taste.desktop import ui_state
 
 LEVELS = ("full", "reduced", "off")
 DURATION = 320  # ms, "relaxed": chosen by the user from a live demo (2026-10-15)
 REDUCED = 150  # ms, fades only
-TRAVEL = 10  # px a page or card rises while fading in, in "full"
+PAGE_FADE = 240  # ms, a new page fading in from the background
 STAGGER = 40  # ms between cards fading in one after another
 STAGGER_MAX = 12  # cards past this many appear with the last group, not later
 
@@ -44,6 +44,7 @@ override: str | None = None  # tests set "off"; None means the saved choice
 _keep: set[QAbstractAnimation] = set()  # running animations, so they aren't collected
 _revealing: dict = {}  # widget -> (its open/close animation, its own min and max height)
 _targets: dict = {}  # widget -> where its running open/close animation ends
+_veils: dict = {}  # container -> the veil fading its new page in
 
 
 def windows_allows() -> bool:
@@ -128,47 +129,77 @@ def _curve() -> QEasingCurve:
 
 
 # ---------------------------------------------------------------------------
-# Page changes: a snapshot of the old page fades away over the new one
+# Page changes: the new page fades in from the background
 # ---------------------------------------------------------------------------
 
 
-def crossfade(container: QWidget, switch: Callable[[], None]) -> None:
-    """Run `switch` (which changes what `container` shows) behind a fading snapshot
-    of how it looked, so the new content seems to fade and rise into place.
+class Veil(QWidget):
+    """The page background, painted over a new page and fading away.
 
-    Only a picture of the old page moves, never the live widgets, so layouts and
-    scroll positions are never disturbed.
+    2.0 faded a snapshot of the old page through a graphics effect: grabbing the page
+    took about 56 ms before anything moved, every frame re-rendered the snapshot off
+    screen (about 37 ms against 16 ms at 2560 x 1380), and a second change mid-fade
+    snapshotted the snapshot. A veil needs no picture and no effect.
     """
-    ms = duration()
+
+    def __init__(self, parent: QWidget, color: str) -> None:
+        super().__init__(parent)
+        self.color = QColor(color)
+        self.alpha = 1.0
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def set_alpha(self, alpha) -> None:
+        with contextlib.suppress(RuntimeError):  # deleted between two frames
+            self.alpha = float(alpha)
+            self.setGeometry(self.parentWidget().rect())
+            self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        painter = QPainter(self)
+        color = QColor(self.color)
+        color.setAlphaF(max(0.0, min(self.alpha, 1.0)))
+        painter.fillRect(self.rect(), color)
+        painter.end()
+
+
+def crossfade(container: QWidget, switch: Callable[[], None]) -> None:
+    """Run `switch` (which changes what `container` shows), and fade the new content in
+    from the page background. A change while one is fading finishes that one first."""
+    from taste.desktop import theme  # theme builds icons; import it only when needed
+
+    # A container deleted mid-fade takes its veil and animation with it, so their
+    # cleanup never runs: drop those entries here.
+    for key in [k for k, v in _veils.items() if not (isValid(k) and isValid(v))]:
+        del _veils[key]
+    previous = _veils.pop(container, None)
+    if previous is not None:
+        with contextlib.suppress(RuntimeError):
+            previous.hide()
+            previous.deleteLater()
+    ms = duration(PAGE_FADE)
     if not ms or not container.isVisible() or container.width() <= 0:
         switch()
         return
-    snapshot = QLabel(container)
-    snapshot.setPixmap(container.grab())
-    snapshot.setGeometry(container.rect())
-    snapshot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
     switch()
-    snapshot.show()
-    snapshot.raise_()
-    effect = QGraphicsOpacityEffect(snapshot)
-    snapshot.setGraphicsEffect(effect)
-    group = QParallelAnimationGroup(snapshot)
-    group.addAnimation(_opacity(effect, 1.0, 0.0, ms, QEasingCurve(QEasingCurve.Type.OutQuad)))
-    if travels():
-        # The old picture drifts up a little as it fades, so the page reads as arriving.
-        drift = QVariantAnimation()
-        drift.setDuration(ms)
-        drift.setStartValue(0.0)
-        drift.setEndValue(float(-TRAVEL))
-        drift.setEasingCurve(_curve())
-        drift.valueChanged.connect(lambda value: _move(snapshot, QPoint(0, round(float(value)))))
-        group.addAnimation(drift)
-    _run(group, snapshot.deleteLater)
+    veil = Veil(container, theme.BG)
+    veil.setGeometry(container.rect())
+    veil.show()
+    veil.raise_()
+    animation = QVariantAnimation(veil)
+    animation.setDuration(ms)
+    animation.setStartValue(1.0)
+    animation.setEndValue(0.0)
+    animation.setEasingCurve(QEasingCurve(QEasingCurve.Type.OutQuad))
+    animation.valueChanged.connect(veil.set_alpha)
+    _veils[container] = veil
 
+    def done() -> None:
+        if _veils.get(container) is veil:
+            del _veils[container]
+        with contextlib.suppress(RuntimeError):
+            veil.deleteLater()
 
-def _move(widget: QWidget, to: QPoint) -> None:
-    with contextlib.suppress(RuntimeError):
-        widget.move(to)
+    _run(animation, done)
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +245,7 @@ def reveal(widget: QWidget, shown: bool, done: Callable[[], None] | None = None)
         if done:
             done()
         return
-    target = max(widget.sizeHint().height(), low, 1)
+    target = min(max(widget.sizeHint().height(), low, 1), high)
     start = 0 if shown else max(widget.height(), 1)
     end = target if shown else 0
     widget.setFixedHeight(start)
@@ -288,6 +319,15 @@ def fade_out(widget: QWidget, done: Callable[[], None]) -> None:
 def _drop_effect(widget: QWidget) -> None:
     with contextlib.suppress(RuntimeError):  # the widget was deleted while it faded
         widget.setGraphicsEffect(None)
+
+
+def menu_effects() -> None:
+    """Menus fade open only while the app animates (Off and Windows' setting turn it off)."""
+    from PySide6.QtWidgets import QApplication
+
+    on = level() != "off"
+    QApplication.setEffectEnabled(Qt.UIEffect.UI_AnimateMenu, on)
+    QApplication.setEffectEnabled(Qt.UIEffect.UI_FadeMenu, on)
 
 
 def tween(

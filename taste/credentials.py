@@ -17,7 +17,8 @@ from taste.sources.hardcover import Tokens
 from taste.sources.tmdb import TmdbSettings
 
 
-def _username(conn: sqlite3.Connection, setting_key: str, env_name: str) -> str:
+def username(conn: sqlite3.Connection, setting_key: str, env_name: str) -> str:
+    """A username from the profile's settings, else the environment variable."""
     return settings.get(conn, setting_key) or os.environ.get(env_name, "").strip()
 
 
@@ -30,28 +31,28 @@ def _missing(source: str, missing: list[str]) -> ConfigError:
 
 def mal(conn: sqlite3.Connection, profile_id: str, store: SecretStore) -> MalSettings:
     client_id = store.get(profile_id, "MAL_CLIENT_ID")
-    username = _username(conn, "mal_username", "MAL_USERNAME")
+    name = username(conn, "mal_username", "MAL_USERNAME")
     missing = [
         label
-        for label, value in ((KEY_LABELS["MAL_CLIENT_ID"], client_id), ("username", username))
+        for label, value in ((KEY_LABELS["MAL_CLIENT_ID"], client_id), ("username", name))
         if not value
     ]
     if missing:
         raise _missing("MyAnimeList", missing)
-    return MalSettings(client_id, username)
+    return MalSettings(client_id, name)
 
 
 def lastfm(conn: sqlite3.Connection, profile_id: str, store: SecretStore) -> LastfmSettings:
     api_key = store.get(profile_id, "LASTFM_API_KEY")
-    username = _username(conn, "lastfm_username", "LASTFM_USERNAME")
+    name = username(conn, "lastfm_username", "LASTFM_USERNAME")
     missing = [
         label
-        for label, value in ((KEY_LABELS["LASTFM_API_KEY"], api_key), ("username", username))
+        for label, value in ((KEY_LABELS["LASTFM_API_KEY"], api_key), ("username", name))
         if not value
     ]
     if missing:
         raise _missing("Last.fm", missing)
-    return LastfmSettings(api_key, username)
+    return LastfmSettings(api_key, name)
 
 
 def tmdb(conn: sqlite3.Connection, profile_id: str, store: SecretStore) -> TmdbSettings:
@@ -82,7 +83,7 @@ def hardcover_connected(profile_id: str, store: SecretStore) -> bool:
 def hardcover(profile_id: str, store: SecretStore) -> Tokens:
     access, refresh, expires = (store.get(profile_id, n) for n in HARDCOVER_NAMES)
     if not access or not refresh:
-        raise ConfigError("Hardcover: connect your Hardcover account on the Settings page first.")
+        raise ConfigError("connect your Hardcover account on the Settings page first.")
     return Tokens(access, refresh, expires or "")
 
 

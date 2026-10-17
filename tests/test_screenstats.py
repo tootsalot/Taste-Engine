@@ -25,3 +25,13 @@ def test_films_and_shows_counted_apart_and_genres_together(conn, make_client):
     one_year = screenstats.load(conn, "2025")
     assert (one_year.films, one_year.shows) == (1, 0)
     assert screenstats.years(conn) == ["2026", "2025"]
+
+
+def test_your_rating_against_tmdb_by_band(conn, make_client):
+    synced_account(conn, make_client)
+    s = screenstats.load(conn)
+    films = [r for r in s.rated if r.kind == "movie" and r.average]
+    shows = [r for r in s.rated if r.kind == "tv" and r.average]
+    assert sum(b.shows for b in s.film_bands) == len(films) > 0
+    assert sum(b.shows for b in s.tv_bands) == len(shows)
+    assert all(b.mal_to - b.mal_from == 0.5 for b in s.film_bands)

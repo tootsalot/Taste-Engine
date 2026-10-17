@@ -7,8 +7,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QSize
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QImageReader, QPalette, QPixmap
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QSize, Qt
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QIcon,
+    QImageReader,
+    QPainter,
+    QPalette,
+    QPixmap,
+)
 from PySide6.QtWidgets import QApplication
 
 ASSETS = Path(__file__).resolve().parent / "assets"
@@ -25,6 +34,7 @@ LILAC = "#B69CFF"  # anime and primary actions
 CORAL = "#FF7A59"  # music
 TEAL = "#6FD3C6"  # films and TV (lilac and coral stay anime and music only)
 AMBER = "#F2C46D"  # books
+SOURCE_COLORS = {"mal": LILAC, "lastfm": CORAL, "tmdb": TEAL, "hardcover": AMBER}
 ON_ACCENT = "#120F1F"  # text on lilac or coral
 DANGER = "#FF8A8A"
 GOOD = "#86E0A8"
@@ -36,6 +46,21 @@ BODY_FAMILY = "Inter"
 def load_fonts() -> None:
     for name in ("SpaceGrotesk.ttf", "Inter.ttf"):
         QFontDatabase.addApplicationFont(str(ASSETS / "fonts" / name))
+
+
+def source_dot(source: str, size: int = 10) -> QIcon:
+    """A small dot in a source's color, for the sync menu and the Sources rows."""
+    pixmap = QPixmap(size * 2, size * 2)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(SOURCE_COLORS[source]))
+        painter.drawEllipse(size // 2, size // 2, size, size)
+    finally:
+        painter.end()
+    return QIcon(pixmap)
 
 
 def app_icon() -> QIcon:
@@ -128,14 +153,21 @@ def apply(app: QApplication) -> None:
 
 CHEVRON_UP = (ASSETS / "chevron-up.svg").as_posix()
 CHEVRON_DOWN = (ASSETS / "chevron-down.svg").as_posix()
+CHEVRON_DOWN_DARK = (ASSETS / "chevron-down-dark.svg").as_posix()  # on lilac
+ON_ACCENT_LINE = "rgba(18, 15, 31, 0.35)"  # the split in a lilac split button
 
 STYLESHEET = f"""
 QMainWindow, QDialog {{ background: {BG}; }}
 QWidget {{ color: {TEXT}; }}
 QLabel[role="muted"] {{ color: {MUTED}; }}
-QLabel[role="scope"] {{ color: {CORAL}; }}
 QLabel[role="error"] {{ color: {DANGER}; }}
 QLabel[role="ok"] {{ color: {GOOD}; }}
+QLabel[role="strong"] {{ font-weight: 700; }}
+QFrame#SourceLine {{ background: {LINE}; }}
+QToolButton#CardThumb {{ background: transparent; border: 2px solid transparent;
+    border-radius: 8px; padding: 2px; }}
+QToolButton#CardThumb:hover {{ border-color: {EDGE}; }}
+QToolButton#CardThumb:checked, QToolButton#CardThumb:focus {{ border-color: {LILAC}; }}
 
 #TopBar {{ background: {PANEL}; border-bottom: 1px solid {LINE}; }}
 #NavPanel {{ background: {PANEL}; border: none; border-right: 1px solid {LINE}; }}
@@ -171,7 +203,7 @@ QLabel[role="tile-score"][accent="music"] {{ color: {CORAL}; }}
 QLabel[role="tile-score"][accent="film"] {{ color: {TEAL}; }}
 QFrame[role="step"] {{ background: {RAISED}; border-radius: 12px; }}
 QFrame[role="trait"] {{ background: {RAISED}; border-radius: 10px; }}
-QFrame[role="banner"] {{ background: {RAISED}; border: 1px solid {LILAC}; border-radius: 12px; }}
+QFrame[role="banner"] {{ background: {RAISED}; border: 1px solid {LILAC}; border-radius: 10px; }}
 QLabel[role="badge"] {{ background: {RAISED}; color: {LILAC}; border-radius: 9px;
                         padding: 2px 10px; font-size: 12px; font-weight: 700; }}
 QLabel[role="badge"][accent="books"] {{ background: {ON_ACCENT}; color: {AMBER};
@@ -185,8 +217,6 @@ QLabel[role="badge"][accent="music"] {{ background: {ON_ACCENT}; color: {CORAL};
 QLabel[role="reason"] {{ color: {TEXT}; font-size: 13px; }}
 QLabel[role="chip"] {{ background: {RAISED}; color: {TEXT}; border-radius: 8px;
                        padding: 5px 10px; font-size: 12px; }}
-QLabel[role="match"] {{ background: #2A1E26; color: {CORAL}; border-radius: 10px;
-                        padding: 3px 10px; font-size: 12px; font-weight: 700; }}
 QLabel[role="section"] {{ color: {MUTED}; font-size: 12px; font-weight: 700;
                           letter-spacing: 1px; }}
 QPushButton[role="link"] {{ background: transparent; border: none; color: {LILAC};
@@ -213,6 +243,17 @@ QPushButton[role="primary"]:hover {{ background: #C7B3FF; }}
 QPushButton[role="primary"]:focus {{ border: 2px solid {TEXT}; padding: 6px 14px; }}
 QPushButton[role="primary"]:disabled {{ background: {RAISED}; color: {MUTED}; }}
 QPushButton[role="danger"] {{ background: transparent; color: {DANGER}; border-color: {DANGER}; }}
+QToolButton#SyncButton {{ background: {LILAC}; color: {ON_ACCENT}; border: none;
+    border-radius: 18px; padding: 8px 44px 8px 16px; min-height: 20px; font-weight: 700; }}
+QToolButton#SyncButton:hover {{ background: #C7B3FF; }}
+QToolButton#SyncButton:focus {{ border: 2px solid {TEXT}; padding: 6px 42px 6px 14px; }}
+QToolButton#SyncButton:disabled {{ background: {RAISED}; color: {MUTED}; }}
+QToolButton#SyncButton::menu-button {{ border: none; border-left: 1px solid {ON_ACCENT_LINE};
+    width: 32px; border-top-right-radius: 18px; border-bottom-right-radius: 18px; }}
+QToolButton#SyncButton::menu-button:hover {{ background: #D4C5FF; }}
+QToolButton#SyncButton::menu-arrow {{ image: url("{CHEVRON_DOWN_DARK}");
+    width: 10px; height: 10px; }}
+QToolButton#SyncButton::menu-arrow:disabled {{ image: url("{CHEVRON_DOWN}"); }}
 QToolButton#ExportButton {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: 18px;
                             padding: 8px 32px 8px 16px; min-height: 20px; }}
 QToolButton#ExportButton:hover {{ border-color: {LILAC}; }}

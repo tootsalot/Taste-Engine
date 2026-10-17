@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from taste import local_time, overview, settings
+from taste import activity, local_time, overview, settings
 from taste.sources import lastfm, mal
 from tests.fake_recs import (
     LASTFM_CDN,
@@ -152,3 +152,36 @@ def test_dashboard_queries_use_indexes_not_full_scans(conn):
 def test_describe_says_when_in_plain_words(utc_text, expected):
     now = datetime(2026, 10, 9, 6, 30, tzinfo=timezone.utc)  # Oct 8, 11:30 PM in Phoenix
     assert local_time.describe(utc_text, "America/Phoenix", now) == expected
+
+
+def test_you_vs_the_crowd_has_a_number_per_source_with_data(anime_world, music_world):
+    found = {n.kind: n for n in overview.vs_crowd(anime_world)}
+    assert list(found) == ["anime", "music"]  # no films or books synced: left out
+    summary = anime_world.execute("SELECT * FROM rpt_mal_critic_summary").fetchone()
+    anime = found["anime"]
+    assert anime.value == f"{summary['avg_diff'] + 0.0:+.2f}"
+    assert anime.caption == f"vs MAL · {summary['shows_scored']:,} shows"
+    assert "rounded to a whole number" in anime.tip
+    music = found["music"]
+    assert music.value.endswith("%") and music.caption == "of plays outside your top 10 artists"
+
+
+def test_you_vs_the_crowd_is_empty_before_a_sync(conn):
+    assert overview.vs_crowd(conn) == []
+
+
+def test_top_albums_counts_every_play_once(music_world):
+    """Counted per track first and then per album (faster); the same as one row per play."""
+    conn = music_world
+    by_play = conn.execute(
+        "SELECT al.title, c.name, COUNT(*) AS plays FROM core_behavior_events e "
+        "JOIN core_item_links ln ON ln.child_item_id = e.item_id AND ln.link_type = 'appears_on' "
+        "JOIN core_items al ON al.item_id = ln.parent_item_id AND al.media_type = 'album' "
+        "JOIN core_item_creators ic ON ic.item_id = al.item_id AND ic.role = 'artist' "
+        "JOIN core_creators c ON c.creator_id = ic.creator_id "
+        "WHERE e.source = 'lastfm' AND e.event_type = 'play' "
+        "GROUP BY al.item_id, al.title, c.name ORDER BY plays DESC, al.title"
+    ).fetchall()
+    found = activity.top_albums(conn, "0000-01-01", "9999-12-31", n=100)
+    assert [(a, b, n) for a, b, n, _ in found] == [tuple(r) for r in by_play]
+    assert found

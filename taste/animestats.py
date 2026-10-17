@@ -40,6 +40,8 @@ class AnimeStats:
     average: float | None  # my scores: every scored show for all time, else those finished
     vs_mal: float | None  # against the MAL mean, the same shows
     top_genre: str | None
+    top_genre_shows: int  # finished shows in that genre
+    episodes: int  # episodes of the shows finished, for when their lengths aren't known
     top_decade: str | None
     bands: list[charts.Band]
     scores: list[int]  # 1 to 10
@@ -71,13 +73,13 @@ def _years_and_studios(
 
 def years(conn: sqlite3.Connection) -> list[str]:
     """Years I finished a show in (typed dates and recent guesses), newest first."""
-    shows = activity.finished_shows(conn, "0000-01-01", "9999-12-31")
+    shows = activity.finished_shows(conn, *activity.ALL_TIME)
     return sorted({f.day[:4] for f in shows}, reverse=True)
 
 
 def load(conn: sqlite3.Connection, span: str = "all") -> AnimeStats:
     if span == "all":
-        shows = activity.finished_shows(conn, "0000-01-01", "9999-12-31", every_guess=True)
+        shows = activity.finished_shows(conn, *activity.ALL_TIME, every_guess=True)
     else:
         shows = activity.finished_shows(conn, f"{span}-01-01", f"{int(span) + 1}-01-01")
     # One entry per show: a rewatch finished again counts once, at its latest finish.
@@ -85,7 +87,7 @@ def load(conn: sqlite3.Connection, span: str = "all") -> AnimeStats:
     shows = sorted(latest.values(), key=lambda f: (f.day, f.title), reverse=True)
     if span == "all":
         # Every show I scored (watching and dropped ones too), from the same report views
-        # as the Dashboard's "How critical you are", so the two never disagree.
+        # as the Dashboard's "You vs the crowd", so the two never disagree.
         pairs = [
             (r[0], r[1])
             for r in conn.execute("SELECT my_score, community_mean FROM rpt_mal_score_vs_community")
@@ -136,6 +138,8 @@ def load(conn: sqlite3.Connection, span: str = "all") -> AnimeStats:
         average=round(mean(my_scores), 2) if my_scores else None,
         vs_mal=round(mean(mine - crowd for mine, crowd in against), 2) if against else None,
         top_genre=genres.most_common(1)[0][0] if genres else None,
+        top_genre_shows=genres.most_common(1)[0][1] if genres else 0,
+        episodes=sum(f.episodes or 0 for f in shows),
         top_decade=decades.most_common(1)[0][0] if decades else None,
         bands=charts.score_bands([(crowd, mine) for mine, crowd in against]),
         scores=score_counts,

@@ -343,10 +343,7 @@ def query(
 
 ME = "query Me { me { id username } }"
 
-LIBRARY = """
-query Library($uid: Int!, $limit: Int!, $offset: Int!) {
-  user_books(where: {user_id: {_eq: $uid}}, order_by: {id: asc}, limit: $limit, offset: $offset) {
-    id
+LIBRARY_FIELDS = """    id
     status_id
     rating
     date_added
@@ -373,9 +370,31 @@ query Library($uid: Int!, $limit: Int!, $offset: Int!) {
       image { url }
       contributions { contribution author { id name } }
     }
-  }
+"""
+LIBRARY_END = """  }
 }
 """
+LIBRARY = (
+    """
+query Library($uid: Int!, $limit: Int!, $offset: Int!) {
+  user_books(where: {user_id: {_eq: $uid}}, order_by: {id: asc}, limit: $limit, offset: $offset) {
+"""
+    + LIBRARY_FIELDS
+    + LIBRARY_END
+)
+# Only what changed since the last sync. Not yet checked against the live API (2026-10-16):
+# if Hardcover refuses the filter, the sync reads the whole library instead.
+LIBRARY_SINCE = (
+    """
+query Library($uid: Int!, $since: timestamptz!, $limit: Int!, $offset: Int!) {
+  user_books(where: {user_id: {_eq: $uid}, updated_at: {_gt: $since}},
+             order_by: {id: asc}, limit: $limit, offset: $offset) {
+"""
+    + LIBRARY_FIELDS
+    + LIBRARY_END
+)
+FULL_EVERY = timedelta(days=7)  # a full read finds removals and new community numbers
+SINCE_MARGIN = timedelta(hours=1)  # clocks needn't agree to the second
 
 
 def me(client: HttpClient, access_token: str) -> tuple[int, str]:
@@ -456,39 +475,51 @@ def author_list(book: dict[str, Any]) -> list[tuple[int, str]]:
     return found
 
 
+def changed_since(conn: sqlite3.Connection, now: datetime) -> str | None:
+    """Where a changes-only read starts (Hardcover's timestamp form), or None when it's
+    time for a full read: none yet, or the last one was FULL_EVERY ago."""
+    full, last = conn.execute(
+        "SELECT MAX(CASE WHEN mode = 'full' THEN ended_at END), MAX(started_at) "
+        "FROM sync_runs WHERE source = ? AND status = 'success' AND mode IN ('full', "
+        "'incremental')",
+        (SOURCE,),
+    ).fetchone()
+    if not full or not last:
+        return None
+    full_at = datetime.strptime(full, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    if now - full_at >= FULL_EVERY:
+        return None
+    start = datetime.strptime(last, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    return (start - SINCE_MARGIN).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
 def sync(
     conn: sqlite3.Connection,
     client: HttpClient,
     access_token: str,
     out: Callable[[str], None] = print,
+    *,
+    full: bool = False,
+    now: datetime | None = None,
 ) -> SyncResult:
-    run = SyncRun(conn, SOURCE, "full")
+    """Read my library into staging and core. Only the books changed since the last sync,
+    with a full read when a week has passed (or `full`): reading every book each time
+    took the longest of any source for no change at all."""
+    since = None if full else changed_since(conn, now or datetime.now(timezone.utc))
+    run = SyncRun(conn, SOURCE, "incremental" if since else "full")
     client_for(client)
     stamp = utc_now()
     try:
         user_id, _ = me(client, access_token)
-        pages: list[tuple[int, list[dict[str, Any]]]] = []
-        for page in range(MAX_PAGES):
-            params = {"offset": page * PAGE_SIZE, "limit": PAGE_SIZE}
-            status, data = query(client, access_token, LIBRARY, {"uid": user_id, **params})
-            rows = [r for r in data["data"].get("user_books") or [] if isinstance(r, dict)]
-            with transaction(conn):
-                raw_id = store_page(
-                    conn,
-                    sync_run_id=run.run_id,
-                    source=SOURCE,
-                    endpoint="graphql:Library",
-                    params=params,
-                    page_number=page + 1,
-                    http_status=status,
-                    payload=data,
-                )
-                run.pages_fetched += 1
-                run.save()
-            pages.append((raw_id, rows))
-            out(f"Hardcover: {sum(len(r) for _, r in pages)} books so far")
-            if len(rows) < PAGE_SIZE:
-                break
+        try:
+            pages = _read_library(conn, client, access_token, run, user_id, since, out)
+        except ApiError as exc:
+            if since is None or exc.retryable or "expired" in str(exc):
+                raise
+            out(f"Hardcover: no changes-only read ({exc}); reading the whole library")
+            since = None
+            run.set_mode("full")
+            pages = _read_library(conn, client, access_token, run, user_id, None, out)
         with transaction(conn):
             for raw_id, rows in pages:
                 for row in rows:
@@ -498,7 +529,8 @@ def sync(
                     change = _upsert_staging(conn, row, run.run_id, raw_id, stamp)
                     run.rows_inserted += change == "inserted"
                     run.rows_updated += change == "updated"
-            removed = _apply_removals(conn, run.run_id, stamp)
+            # Only a full read can tell what's gone from the library.
+            removed = 0 if since else _apply_removals(conn, run.run_id, stamp)
             for (user_book_id,) in conn.execute(
                 "SELECT user_book_id FROM stg_hardcover_user_books WHERE last_seen_run_id = ?",
                 (run.run_id,),
@@ -521,6 +553,45 @@ def sync(
     except Exception as exc:
         run.finish("failed", client.redact(f"{type(exc).__name__}: {exc}"))
         raise
+
+
+def _read_library(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    access_token: str,
+    run: SyncRun,
+    user_id: int,
+    since: str | None,
+    out: Callable[[str], None],
+) -> list[tuple[int, list[dict[str, Any]]]]:
+    """Every page of the library (or of the books changed since `since`), each stored raw."""
+    pages: list[tuple[int, list[dict[str, Any]]]] = []
+    text = LIBRARY_SINCE if since else LIBRARY
+    for page in range(MAX_PAGES):
+        params: dict[str, Any] = {"offset": page * PAGE_SIZE, "limit": PAGE_SIZE}
+        if since:
+            params["since"] = since
+        status, data = query(client, access_token, text, {"uid": user_id, **params})
+        rows = [r for r in data["data"].get("user_books") or [] if isinstance(r, dict)]
+        with transaction(conn):
+            raw_id = store_page(
+                conn,
+                sync_run_id=run.run_id,
+                source=SOURCE,
+                endpoint="graphql:Library",
+                params=params,
+                page_number=page + 1,
+                http_status=status,
+                payload=data,
+            )
+            run.pages_fetched += 1
+            run.save()
+        pages.append((raw_id, rows))
+        changed = " changed" if since else ""
+        out(f"Hardcover: {sum(len(r) for _, r in pages)}{changed} books so far")
+        if len(rows) < PAGE_SIZE:
+            break
+    return pages
 
 
 _USER_BOOK = [
@@ -813,14 +884,6 @@ def _apply_removals(conn: sqlite3.Connection, run_id: int, now: str) -> int:
             core.delete_curation(conn, item_id, SOURCE)
             core.delete_events_with_prefix(conn, SOURCE, f"{user_book_id}:")
     return len(gone)
-
-
-def last_sync(conn: sqlite3.Connection) -> str | None:
-    """When the library last synced (UTC), or None."""
-    row = conn.execute(
-        "SELECT MAX(ended_at) FROM sync_runs WHERE source = ? AND status = 'success'", (SOURCE,)
-    ).fetchone()
-    return row[0] if row else None
 
 
 # ---------------------------------------------------------------------------

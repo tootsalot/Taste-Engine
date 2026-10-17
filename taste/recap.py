@@ -153,6 +153,7 @@ class RecapData:
     year: YearView | None
     closing: str
     cards: list[str]  # card names in order: "cover", "music", "clock", ...
+    monday_first: bool = False  # Rev's calendar, with the "Weeks start on" setting
 
     def to_json(self) -> dict:
         data = asdict(self)
@@ -420,16 +421,19 @@ def build(conn: sqlite3.Connection, period: Period, now: datetime | None = None)
     films = _screen(conn, period, "movie")
     tv = _screen(conn, period, "tv")
     so_far = activity.today(conn, now).isoformat() < period.end
-    cover = [(f"{anime.finished if anime else 0}", "shows finished")]
-    if music and music.hours is not None:
+    plays = music.plays if music else 0
+
+    def counted(n: int, one: str, many: str) -> list[tuple[str, str]]:
+        return [(f"{n:,}", one if n == 1 else many)] if n else []  # no "0 shows finished"
+
+    cover = counted(anime.finished if anime else 0, "show finished", "shows finished")
+    if music and music.hours:
         cover.append((f"~{music.hours:,.0f}", "hours of music"))
-    cover.append((f"{music.plays if music else 0:,}", "plays"))
-    if books:
-        cover.append((f"{books.read}", "books read" if books.read != 1 else "book read"))
-    if films:
-        cover.append((f"{films.rated}", "films rated" if films.rated != 1 else "film rated"))
-    if anime and anime.episodes:
-        cover.append((f"{anime.episodes:,}", "episodes"))
+    cover += counted(plays, "play", "plays")
+    cover += counted(books.read if books else 0, "book read", "books read")
+    cover += counted(films.rated if films else 0, "film rated", "films rated")
+    cover += counted(anime.episodes if anime else 0, "episode", "episodes")
+    cover = cover or [("0", "plays")]  # a quiet month still says so
     year = _year(conn, period)
     cards = ["cover"]
     if music:
@@ -466,6 +470,7 @@ def build(conn: sqlite3.Connection, period: Period, now: datetime | None = None)
         compare=compare,
         year=year,
         closing=closing_sentence(period, music, anime),
+        monday_first=settings.get(conn, "week_start") == "monday",
         cards=cards,
     )
 

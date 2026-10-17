@@ -13,6 +13,7 @@ from taste.desktop import listen_for_others, notify_running_instance, theme, ui_
 from taste.desktop.context import AppContext
 from taste.desktop.dialogs import ConfirmDeleteDialog, NewProfileDialog
 from taste.desktop.main_window import PAGES, MainWindow
+from taste.desktop.settings_page import FORM_SETTINGS
 from taste.http_client import HttpClient
 from taste.secrets_store import SecretStore
 from tests.conftest import FakeKeyring, FakeResponse, FakeTransport, load_fixture
@@ -77,12 +78,10 @@ def visible_text(win) -> str:
 def set_up_profile(win, pid="me"):
     assert win.new_profile((pid, "Me"))
     page = win.settings
-    page.key_inputs["MAL_CLIENT_ID"].setText(MAL_KEY)
-    page.save_key("MAL_CLIENT_ID")
-    page.key_inputs["LASTFM_API_KEY"].setText(LASTFM_KEY)
-    page.save_key("LASTFM_API_KEY")
-    page.inputs["mal_username"].setText("example_user")
-    page.inputs["lastfm_username"].setText("example_user")
+    for source, key in (("mal", MAL_KEY), ("lastfm", LASTFM_KEY)):
+        page.sources.usernames[source].setText("example_user")
+        page.sources.rows[source].key.setText(key)
+        page.sources.save_source(source)
     page.inputs["lastfm_capture_scope"].setCurrentIndex(
         page.inputs["lastfm_capture_scope"].findData("desktop_only")
     )
@@ -243,6 +242,9 @@ SIMPLE_SETTINGS = {
     "lastfm_username",
     "timezone",
     "include_nsfw",
+    "clock_format",
+    "week_start",
+    "sync_on_launch",
     "lastfm_capture_scope",
     "rec_count",
     "rec_media_types",
@@ -259,9 +261,11 @@ def test_settings_open_in_simple_mode_with_descriptions(window):
     window.new_profile(("me", "Me"))
     page = window.settings
     assert page.mode == "simple" and page.mode_buttons["simple"].isChecked()
-    for setting in settings.SETTINGS:
+    for setting in FORM_SETTINGS:
         assert page.inputs[setting.key].isHidden() == setting.advanced, setting.key
         assert page.descriptions[setting.key].text() == setting.help
+    # The usernames sit in the Sources card's rows, not in this form.
+    assert "mal_username" not in page.inputs and "lastfm_username" not in page.inputs
     # Groups with nothing simple in them fold away, headings included.
     assert page.heading_widgets["Reports"].isHidden()
     assert not page.heading_widgets["Profile"].isHidden()
@@ -274,7 +278,7 @@ def test_advanced_mode_shows_everything_and_is_remembered(window, qtbot):
     page = window.settings
     qtbot.mouseClick(page.mode_buttons["advanced"], Qt.MouseButton.LeftButton)
     assert page.mode == "advanced"
-    assert not any(page.inputs[s.key].isHidden() for s in settings.SETTINGS)
+    assert not any(page.inputs[s.key].isHidden() for s in FORM_SETTINGS)
     assert page.hidden_note.isHidden()
     again = MainWindow(window.ctx)
     qtbot.addWidget(again)
@@ -299,33 +303,37 @@ def test_saving_in_simple_mode_keeps_the_hidden_settings(window):
 def test_keys_saved_cleared_and_never_shown(window):
     set_up_profile(window)
     ring = window.ctx.store.backend
+    sources = window.settings.sources
     assert ring.saved[("taste-engine", "me:LASTFM_API_KEY")] == LASTFM_KEY
-    assert window.settings.key_inputs["LASTFM_API_KEY"].text() == ""
-    assert (
-        "Saved in Windows Credential Manager" in window.settings.key_status["MAL_CLIENT_ID"].text()
-    )
+    lastfm = sources.rows["lastfm"]
+    assert lastfm.key.text() == ""  # never left in the field
+    assert sources.rows["mal"].key.placeholderText() == "Saved in Credential Manager"
+    assert "Windows Credential Manager" in sources.rows["mal"].key.toolTip()
     for row in range(len(PAGES)):
         window.sidebar.setCurrentRow(row)
         text = visible_text(window)
         assert LASTFM_KEY not in text and MAL_KEY not in text
-    window.settings.remove_key("LASTFM_API_KEY")
+    sources.remove_source("lastfm")
     assert ("taste-engine", "me:LASTFM_API_KEY") not in ring.saved
-    assert window.settings.key_status["LASTFM_API_KEY"].text() == "Not set"
+    assert lastfm.key.placeholderText() == "Paste your API key"
+    assert lastfm.state.text() == "Add your API key"
+    assert lastfm.remove.isHidden() and lastfm.sync.isHidden()
 
 
 def test_connection_test_runs_in_background(window, qtbot):
     set_up_profile(window)
-    worker = window.settings.test_connection("lastfm")
+    sources = window.settings.sources
+    worker = sources.test_connection("lastfm")
     with qtbot.waitSignal(worker.done, timeout=5000):
         pass
-    qtbot.waitUntil(lambda: "connected as example_user" in window.settings.key_message.text())
+    qtbot.waitUntil(lambda: "connected as example_user" in sources.message.text())
 
-    window.settings.key_inputs["LASTFM_API_KEY"].setText("wrong-key")
-    window.settings.save_key("LASTFM_API_KEY")
-    worker = window.settings.test_connection("lastfm")
+    sources.rows["lastfm"].key.setText("wrong-key")
+    sources.save_source("lastfm")
+    worker = sources.test_connection("lastfm")
     with qtbot.waitSignal(worker.done, timeout=5000):
         pass
-    qtbot.waitUntil(lambda: "Invalid API key" in window.settings.key_message.text())
+    qtbot.waitUntil(lambda: "Invalid API key" in sources.message.text())
     assert "wrong-key" not in visible_text(window)
 
 
@@ -335,21 +343,22 @@ def test_full_sync_updates_dashboard_and_reports(window, qtbot):
     dash = window.dashboard
     with qtbot.waitSignal(dash.sync_finished, timeout=15000) as blocker:
         dash.start_sync("all")
-        assert not dash.sync_buttons["all"].isEnabled()
+        assert not dash.sync_button.isEnabled()
     assert blocker.args[0] == {"mal": True, "lastfm": True}
-    assert dash.sync_buttons["all"].isEnabled()
+    assert dash.sync_button.isEnabled()
     assert "Last.fm: page 1 of 1" in dash.log.toPlainText()
-    assert dash.counts.text() == "5 on your list · 3 scored · 5 Last.fm plays"
-    assert dash.critic_value.text() == "-1.64"
+    assert dash.crowd.shown()["anime"] == ("-1.64", "vs MAL · 3 shows")
 
     reports_page = window.reports
     # Charts only: the raw numbers live in the CSV exports, not in tables on screen.
     assert reports_page.findChildren(QTableView) == []
+    window.sidebar.setCurrentRow(PAGES.index("Anime"))  # pages off screen redraw when shown
     anime_tiles = {t.caption.text(): t.value.text() for t in reports_page.anime.tiles}
     assert anime_tiles["vs MAL"] == "-1.64" and anime_tiles["your average"] != "-"
+    window.sidebar.setCurrentRow(PAGES.index("Music"))
     music_tiles = {t.caption.text(): t.value.text() for t in reports_page.music.tiles}
     assert music_tiles["Last.fm plays"] == "5"
-    assert music_tiles["hours of music"] == "-"  # no track lengths fetched in this test
+    assert music_tiles["plays with a length"] == "0%"  # no track lengths fetched in this test
     # Averages per half point of the MAL mean, not one dot per show.
     assert [(b.mal_from, b.average) for b in reports_page.scores.bands] == [
         (6.5, 4.0),
@@ -376,6 +385,7 @@ def test_plays_by_week_month_or_year_and_the_choice_is_kept(window, qtbot):
     with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
         window.dashboard.start_sync("all")
     page = window.reports
+    window.sidebar.setCurrentRow(PAGES.index("Music"))
     assert page.period == "month" and page.period_switch.buttons["month"].isChecked()
     assert page.plays_card.title.text() == "Plays per month"
     assert page.plays_chart.labels == ["Oct 26"]
@@ -489,3 +499,77 @@ def test_about_credits_and_notices(window, monkeypatch, tmp_path):
     )
     assert page.open_notices()
     assert opened[0].toLocalFile().endswith("THIRD_PARTY_NOTICES.txt")
+
+
+def test_a_24_hour_clock_applies_once_saved(window, qtbot):
+    from taste import local_time
+
+    set_up_profile(window)
+    page = window.settings
+    combo = page.inputs["clock_format"]
+    combo.setCurrentIndex(combo.findData("24h"))
+    assert page.save_settings()
+    assert local_time.time_text(22, 52) == "22:52"
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        window.dashboard.start_sync("all")
+    line = window.dashboard.strip.text.text()
+    assert "AM" not in line and "PM" not in line and ":" in line
+
+
+def test_sync_on_launch_every_time_or_once_a_day(window, qtbot):
+    from taste import settings as registry
+
+    set_up_profile(window)
+    assert window.sync_on_launch() is False  # off unless asked for
+    conn = window.ctx.connect("me")
+    registry.set_value(conn, "sync_on_launch", "daily")
+    conn.close()
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        assert window.sync_on_launch() is True  # never synced: due
+    assert window.sync_on_launch() is False  # synced just now: not again today
+    conn = window.ctx.connect("me")
+    registry.set_value(conn, "sync_on_launch", "launch")
+    conn.close()
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        assert window.sync_on_launch() is True  # every launch
+
+
+def test_report_pages_can_open_on_the_latest_year(window, qtbot):
+    from taste import settings as registry
+
+    set_up_profile(window)
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        window.dashboard.start_sync("all")
+    conn = window.ctx.connect("me")
+    registry.set_value(conn, "report_span", "year")
+    conn.close()
+    window.reload_profiles(select="me")  # the setting applies when a profile opens
+    window.sidebar.setCurrentRow(PAGES.index("Music"))
+    from taste import musicstats
+
+    conn = window.ctx.connect("me")
+    newest = musicstats.years(conn)[0]
+    conn.close()
+    assert window.reports.music.span == newest != "all"
+
+
+def test_picture_cache_size_and_clear(window):
+    from taste.desktop import ui_state
+
+    window.new_profile(("me", "Me"))
+    page = window.settings
+    page.set_mode("advanced", remember=False)
+    assert not page.picture_row.isHidden()
+    page.set_cache_size("1000")
+    assert window.ctx.art.cache.max_bytes == 1000 * 1024 * 1024
+    assert ui_state.load()["image_cache_mb"] == 1000  # one cache for every profile
+    root = window.ctx.art.cache.root
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "made-up.png").write_bytes(b"x" * 2048)
+    page.refresh_picture_use()
+    assert page.picture_use.text().startswith("Using")
+    page.clear_pictures()
+    assert window.ctx.art.cache.size() == 0
+    assert page.picture_use.text() == "Using under 1 MB"
+    page.set_mode("simple", remember=False)
+    assert page.picture_row.isHidden()  # an Advanced setting

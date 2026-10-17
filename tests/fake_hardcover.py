@@ -83,6 +83,7 @@ def entry(
         "last_read_date": last_read or (reads[-1][2] if reads else None),
         "read_count": sum(1 for r in reads if r[2]),
         "owned": owned,
+        "updated_at": "2024-01-02T00:00:00+00:00",  # changed long ago
         "edition": edition,
         "user_book_reads": [
             {"id": r[0], "started_at": r[1], "finished_at": r[2], "edition_id": None} for r in reads
@@ -160,6 +161,7 @@ class FakeHardcover:
         self.revoked: list[str] = []
         self.codes: dict[str, str] = {}  # code -> the PKCE challenge it was issued for
         self.calls: list[str] = []
+        self.knows_updated_at = True  # False: answer like an API without that filter
 
     def issue(self, challenge: str) -> str:
         """A code, as if I approved on the consent page."""
@@ -218,7 +220,12 @@ class FakeHardcover:
             if "query Library" in text:
                 assert variables["uid"] == USER_ID
                 offset, limit = variables["offset"], variables["limit"]
-                self.calls.append(f"library:{offset}")
-                rows = self.library[offset : offset + min(limit, self.page_size)]
+                since = variables.get("since")
+                if since and not self.knows_updated_at:
+                    message = "field 'updated_at' not found in type: 'user_books_bool_exp'"
+                    return FakeResponse(200, {"errors": [{"message": message}]})
+                self.calls.append(f"library{'-since' if since else ''}:{offset}")
+                rows = [r for r in self.library if not since or r["updated_at"] > since]
+                rows = rows[offset : offset + min(limit, self.page_size)]
                 return FakeResponse(200, {"data": {"user_books": rows}})
         return FakeResponse(404, {"error": "not found"})

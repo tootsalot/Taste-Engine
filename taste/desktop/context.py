@@ -30,9 +30,14 @@ class AppContext:
     def art(self):
         """The shared poster and cover loader, created on first use (it needs a QApplication)."""
         if self._art is None:
+            from taste.desktop import ui_state
             from taste.desktop.art import ArtLoader  # local import: keeps this module Qt-free
 
-            self._art = ArtLoader(images.ImageCache(session=self.image_session))
+            # One picture cache for every profile, sized by the window preference.
+            megabytes = ui_state.load().get("image_cache_mb", images.MAX_CACHE_BYTES >> 20)
+            self._art = ArtLoader(
+                images.ImageCache(session=self.image_session, max_bytes=int(megabytes) << 20)
+            )
         return self._art
 
     def connect(self, profile_id: str) -> sqlite3.Connection:

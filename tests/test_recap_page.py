@@ -56,6 +56,10 @@ def test_the_page_shows_a_deck_and_swipes_through_it(window, qtbot):
     page.show_period(Period("month", "2026-09"))
     wait_for_cards(qtbot, page)
     assert page.period_label.text() == "September 2026"
+    # About these numbers is folded to one line until asked for.
+    assert all(note.isHidden() for note in page.notes)
+    page.about_toggle.click()
+    assert not any(note.isHidden() for note in page.notes)
     count = len(page.data.slides)
     assert 2 <= count <= 7 and len(page.deck.cards) == count
     assert page.position.text() == f"Card 1 of {count}"
@@ -76,6 +80,11 @@ def test_the_page_shows_a_deck_and_swipes_through_it(window, qtbot):
     assert page.deck.index == count - 1 and not page.next_card.isEnabled()
     page.deck.picked.emit(count - 2)  # clicking the neighbor to the left
     assert page.deck.index == count - 2
+    # Every card as a thumbnail beside the deck, the current one marked; click to go there.
+    assert len(page.thumbs) == count and page.thumbs[count - 2].isChecked()
+    page.thumbs[1].click()
+    assert page.deck.index == 1 and page.thumbs[1].isChecked()
+    assert sum(t.isChecked() for t in page.thumbs) == 1
 
 
 def test_save_asks_once_then_goes_straight_to_that_folder(window, qtbot, tmp_path):

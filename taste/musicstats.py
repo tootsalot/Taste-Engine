@@ -11,7 +11,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date
 
-from taste import activity
+from taste import activity, settings
 
 ALBUMS_SHOWN = 60
 TRACKS_SHOWN = 10
@@ -38,6 +38,8 @@ class MusicStats:
     new_artists: int | None  # first played in this year; None for all time
     busiest_hour: int | None
     busiest_day: str | None
+    busiest_day_share: float  # of the plays
+    newest_year: tuple[str, int] | None  # all time: (the newest year, its new artists)
     albums: list[tuple[str, str, int, str | None]]  # (album, artist, plays, cover)
     tracks: list[tuple[str, str, int]]  # (track, artist, plays)
     by_hour: list[int]  # 24, local time
@@ -73,8 +75,22 @@ def _months(conn: sqlite3.Connection, names: list[str], start: str, end: str) ->
     return found
 
 
+def _newest_year(conn: sqlite3.Connection) -> tuple[str, int] | None:
+    """The newest year with plays and how many artists were new in it."""
+    found = years(conn)
+    if not found:
+        return None
+    year = found[0]
+    return year, len(activity.new_artists(conn, f"{year}-01-01", f"{int(year) + 1}-01-01"))
+
+
+def _from_week_start(conn: sqlite3.Connection, days: list[tuple[str, int]]) -> list:
+    """Sunday first, or Monday first with the "Weeks start on" setting."""
+    return days[1:] + days[:1] if settings.get(conn, "week_start") == "monday" else days
+
+
 def load(conn: sqlite3.Connection, span: str = "all") -> MusicStats:
-    start, end = ("0000-01-01", "9999-12-31") if span == "all" else (
+    start, end = activity.ALL_TIME if span == "all" else (
         f"{span}-01-01", f"{int(span) + 1}-01-01"
     )  # fmt: skip
     plays = activity.play_count(conn, start, end)
@@ -111,9 +127,11 @@ def load(conn: sqlite3.Connection, span: str = "all") -> MusicStats:
         new_artists=None if span == "all" else len(activity.new_artists(conn, start, end)),
         busiest_hour=busiest_hour,
         busiest_day=busiest_day,
+        busiest_day_share=max(weekdays) / plays if plays else 0.0,
+        newest_year=_newest_year(conn) if span == "all" else None,
         albums=albums[:ALBUMS_SHOWN],
         tracks=activity.top_tracks(conn, start, end, n=TRACKS_SHOWN),
         by_hour=by_hour,
-        by_weekday=list(zip(WEEKDAYS, weekdays, strict=True)),
+        by_weekday=_from_week_start(conn, list(zip(WEEKDAYS, weekdays, strict=True))),
         people=people,
     )

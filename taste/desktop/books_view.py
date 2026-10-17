@@ -2,7 +2,7 @@
 
 Laid out like the approved mockup (2026-10-15), after Hardcover's own stats page:
 six big numbers, the covers I read beside books per year, genres, moods, kind and
-format, my stars and book lengths, then the authors I read most. The numbers come
+format, my stars and my stars against Hardcover's, then the authors I read most. The numbers come
 from taste.bookstats (Qt-free); this file only draws them.
 """
 
@@ -22,12 +22,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import bookstats, charts
+from taste import bookstats, charts, settings
 from taste.bookstats import BookStats, Cover, Share
 from taste.desktop import motion, theme
 from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
 from taste.desktop.widgets import (
+    BandChart,
     BarChart,
     Card,
     LeanBar,
@@ -54,6 +55,55 @@ SHADES = (theme.AMBER, "#C99A4A", "#8F6E37", theme.LINE)  # the first share is b
 
 def times_word(n: int) -> str:
     return {1: "once", 2: "twice"}.get(n, f"{n} times")
+
+
+def plural(n: int, word: str) -> str:
+    return word if n == 1 else f"{word}s"
+
+
+def book_tiles(s: BookStats) -> list[charts.Tile]:
+    """The six big numbers across the top, in order."""
+
+    def tile(value: str, caption: str, detail: str = "") -> charts.Tile:
+        return charts.Tile(value, caption, "books", detail=detail)
+
+    unique = f"{s.unique:,} unique" if s.unique != s.reads else "no rereads"
+    per_book = s.pages // s.pages_known if s.pages_known else 0
+    if s.new_authors is not None:
+        authors_detail = f"{s.new_authors:,} new this year"
+    elif s.top_authors:
+        authors_detail = f"most: {s.top_authors[0].name}"
+    else:
+        authors_detail = ""
+    books = f"{s.audiobooks:,} {plural(s.audiobooks, 'audiobook')}"
+    if not s.audiobooks:
+        listened = tile("0", "hours listened", "no audiobooks")
+    elif s.audio_hours is None:
+        # Hardcover has no length for any of them: the count, not a made-up zero.
+        listened = tile(
+            f"{s.audiobooks:,}",
+            plural(s.audiobooks, "audiobook"),
+            f"{plural(s.audiobooks, 'length')} not on Hardcover",
+        )
+    else:
+        missing = f", {s.audio_unknown:,} length unknown" if s.audio_unknown else ""
+        listened = tile(f"{s.audio_hours:,.0f}", "hours listened", books + missing)
+    return [
+        tile(f"{s.reads:,}", "books read", unique),
+        tile(f"{s.pages:,}", "pages read", f"about {per_book:,} a book" if per_book else ""),
+        listened,
+        tile(f"{s.authors:,}", "authors", authors_detail),
+        tile(
+            f"{s.my_average:.1f}★" if s.my_average is not None else "-",
+            "your average",
+            f"Hardcover {s.hardcover_average:.1f}" if s.hardcover_average is not None else "",
+        ),
+        tile(
+            f"{s.rereads:,}",
+            plural(s.rereads, "reread"),
+            f"most: {s.most_reread[0]} ×{s.most_reread[1]}" if s.most_reread else "none twice",
+        ),
+    ]
 
 
 @dataclass(frozen=True)
@@ -306,28 +356,47 @@ class PersonCard(Card):
     best covers, and my ratings of their work in the order I got to it."""
 
     COVERS = 6
+    GROW = 1.6  # covers grow with the card's width, up to this many times their base size
+    GAP = 6
 
     def __init__(
         self, ctx: AppContext, accent: str = theme.AMBER, cover: QSize = AUTHOR_COVER
     ) -> None:
         super().__init__()
         self.setProperty("raised", True)
+        self.base = QSize(cover)
+        self.cover_size = QSize(cover)
         self.name = label("")
         self.name.setFont(theme.heading_font(15))
         self.body.addWidget(self.name)
         self.caption = label("", role="muted")
         self.body.addWidget(self.caption)
         row = QHBoxLayout()
-        row.setSpacing(6)
+        row.setSpacing(self.GAP)
         self.covers = [ArtTile(ctx.art, cover, radius=4, accent=accent) for _ in range(self.COVERS)]
         for tile in self.covers:
             row.addWidget(tile)
         row.addStretch()
         self.body.addLayout(row)
+        # Across the card, not a stub on the left (2.1: a wide card was mostly empty).
         self.line = Sparkline(accent)
-        self.line.setFixedSize(220, 34)
+        self.line.setMinimumSize(120, 40)
+        self.line.setMaximumSize(16_777_215, 40)
+        self.line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.body.addWidget(self.line)
         self.body.addStretch(1)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().resizeEvent(event)
+        # From the width alone, so the card shrinks back as readily as it grows.
+        margins = self.body.contentsMargins()
+        room = self.width() - margins.left() - margins.right() - (self.COVERS - 1) * self.GAP
+        width = max(self.base.width(), min(int(self.base.width() * self.GROW), room // self.COVERS))
+        size = QSize(width, round(width * self.base.height() / self.base.width()))
+        if size != self.cover_size:
+            self.cover_size = size
+            for tile in self.covers:
+                tile.set_size(size)
 
     def set_person(
         self, name: str, caption: str, items: Sequence[WallItem], ratings: Sequence[float],
@@ -396,7 +465,7 @@ class BooksView(QWidget):
         grid.addWidget(self.year_card, 2, 4, 1, 2)
 
         self.genres = ShareList("No genres yet")
-        self.genres_card = chart_card("Genres", self.genres, " ")
+        self.genres_card = chart_card("Genres you read most", self.genres, " ")
         self.genres_missing = label("", role="caption", wrap=True)
         self.genres_card.body.addWidget(self.genres_missing)
         grid.addWidget(self.genres_card, 3, 0, 1, 2)
@@ -413,21 +482,35 @@ class BooksView(QWidget):
         self.kind_legend = label("", role="muted", wrap=True)
         self.format_bar = SplitBar()
         self.format_legend = label("", role="muted", wrap=True)
-        for widget in (self.kind_bar, self.kind_legend):
-            kind_layout.addWidget(widget)
-        kind_layout.addSpacing(10)
-        for widget in (self.format_bar, self.format_legend):
-            kind_layout.addWidget(widget)
+        self.starred_bar = SplitBar()  # a third row: the card's lower half was empty
+        self.starred_legend = label("", role="muted", wrap=True)
+        for i, (bar, legend_label) in enumerate(
+            ((self.kind_bar, self.kind_legend), (self.format_bar, self.format_legend),
+             (self.starred_bar, self.starred_legend))
+        ):  # fmt: skip
+            if i:
+                kind_layout.addSpacing(10)
+            kind_layout.addWidget(bar)
+            kind_layout.addWidget(legend_label)
         kind_layout.addStretch(1)
-        self.kind_card = chart_card("Kind and format", kind_box, " ")
+        self.kind_card = chart_card("Kind, format, and stars", kind_box, " ")
         grid.addWidget(self.kind_card, 3, 4, 1, 2)
 
         self.stars = BarChart(theme.AMBER, empty_text="No stars yet", value_labels=True)
         self.stars_card = chart_card("Your stars", self.stars, " ")
         grid.addWidget(self.stars_card, 4, 0, 1, 3)
-        self.lengths = BarChart(theme.AMBER, empty_text="No page counts yet", value_labels=True)
-        self.lengths_card = chart_card("Length", self.lengths, " ")
-        grid.addWidget(self.lengths_card, 4, 3, 1, 3)
+        # The same chart Anime has against MAL (approved 2026-10-16; it took Length's place).
+        self.vs_crowd = BandChart(
+            theme.AMBER,
+            "No rated books with a Hardcover average yet",
+            crowd="Hardcover",
+            top=5,
+            noun="book",
+            scores="stars",
+        )
+        self.vs_crowd.setMinimumHeight(140)
+        self.vs_crowd_card = chart_card("Your stars vs Hardcover", self.vs_crowd, " ")
+        grid.addWidget(self.vs_crowd_card, 4, 3, 1, 3)
 
         authors_box = QWidget()
         self.author_grid = QGridLayout(authors_box)
@@ -450,7 +533,7 @@ class BooksView(QWidget):
 
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
-        self.span = "all"
+        self.span = None  # "Report pages open on", once its years are known
         self.refresh()
 
     def refresh(self) -> None:
@@ -459,6 +542,9 @@ class BooksView(QWidget):
         conn = self.ctx.connect(self.profile_id)
         try:
             years = bookstats.years(conn)
+            if self.span is None:
+                latest = settings.get(conn, "report_span") == "year" and years
+                self.span = years[0] if latest else "all"
             if self.span != "all" and self.span not in years:
                 self.span = "all"
             stats = bookstats.load(conn, self.span)
@@ -539,6 +625,8 @@ class BooksView(QWidget):
         self.kind_legend.setText(legend(s.kinds))
         self.format_bar.set_shares(s.formats)
         self.format_legend.setText(legend(s.formats))
+        self.starred_bar.set_shares(s.starred)
+        self.starred_legend.setText(legend(s.starred))
         kind = next((k.name.lower() for k in s.kinds if k.name != "Not set"), None)
         form = next((FORMAT_WORDS[f.name] for f in s.formats if f.name in FORMAT_WORDS), None)
         self.kind_card.note.setText(
@@ -555,14 +643,10 @@ class BooksView(QWidget):
         if s.hardcover_average is not None:
             parts.append(f"Hardcover {s.hardcover_average:.1f}")
         self.stars_card.note.setText(" · ".join(parts) or "Half a star to five")
-        counts = [n for _, n in s.lengths]
-        self.lengths.set_data(counts if any(counts) else [], [n for n, _ in s.lengths],
-                              unit="books")  # fmt: skip
-        common = max(s.lengths, key=lambda kv: kv[1]) if any(counts) else None
-        self.lengths_card.note.setText(
-            f"Most between {common[0].replace('-', ' and ')} pages · {s.average_pages:,} on average"
-            if common and s.average_pages and "-" in common[0]
-            else (f"{s.average_pages:,} pages on average" if s.average_pages else "Pages per book")
+        self.vs_crowd.set_bands(s.bands)
+        self.vs_crowd_card.note.setText(
+            "Your average for books Hardcover rates about the same. Bars cover the middle half "
+            "of your stars."
         )
 
         for i, card in enumerate(self.author_cards):
@@ -578,40 +662,7 @@ class BooksView(QWidget):
         )
 
     def _tiles(self, s: BookStats) -> None:
-        def tile(value: str, caption: str, detail: str = "") -> charts.Tile:
-            return charts.Tile(value, caption, "books", detail=detail)
-
-        unique = f"{s.unique:,} unique" if s.unique != s.reads else "no rereads"
-        per_book = s.pages // s.pages_known if s.pages_known else 0
-        if s.new_authors is not None:
-            authors_detail = f"{s.new_authors:,} new this year"
-        elif s.top_authors:
-            authors_detail = f"most: {s.top_authors[0].name}"
-        else:
-            authors_detail = ""
-        values = [
-            tile(f"{s.reads:,}", "books read", unique),
-            tile(f"{s.pages:,}", "pages read", f"about {per_book:,} a book" if per_book else ""),
-            tile(
-                f"{s.audio_hours:,.0f}",
-                "hours listened",
-                f"{s.audiobooks:,} audiobook{'s' if s.audiobooks != 1 else ''}"
-                if s.audiobooks
-                else "no audiobooks",
-            ),
-            tile(f"{s.authors:,}", "authors", authors_detail),
-            tile(
-                f"{s.my_average:.1f}★" if s.my_average is not None else "-",
-                "your average",
-                f"Hardcover {s.hardcover_average:.1f}" if s.hardcover_average is not None else "",
-            ),
-            tile(
-                f"{s.rereads:,}",
-                "rereads",
-                f"most: {s.most_reread[0]} ×{s.most_reread[1]}" if s.most_reread else "",
-            ),
-        ]
-        for widget, value in zip(self.tiles, values, strict=True):
+        for widget, value in zip(self.tiles, book_tiles(s), strict=True):
             widget.set(value)
             # A long title would push the tile wider than its share of the row.
             widget.detail.setText(

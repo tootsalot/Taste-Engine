@@ -16,7 +16,7 @@ import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
 
-from taste import bookstats
+from taste import bookstats, local_time, overview
 
 MIN_SHOWS = 10  # scored shows before saying anything about how I score
 MIN_PLAYS = 300
@@ -35,6 +35,8 @@ class Trait:
     kind: str  # anime, music, books, screen: the color it's drawn in
     strength: float  # how far past its threshold, for ordering and the headline
     adjective: str = ""  # "night-owl", for the headline; empty when it doesn't read as one
+    lean: float = 0.0  # against the crowd, for critic traits: below is negative
+    part: str = ""  # "0.9 below MAL": the lean in words, shared by every medium
 
 
 @dataclass
@@ -42,6 +44,56 @@ class Persona:
     headline: str
     based_on: str  # "From 751 shows, 48,000 plays, 298 books, and 150 films"
     traits: list[Trait] = field(default_factory=list)
+
+
+def critic(
+    title: str,
+    diff: float,
+    crowd: str,
+    kind: str,
+    adjective: str = "",
+    unit: str = "",
+    strength: float | None = None,
+) -> Trait:
+    """A trait about scoring above or below a crowd, in the one wording every medium
+    shares: "0.9 below MAL on average"."""
+    part = f"{abs(diff):.1f}{unit} {'below' if diff < 0 else 'above'} {crowd}"
+    return Trait(
+        title,
+        f"{part} on average",
+        kind,
+        abs(diff) if strength is None else strength,
+        adjective,
+        diff,
+        part,
+    )
+
+
+def merge_critics(traits: list[Trait]) -> list[Trait]:
+    """Two or more media below the crowd make one "Tough critic" with each number (two
+    or more above, one "Generous critic"); a lone one keeps its own trait."""
+    merged = list(traits)
+    for below, title, adjective in (
+        (True, "Tough critic", "tough-grading"),
+        (False, "Generous critic", "generous"),
+    ):
+        group = [t for t in merged if t.lean and (t.lean < 0) == below]
+        if len(group) < 2:
+            continue
+        first = merged.index(group[0])
+        merged = [t for t in merged if t not in group]
+        merged.insert(
+            first,
+            Trait(
+                title,
+                " · ".join(t.part for t in group),
+                "critic",
+                max(t.strength for t in group),
+                adjective,
+                sum(t.lean for t in group) / len(group),
+            ),
+        )
+    return merged
 
 
 def _anime(conn: sqlite3.Connection) -> tuple[list[Trait], int, str | None]:
@@ -55,11 +107,9 @@ def _anime(conn: sqlite3.Connection) -> tuple[list[Trait], int, str | None]:
     if summary and summary[0] and summary[0] >= MIN_SHOWS and summary[1] is not None:
         diff = summary[1]
         if diff <= -LEAN:
-            traits.append(Trait("Tough grader", f"{abs(diff):.1f} below MAL on average",
-                                "anime", abs(diff), "tough-grading"))  # fmt: skip
+            traits.append(critic("Tough grader", diff, "MAL", "anime", "tough-grading"))
         elif diff >= LEAN:
-            traits.append(Trait("Generous scorer", f"{diff:.1f} above MAL on average",
-                                "anime", diff, "generous"))  # fmt: skip
+            traits.append(critic("Generous scorer", diff, "MAL", "anime", "generous"))
         else:
             traits.append(Trait("In step with MAL", f"within {LEAN} of MAL on average",
                                 "anime", 0.1))  # fmt: skip
@@ -93,7 +143,7 @@ def _anime(conn: sqlite3.Connection) -> tuple[list[Trait], int, str | None]:
     return traits, shows, top
 
 
-def _music(conn: sqlite3.Connection) -> tuple[list[Trait], int]:
+def _music(conn: sqlite3.Connection, counts: list[int] | None = None) -> tuple[list[Trait], int]:
     hours = dict(conn.execute("SELECT local_hour, plays FROM rpt_lastfm_by_hour").fetchall())
     plays = sum(hours.values())
     traits: list[Trait] = []
@@ -101,19 +151,14 @@ def _music(conn: sqlite3.Connection) -> tuple[list[Trait], int]:
         return traits, plays
     night = sum(n for h, n in hours.items() if h in NIGHT) / plays
     morning = sum(n for h, n in hours.items() if h in MORNING) / plays
+    hour = local_time.hour_text
     if night >= 0.3:
-        traits.append(Trait("Night owl", f"{night:.0%} of plays between 10 PM and 4 AM",
-                            "music", night, "night-owl"))  # fmt: skip
+        evidence = f"{night:.0%} of plays between {hour(22)} and {hour(4)}"
+        traits.append(Trait("Night owl", evidence, "music", night, "night-owl"))
     elif morning >= 0.3:
-        traits.append(Trait("Early riser", f"{morning:.0%} of plays between 5 and 10 AM",
-                            "music", morning, "early-rising"))  # fmt: skip
-    artists = [
-        r[0]
-        for r in conn.execute(
-            "SELECT COUNT(*) AS n FROM stg_lastfm_scrobbles GROUP BY lower(artist_name) "
-            "ORDER BY n DESC"
-        )
-    ]
+        evidence = f"{morning:.0%} of plays between {hour(5)} and {hour(10)}"
+        traits.append(Trait("Early riser", evidence, "music", morning, "early-rising"))
+    artists = overview.artist_play_counts(conn) if counts is None else counts
     top_share = sum(artists[:10]) / plays if artists else 0.0
     if top_share >= 0.4:
         traits.append(Trait("Loyal listener", f"top 10 artists are {top_share:.0%} of plays",
@@ -125,8 +170,10 @@ def _music(conn: sqlite3.Connection) -> tuple[list[Trait], int]:
     return traits, plays
 
 
-def _books(conn: sqlite3.Connection) -> tuple[list[Trait], int, str | None]:
-    stats = bookstats.load(conn)
+def _books(
+    conn: sqlite3.Connection, stats: bookstats.BookStats | None = None
+) -> tuple[list[Trait], int, str | None]:
+    stats = stats or bookstats.load(conn)
     traits: list[Trait] = []
     if stats.unique < MIN_BOOKS:
         return traits, stats.unique, None
@@ -141,9 +188,8 @@ def _books(conn: sqlite3.Connection) -> tuple[list[Trait], int, str | None]:
     if stats.my_average is not None and stats.hardcover_average is not None:
         diff = stats.my_average - stats.hardcover_average
         if diff <= -LEAN / 2:
-            traits.append(Trait("Hard to impress on the page",
-                                f"{abs(diff):.1f}★ below Hardcover's average", "books",
-                                abs(diff) * 2))  # fmt: skip
+            traits.append(critic("Hard to impress on the page", diff, "Hardcover", "books",
+                                 unit="★", strength=abs(diff) * 2))  # fmt: skip
     return traits, stats.unique, top.name if top else None
 
 
@@ -158,11 +204,9 @@ def _films(conn: sqlite3.Connection) -> tuple[list[Trait], int]:
     if diffs:
         diff = sum(diffs) / len(diffs)
         if diff >= LEAN:
-            traits.append(Trait("Easy to please at the movies", f"{diff:+.1f} vs TMDB",
-                                "screen", diff))  # fmt: skip
+            traits.append(critic("Easy to please at the movies", diff, "TMDB", "screen"))
         elif diff <= -LEAN:
-            traits.append(Trait("Tough on films", f"{diff:+.1f} vs TMDB", "screen",
-                                abs(diff), "hard-to-please"))  # fmt: skip
+            traits.append(critic("Tough on films", diff, "TMDB", "screen", "hard-to-please"))
     genres = Counter(
         g
         for (raw,) in conn.execute(
@@ -181,13 +225,21 @@ def _films(conn: sqlite3.Connection) -> tuple[list[Trait], int]:
 NOUNS = {"anime": "anime fan", "music": "listener", "books": "reader", "screen": "film buff"}
 
 
-def load(conn: sqlite3.Connection) -> Persona | None:
-    """The card's contents, or None until there's enough data for at least two traits."""
+def load(
+    conn: sqlite3.Connection,
+    *,
+    books: bookstats.BookStats | None = None,
+    counts: list[int] | None = None,
+) -> Persona | None:
+    """The card's contents, or None until there's enough data for at least two traits.
+    `books` and `counts` (overview.artist_play_counts) save loading them twice."""
     anime, shows, anime_genre = _anime(conn)
-    music, plays = _music(conn)
-    books, read, book_genre = _books(conn)
+    music, plays = _music(conn, counts)
+    books, read, book_genre = _books(conn, books)
     films, rated = _films(conn)
-    traits = sorted(anime + music + books + films, key=lambda t: -t.strength)
+    # The crowds in a fixed order (MAL, TMDB, Hardcover) before the merge, then strongest first.
+    traits = merge_critics(anime + films + books + music)
+    traits.sort(key=lambda t: -t.strength)
     if len(traits) < 2:
         return None
     # The noun: the medium I spend the most with, roughly (an hour of plays is a lot of
@@ -200,10 +252,11 @@ def load(conn: sqlite3.Connection) -> Persona | None:
     if soft_spot:
         headline += f" with a soft spot for {soft_spot.lower()}"
     parts = [
-        f"{shows:,} shows" if shows else "",
+        # Each says what it counts: other pages count lists, scores, and reads differently.
+        f"{shows:,} shows watched" if shows else "",
         f"{plays:,} plays" if plays else "",
-        f"{read:,} books" if read else "",
-        f"{rated:,} films" if rated else "",
+        f"{read:,} books read" if read else "",
+        f"{rated:,} films rated" if rated else "",
     ]
     parts = [p for p in parts if p]
     based_on = "From " + (

@@ -62,90 +62,119 @@ def approving_browser(fake, **extra):
 
 
 def test_connecting_hardcover_signs_in_and_brings_the_books_in(window, qtbot):
-    page = window.settings
-    assert page.hardcover_connect.isEnabled() and not page.hardcover_disconnect.isEnabled()
-    assert page.hardcover_status.text() == "Not connected yet."
+    card = window.settings.sources
+    row = card.rows["hardcover"]
+    assert not row.connect.isHidden() and row.connect.isEnabled() and row.remove.isHidden()
+    assert row.state.text() == "Not connected"
     with qtbot.waitSignal(window.dashboard.sync_finished, timeout=20000):
-        page.connect_hardcover(browser=approving_browser(window.hardcover))
+        card.connect_hardcover(browser=approving_browser(window.hardcover))
     assert credentials.hardcover_connected("me", window.ctx.store)
     assert window.ctx.store.get("me", "HARDCOVER_REFRESH_TOKEN") == window.hardcover.refresh
-    assert page.hardcover_disconnect.isEnabled() and not page.hardcover_connect.isEnabled()
-    assert page.sign_in is None and page.hardcover_stop.isHidden()
+    # Connected: Disconnect, Test, and Sync now; no Connect button at all.
+    assert row.connect.isHidden() and not row.account.isHidden()
+    assert row.remove.text() == "Disconnect" and not row.remove.isHidden()
+    assert not row.test.isHidden() and not row.sync.isHidden()
+    assert card.sign_in is None and row.stop.isHidden()
+    assert row.state.text().startswith("Connected · synced ")
+    assert row.state.text().endswith("books in your library")
     # The sync that followed brought the books in: the Dashboard has a books shelf.
     window.sidebar.setCurrentRow(PAGES.index("Dashboard"))
     assert window.dashboard.books in window.dashboard.extra_shown
-    window.reports.refresh()
+    window.sidebar.setCurrentRow(PAGES.index("Books"))
     assert window.reports.books_section.isVisible()
     assert window.reports.books.stats.unique == 5  # read, with or without a date
 
-    worker = page.disconnect_hardcover()
-    qtbot.waitUntil(
-        lambda: worker.isFinished() and page.hardcover_connect.isEnabled(), timeout=15000
-    )
+    worker = card.disconnect_hardcover()
+    qtbot.waitUntil(lambda: worker.isFinished() and row.connect.isEnabled(), timeout=15000)
     assert not credentials.hardcover_connected("me", window.ctx.store)
     assert window.hardcover.revoked  # signed out on Hardcover too
-    assert page.hardcover_status.text() == "Not connected yet."
+    assert row.state.text().startswith("Not connected · last synced ")
+    assert not row.connect.isHidden() and row.remove.isHidden()
+
+
+def test_settings_shows_the_latest_sync_once_a_sync_ends(window, qtbot):
+    card = window.settings.sources
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=20000):
+        card.connect_hardcover(browser=approving_browser(window.hardcover))
+    conn = window.ctx.connect("me")
+    with conn:
+        conn.execute(
+            "UPDATE sync_runs SET ended_at = '2026-01-01 12:00:00' WHERE source = 'hardcover'"
+        )
+    conn.close()
+    window.settings.refresh()
+    assert "synced Jan 1" in card.rows["hardcover"].state.text()
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=20000):
+        window.dashboard.start_sync("hardcover")
+    # Settings isn't on screen, but it still says when the books last synced.
+    assert "synced today at" in card.rows["hardcover"].state.text()
 
 
 def test_a_refused_hardcover_sign_in_says_so(window, qtbot):
-    page = window.settings
-    worker = page.connect_hardcover(
+    card = window.settings.sources
+    worker = card.connect_hardcover(
         browser=approving_browser(window.hardcover, error="access_denied", code="")
     )
     with qtbot.waitSignal(worker.done, timeout=15000):
         pass
-    qtbot.waitUntil(lambda: page.sign_in is None)
-    assert "didn't approve" in page.hardcover_status.text()
+    qtbot.waitUntil(lambda: card.sign_in is None)
+    assert "didn't approve" in card.message.text()
     assert not credentials.hardcover_connected("me", window.ctx.store)
 
 
 def test_waiting_for_hardcover_can_be_stopped(window, qtbot):
-    page = window.settings
-    worker = page.connect_hardcover(browser=lambda url: None)  # the browser never comes back
-    assert not page.hardcover_stop.isHidden() and not page.hardcover_copy.isHidden()
-    page.copy_hardcover_link()
+    card = window.settings.sources
+    row = card.rows["hardcover"]
+    worker = card.connect_hardcover(browser=lambda url: None)  # the browser never comes back
+    assert not row.stop.isHidden() and not row.copy.isHidden() and row.connect.isHidden()
+    card.copy_hardcover_link()
     from PySide6.QtWidgets import QApplication
 
     assert QApplication.clipboard().text().startswith(hardcover.AUTHORIZE_URL)
     with qtbot.waitSignal(worker.done, timeout=15000):
-        page.stop_hardcover()
-    qtbot.waitUntil(lambda: page.sign_in is None)
-    assert page.hardcover_status.text() == "Not connected yet."
-    assert page.hardcover_connect.isEnabled()
+        card.stop_hardcover()
+    qtbot.waitUntil(lambda: card.sign_in is None)
+    assert row.state.text() == "Not connected"
+    assert not row.connect.isHidden() and row.connect.isEnabled() and row.stop.isHidden()
 
 
 def test_connecting_and_disconnecting_tmdb(window, qtbot):
-    page = window.settings
-    assert not page.tmdb_connect.isEnabled()  # no read token yet
-    page.key_inputs["TMDB_READ_TOKEN"].setText(READ_TOKEN)
-    page.save_key("TMDB_READ_TOKEN")
-    assert page.tmdb_connect.isEnabled() and page.tmdb_status.text() == "Not connected yet."
+    card = window.settings.sources
+    row = card.rows["tmdb"]
+    assert row.connect.isHidden()  # no read token yet
+    assert row.state.text() == "Save a read access token, then connect your account"
+    row.key.setText(READ_TOKEN)
+    card.save_source("tmdb")
+    assert not row.connect.isHidden() and row.connect.isEnabled()
+    assert row.state.text() == "Connect your account"
     asked = []
-    page.connect_tmdb(approve=lambda url: asked.append(url) or True)
+    card.connect_tmdb(approve=lambda url: asked.append(url) or True)
     qtbot.waitUntil(lambda: credentials.tmdb_connected("me", window.ctx.store), timeout=15000)
-    qtbot.waitUntil(lambda: not page.tmdb_worker.isRunning(), timeout=5000)
+    qtbot.waitUntil(lambda: not card.tmdb_worker.isRunning(), timeout=5000)
     assert asked == ["https://www.themoviedb.org/auth/access?request_token=req-token-1"]
     assert window.ctx.store.get("me", "TMDB_USER_TOKEN") == USER_TOKEN
     assert window.ctx.store.get("me", "TMDB_ACCOUNT_ID") == ACCOUNT
-    assert page.tmdb_status.text().startswith("Connected.")
-    assert USER_TOKEN not in page.tmdb_status.text()
+    assert row.state.text() == "Connected · never synced"
+    assert USER_TOKEN not in row.state.text() + card.message.text()
+    assert [a.text() for a in window.dashboard.sync_menu.actions()] == ["TMDB"]
 
-    worker = page.disconnect_tmdb()
+    worker = card.disconnect_tmdb()
     qtbot.waitUntil(lambda: not worker.isRunning(), timeout=5000)
     assert not credentials.tmdb_connected("me", window.ctx.store)
     assert ("DELETE", "/4/auth/access_token") in window.tmdb.calls
-    assert page.tmdb_connect.isEnabled()
+    assert not row.connect.isHidden() and row.connect.isEnabled()
+    assert row.remove.text() == "Remove"  # the read token is still saved
 
 
 def test_stopping_at_the_approval_question_connects_nothing(window, qtbot):
-    page = window.settings
-    page.key_inputs["TMDB_READ_TOKEN"].setText(READ_TOKEN)
-    page.save_key("TMDB_READ_TOKEN")
-    worker = page.connect_tmdb(approve=lambda url: False)
+    card = window.settings.sources
+    card.rows["tmdb"].key.setText(READ_TOKEN)
+    card.save_source("tmdb")
+    worker = card.connect_tmdb(approve=lambda url: False)
     qtbot.waitUntil(lambda: not worker.isRunning(), timeout=5000)
     qtbot.wait(100)
     assert not credentials.tmdb_connected("me", window.ctx.store)
-    assert page.tmdb_status.text() == "Not connected yet."
+    assert card.rows["tmdb"].state.text() == "Connect your account"
 
 
 def test_about_credits_every_source_and_shows_the_tmdb_logo(window):

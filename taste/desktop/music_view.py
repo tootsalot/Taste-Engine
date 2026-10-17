@@ -8,10 +8,10 @@ page: Last.fm plays are a sample of my listening, never all of it.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
 
-from taste import charts, musicstats
+from taste import charts, local_time, musicstats, settings
 from taste.desktop import motion, theme
 from taste.desktop.books_view import CoverWall, PersonCard, SpanBar, WallItem
 from taste.desktop.context import AppContext
@@ -36,7 +36,7 @@ PLAYS_MIN_BAR = 18  # narrower than this and the bars stop reading as bars
 def hour_name(hour: int | None) -> str:
     if hour is None:
         return "-"
-    return f"{hour % 12 or 12} {'AM' if hour < 12 else 'PM'}"
+    return local_time.hour_text(hour)
 
 
 def album_item(album: str, artist: str, plays: int, cover: str | None) -> WallItem:
@@ -64,8 +64,10 @@ class MusicView(QWidget):
         self.span_bar = SpanBar("music")
         self.span_bar.changed.connect(self.set_span)
         top.addWidget(self.span_bar)
-        top.addSpacing(16)
-        self.scope = label("", role="scope", wrap=True)
+        top.addStretch()
+        # Muted on the right, like every other page's note (it was coral, on the left).
+        self.scope = label("", role="muted", wrap=True)
+        self.scope.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         top.addWidget(self.scope, 1)
         grid.addLayout(top, 0, 0, 1, 6)
 
@@ -117,7 +119,7 @@ class MusicView(QWidget):
 
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
-        self.span = "all"
+        self.span = None  # "Report pages open on", once its years are known
 
     def refresh(self, report: charts.ReportData) -> None:
         """Redraw. `report` brings the capture scope and time zone."""
@@ -131,6 +133,9 @@ class MusicView(QWidget):
         conn = self.ctx.connect(self.profile_id)
         try:
             years = musicstats.years(conn)
+            if self.span is None:
+                latest = settings.get(conn, "report_span") == "year" and years
+                self.span = years[0] if latest else "all"
             if self.span != "all" and self.span not in years:
                 self.span = "all"
             stats = musicstats.load(conn, self.span)
@@ -161,23 +166,46 @@ class MusicView(QWidget):
             return charts.Tile(value, caption, "music", detail=detail)
 
         hours = s.hours.hours
+        if hours:
+            hour_tile = tile(
+                f"~{hours:,.0f}", "hours of music", f"lengths known for {s.hours.coverage:.0%}"
+            )
+        elif s.plays and s.hours.known < 1:
+            # No lengths looked up yet: how far along that is, not a dash.
+            hour_tile = tile(
+                f"{s.hours.coverage:.0%}", "plays with a length", "hours show once half have one"
+            )
+        elif s.plays:
+            # Too few lengths for an estimate: what the known ones add up to, at least.
+            hour_tile = tile(
+                f"{s.hours.known:,.0f}+",
+                "hours of music",
+                f"lengths known for {s.hours.coverage:.0%} of plays",
+            )
+        else:
+            hour_tile = tile("0", "hours of music")
+        if s.new_artists is not None:
+            new = tile(f"{s.new_artists:,}", "new artists", "first played this year")
+        elif s.newest_year:
+            year, count = s.newest_year
+            new = tile(f"{count:,}", "new artists", f"first played in {year}")
+        else:
+            new = tile("0", "new artists")
         values = [
             tile(
                 f"{s.plays:,}", "Last.fm plays", "all time" if s.span == "all" else f"in {s.span}"
             ),
+            hour_tile,
             tile(
-                f"~{hours:,.0f}" if hours else "-",
-                "hours of music",
-                f"lengths known for {s.hours.coverage:.0%} of plays" if s.plays else "",
+                f"{s.artists:,}", "artists", f"most: {s.people[0].name}" if s.people else ""
             ),  # fmt: skip
-            tile(f"{s.artists:,}", "artists"),
-            tile(
-                f"{s.new_artists:,}" if s.new_artists is not None else "-",
-                "new artists",
-                "first played this year" if s.new_artists is not None else "pick a year to see",
-            ),  # fmt: skip
+            new,
             tile(hour_name(s.busiest_hour), "busiest hour", "your time"),
-            tile(s.busiest_day or "-", "busiest day"),
+            tile(
+                s.busiest_day or "-",
+                "busiest day",
+                f"{s.busiest_day_share:.0%} of plays" if s.busiest_day else "",
+            ),  # fmt: skip
         ]
         for widget, value in zip(self.tiles, values, strict=True):
             widget.set(value)
@@ -190,7 +218,7 @@ class MusicView(QWidget):
             [(track, plays) for track, _, plays in s.tracks],
             tips=[f"{track} by {artist}" for track, artist, _ in s.tracks],
         )
-        hour_labels = [f"{h % 12 or 12}{'a' if h < 12 else 'p'}" for h in range(24)]
+        hour_labels = [local_time.hour_text(h, short=True) for h in range(24)]
         self.hour_chart.set_data(s.by_hour if any(s.by_hour) else [], hour_labels, unit="plays")
         self.day_chart.set_data(
             [p for _, p in s.by_weekday] if any(p for _, p in s.by_weekday) else [],

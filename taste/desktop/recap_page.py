@@ -13,13 +13,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QImage, QPainter, QPainterPath
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QIcon, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -28,11 +30,12 @@ from taste import activity, recap, settings
 from taste.activity import Period
 from taste.desktop import motion, ui_state
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import Card, Segmented, heading, label, section
+from taste.desktop.widgets import Card, LazyPage, Segmented, heading, label, section
 from taste.desktop.workers import RecapWorker
 
 TITLE = "Rev"
 SIDE_WIDTH = 380
+THUMB_GAP = 8
 CARD_RATIO = 1920 / 1080
 NEIGHBOR_SCALE = 0.78  # the cards either side of the current one
 NEIGHBOR_ALPHA = 0.35
@@ -64,6 +67,7 @@ class Deck(QWidget):
         self.cards: list[QImage] = []
         self.index = 0
         self.offset = 0.0  # while sliding: how far the cards still have to go, in cards
+        self.cam_offset = 0.0  # and how far the view still has to go
         self._slide = None
         self.setMinimumSize(320, 420)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -72,25 +76,33 @@ class Deck(QWidget):
     def set_cards(self, cards: list[QImage], index: int = 0) -> None:
         self.cards = list(cards)
         self.index = min(max(index, 0), max(len(self.cards) - 1, 0))
-        self.offset = 0.0
+        self.offset = self.cam_offset = 0.0
         self.update()
 
     def go(self, index: int) -> bool:
         if not self.cards or not 0 <= index < len(self.cards) or index == self.index:
             return False
-        start = float(index - self.index)
+        # From where the cards are now: a click mid-slide used to start a second slide
+        # from the card's resting place while the first kept running (2.0's jumpy deck).
+        if self._slide is not None:
+            self._slide.stop()
+            self._slide = None
+        start = float(index - self.index) + self.offset
+        view = self.camera_for(self.index) + self.cam_offset  # where the view is now
         self.index = index
+        cam_start = view - self.camera_for(index)
         ms = motion.duration(320) if motion.travels() else 0
         if not ms:
-            self.offset = 0.0
+            self.offset = self.cam_offset = 0.0
             self.update()
             return True
 
         def step(t: float) -> None:
             self.offset = start * (1 - t)
+            self.cam_offset = cam_start * (1 - t)
             self.update()
 
-        self.offset = start
+        self.offset, self.cam_offset = start, cam_start
         self._slide = motion.tween(0.0, 1.0, step, ms, owner=self)
         return True
 
@@ -102,18 +114,42 @@ class Deck(QWidget):
             height = width * CARD_RATIO
         return width, height
 
-    def _rect(self, position: float) -> QRectF:
-        """Where a card `position` cards away from the middle is drawn."""
-        width, height = self.card_size()
-        distance = min(abs(position), 1.0)
-        scale = 1 - (1 - NEIGHBOR_SCALE) * distance
-        w, h = width * scale, height * scale
-        # Neighbors sit beside the current card, or tuck behind it when the panel is too
-        # narrow, but never run off its edge.
+    def _spacing(self) -> float:
+        """From one card's middle to the next. Neighbors sit beside the current card, or
+        tuck behind it when the panel is too narrow, but never run off its edge."""
+        width, _ = self.card_size()
         side = width * NEIGHBOR_SCALE
-        spacing = min(width * 0.5 + side * 0.5 + 24, self.width() / 2 - side / 2 - 4)
-        center = self.width() / 2 + position * spacing
+        return max(min(width * 0.5 + side * 0.5 + 24, self.width() / 2 - side / 2 - 4), 1.0)
+
+    def camera_for(self, index: int) -> float:
+        """Which card the view centers on. In the middle, the current one; at either end
+        the view moves inward (as far as the current card still fits) so neighbors fill
+        both sides instead of half the deck being empty (2.1)."""
+        count = len(self.cards)
+        if count < 2:
+            return float(index)
+        width, _ = self.card_size()
+        spacing = self._spacing()
+        side = width * NEIGHBOR_SCALE
+        reach = max(int((self.width() / 2 - side / 2) // spacing), 1)  # neighbors per side
+        target = (
+            (count - 1) / 2 if count <= 2 * reach + 1 else min(max(index, reach), count - 1 - reach)
+        )
+        room = max((self.width() / 2 - width / 2 - 4) / spacing, 0.0)  # how far it may move
+        return index + min(max(target - index, -room), room)
+
+    def _rect(self, place: float, distance: float) -> QRectF:
+        """Where a card is drawn: `place` cards from the view's middle, at the size for
+        being `distance` cards from the current one."""
+        width, height = self.card_size()
+        scale = 1 - (1 - NEIGHBOR_SCALE) * min(abs(distance), 1.0)
+        w, h = width * scale, height * scale
+        center = self.width() / 2 + place * self._spacing()
         return QRectF(center - w / 2, (self.height() - h) / 2, w, h)
+
+    def rect_of(self, i: int) -> QRectF:
+        view = self.camera_for(self.index) + self.cam_offset
+        return self._rect(i - view, i - self.index + self.offset)
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         if not self.cards:
@@ -125,9 +161,9 @@ class Deck(QWidget):
         order = sorted(range(len(self.cards)), key=lambda i: -abs(i - self.index + self.offset))
         for i in order:
             position = i - self.index + self.offset
-            if abs(position) > 2.2:
+            rect = self.rect_of(i)
+            if rect.right() < 0 or rect.left() > self.width():
                 continue
-            rect = self._rect(position)
             painter.setOpacity(1 - (1 - NEIGHBOR_ALPHA) * min(abs(position), 1.0))
             clip = QPainterPath()
             clip.addRoundedRect(rect, 18, 18)
@@ -139,17 +175,16 @@ class Deck(QWidget):
         painter.end()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        x = event.position().x()
-        for step in (-1, 1):
-            if self._rect(step).contains(QPointF(x, self.height() / 2)) and not self._rect(
-                0
-            ).contains(QPointF(x, self.height() / 2)):
-                self.picked.emit(self.index + step)
-                return
+        point = QPointF(event.position().x(), self.height() / 2)
+        if not self.rect_of(self.index).contains(point):
+            for i in range(len(self.cards)):
+                if i != self.index and self.rect_of(i).contains(point):
+                    self.picked.emit(i)  # any card in sight, not only the next one
+                    return
         super().mousePressEvent(event)
 
 
-class RecapPage(QWidget):
+class RecapPage(LazyPage, QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
@@ -249,10 +284,24 @@ class RecapPage(QWidget):
         self.rebuild_button.clicked.connect(lambda: self.rebuild())
         side.body.addWidget(self.rebuild_button)
         side.body.addSpacing(10)
-        side.body.addWidget(section("About these numbers"))
+        # Folded to one line: seven paragraphs of fine print read as a wall of text.
+        self.about_toggle = QPushButton("About these numbers")
+        self.about_toggle.setProperty("role", "link")
+        self.about_toggle.setCheckable(True)
+        self.about_toggle.toggled.connect(self.show_notes)
+        side.body.addWidget(self.about_toggle, 0, Qt.AlignmentFlag.AlignLeft)
         self.notes = [label("", role="caption", wrap=True) for _ in NOTES]
         for note in self.notes:
             side.body.addWidget(note)
+            note.setVisible(False)
+        # Every card small, three across: where you are, and a click to jump there. The
+        # panel was mostly bare (2.1's fill test counts empty space inside cards).
+        side.body.addSpacing(10)
+        side.body.addWidget(section("Cards"))
+        self.thumb_grid = QGridLayout()
+        self.thumb_grid.setSpacing(THUMB_GAP)
+        side.body.addLayout(self.thumb_grid)
+        self.thumbs: list[QToolButton] = []
         side.body.addStretch(1)
         self.so_far_note = label("", role="muted", wrap=True)
         side.body.addWidget(self.so_far_note)
@@ -260,6 +309,11 @@ class RecapPage(QWidget):
         layout.addLayout(body, 1)
         self._refresh_folder_line()
         self._refresh_buttons()
+
+    def show_notes(self, shown: bool) -> None:
+        for note in self.notes:
+            motion.reveal(note, shown)
+        self.about_toggle.setText("Hide the notes" if shown else "About these numbers")
 
     # -- periods ------------------------------------------------------------
 
@@ -314,6 +368,9 @@ class RecapPage(QWidget):
         self.status.setText("Drawing…")
         self._start(RecapWorker(self.profile_id, self.ctx.art.cache, self.ctx.now(), period))
 
+    def lazy_refresh(self) -> None:  # LazyPage: after a sync, when shown
+        self.refresh()
+
     def refresh(self) -> None:
         if self.profile_id:
             self.show_period(self.period)
@@ -361,6 +418,7 @@ class RecapPage(QWidget):
         keep = self.deck.index if same else 0
         self.cards = list(cards) if has else []
         self.deck.set_cards([image for _, image in self.cards], keep)
+        self._fill_thumbs()
         self.empty.setText(
             ""
             if has
@@ -374,6 +432,27 @@ class RecapPage(QWidget):
             self.status.setText("")
 
     # -- the deck -----------------------------------------------------------
+
+    def _fill_thumbs(self) -> None:
+        for thumb in self.thumbs:
+            self.thumb_grid.removeWidget(thumb)
+            thumb.deleteLater()
+        self.thumbs = []
+        width = (SIDE_WIDTH - 44 - 2 * THUMB_GAP) // 3
+        size = QSize(width, round(width * CARD_RATIO))
+        for i, (name, image) in enumerate(self.cards):
+            thumb = QToolButton()
+            thumb.setObjectName("CardThumb")
+            thumb.setCheckable(True)
+            thumb.setIcon(QIcon(QPixmap.fromImage(image.scaled(
+                size * 2, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))))  # fmt: skip
+            thumb.setIconSize(size)
+            thumb.setToolTip(f"Card {i + 1}: {name}")
+            thumb.clicked.connect(lambda _=False, n=i: self.show_card(n))
+            self.thumb_grid.addWidget(thumb, i // 3, i % 3)  # in its layout before shown
+            self.thumbs.append(thumb)
+        self._refresh_buttons()
 
     def show_card(self, index: int) -> None:
         if self.deck.go(index):
@@ -396,6 +475,8 @@ class RecapPage(QWidget):
             button.setEnabled(count > 0)
         self.save_all_button.setText(f"Save all {count} cards" if count else "Save all cards")
         self.position.setText(f"Card {index + 1} of {count}" if count else "")
+        for i, thumb in enumerate(self.thumbs):
+            thumb.setChecked(i == index)
 
     # -- saving -------------------------------------------------------------
 

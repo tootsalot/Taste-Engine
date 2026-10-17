@@ -4,9 +4,9 @@ The cards sit in a grid whose rows share the window's height, so a big window
 gets bigger posters and more genres rather than empty space below the cards. A
 wide window puts three cards across; a narrow one two.
 
-The sync log lives in a slim strip that opens while a sync runs and folds away
-when it ends (it stays open if something went wrong). The numbers come from
-taste.overview and taste.activity.
+Syncing shows on one status line with a progress bar; the log stays folded until
+Show log, so a sync never moves the cards. The numbers come from taste.overview
+and taste.activity.
 """
 
 from __future__ import annotations
@@ -19,16 +19,27 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QMenu,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from taste import activity, charts, local_time, overview, persona, settings
+from taste import (
+    activity,
+    bookstats,
+    charts,
+    local_time,
+    overview,
+    persona,
+    settings,
+    source_status,
+)
 from taste.desktop import motion, theme
 from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
@@ -36,6 +47,7 @@ from taste.desktop.widgets import (
     BarChart,
     Card,
     GenreCard,
+    LazyPage,
     ScrollArea,
     elided_lines,
     heading,
@@ -50,7 +62,6 @@ POSTER = QSize(104, 148)
 COVER = QSize(104, 104)
 ART_GROWTH = 2.2  # pictures grow with the room they get, up to this many times the base
 ART_STEP = 8  # sizes move in steps, so resizing the window doesn't decode every pixel
-SOURCES = (("mal", "MyAnimeList"), ("lastfm", "Last.fm"))
 SCOPE_TIP = "Most played on Last.fm in the last {days} days. {note}"
 # Enough for a very wide window. Shelves show as many as fit, and an item downloads
 # its picture only once it's on screen.
@@ -69,7 +80,12 @@ def polish(widget: QWidget) -> None:
 
 
 class SyncStrip(QFrame):
-    """One line when idle. While a sync runs: progress, the current step, and the log."""
+    """One line: when everything last synced or, during a sync, the current step and a
+    progress bar. The log stays folded until Show log, so a sync never moves the cards
+    (the user's choice, 2026-10-16). A sync with problems turns the line red."""
+
+    LOG_HEIGHT = 170
+    PROGRESS_WIDTH = 260
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,6 +95,7 @@ class SyncStrip(QFrame):
         layout.setSpacing(8)
         row = QHBoxLayout()
         row.setSpacing(10)
+        self.row = row  # the Dashboard puts its recap notice on this line too
         self.dot = QFrame()
         self.dot.setObjectName("StatusDot")
         self.dot.setFixedSize(8, 8)
@@ -86,24 +103,28 @@ class SyncStrip(QFrame):
         row.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
         self.text = label("", role="muted", wrap=True)
         row.addWidget(self.text, 1)
+        # On the status line rather than a row of its own, so it costs the cards nothing.
+        self.progress = QProgressBar()
+        self.progress.setFixedWidth(self.PROGRESS_WIDTH)
+        self.progress.setVisible(False)
+        row.addWidget(self.progress, 0, Qt.AlignmentFlag.AlignVCenter)
         self.toggle = QPushButton("Show log")
         self.toggle.setProperty("role", "link")
         self.toggle.clicked.connect(lambda: self.show_log(self.log.isHidden()))
         self.toggle.setVisible(False)
         row.addWidget(self.toggle)
         layout.addLayout(row)
-        self.progress = QProgressBar()
-        self.progress.setVisible(False)
-        layout.addWidget(self.progress)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setFixedHeight(170)
+        self.log.setFixedHeight(self.LOG_HEIGHT)
         self.log.setVisible(False)
         layout.addWidget(self.log)
 
     def set_state(self, state: str) -> None:
         self.dot.setProperty("state", state)
         polish(self.dot)
+        self.text.setProperty("role", "error" if state == "error" else "muted")
+        polish(self.text)
 
     def show_log(self, shown: bool) -> None:
         if shown != motion.is_open(self.log):
@@ -115,7 +136,6 @@ class SyncStrip(QFrame):
         self.progress.setRange(0, 0)  # busy until a page count arrives
         self.progress.setVisible(True)
         self.toggle.setVisible(True)
-        self.show_log(True)
         self.set_state("running")
         self.text.setText("Starting the sync.")
 
@@ -132,7 +152,6 @@ class SyncStrip(QFrame):
         self.progress.setVisible(False)
         self.log.appendPlainText("Done." if ok else "Finished with problems. See above.")
         self.set_state("ok" if ok else "error")
-        self.show_log(not ok)
 
     def clear(self) -> None:
         self.log.clear()
@@ -214,6 +233,7 @@ class Shelf(Card):
         self.accent = accent
         self.caption_lines = caption_lines
         self.items: list[ShelfItem] = []
+        self.entries: list[tuple] = []
         self.body.setSpacing(10)
         self.title_label = section(title)
         self.body.addWidget(self.title_label)
@@ -264,6 +284,9 @@ class Shelf(Card):
 
     def set_items(self, entries: list[tuple[str | None, str, str, str]], empty_text: str) -> None:
         """entries: (picture url, title, caption, tooltip; '' means title and caption)."""
+        if entries == self.entries and self.items:
+            return  # unchanged: rebuilding 30 pictures a shelf took most of a refresh
+        self.entries = list(entries)
         for item in self.items:
             self.row.removeWidget(item)
             item.deleteLater()
@@ -357,31 +380,24 @@ class MonthCard(Card):
 
     def set_glance(self, glance: activity.Glance) -> None:
         self.title.setText(f"This month so far · {glance.period.label}")
-        values = {
-            "plays": (f"{glance.plays:,}", "plays" if glance.plays != 1 else "play"),
-            "shows": (
-                f"{glance.shows_finished}",
-                "show finished" if glance.shows_finished == 1 else "shows finished",
-            ),
-        }
+        values = {"plays": (f"{glance.plays:,}", "plays" if glance.plays != 1 else "play")}
         hours = glance.hours.hours
-        if hours is None:
-            values["hours"] = ("-", "hours: track lengths not fetched yet")
-        else:
-            values["hours"] = (
-                f"~{hours:,.0f}" if hours >= 1 else "<1",
-                "hours of music",
-            )
+        if hours is not None and glance.plays:
+            values["hours"] = (f"~{hours:,.0f}" if hours >= 1 else "<1", "hours of music")
+        elif glance.hours.known >= 1:
+            values["hours"] = (f"{glance.hours.known:,.0f}+", "hours of music")
+        # Zeros are left out ("0 books read" says nothing), plays always stay.
         for key, count, one, many in (
+            ("shows", glance.shows_finished, "show finished", "shows finished"),
             ("books", glance.books, "book read", "books read"),
             ("films", glance.films, "film rated", "films rated"),
         ):
-            if count is not None:
+            if count:
                 values[key] = (f"{count}", one if count == 1 else many)
         for key, (value, caption) in values.items():
             self.numbers[key][0].setText(value)
             self.numbers[key][1].setText(caption)
-        for key in ("books", "films"):
+        for key in ("hours", "shows", "books", "films"):
             shown = key in values
             self.numbers[key][0].setVisible(shown)
             self.numbers[key][1].setVisible(shown)
@@ -472,6 +488,7 @@ TRAIT_COLORS = {
     "music": theme.CORAL,
     "books": theme.AMBER,
     "screen": theme.TEAL,
+    "critic": theme.TEXT,  # across media, so no one medium's color
 }
 
 
@@ -545,7 +562,54 @@ class TasteCard(Card):
         self._place()
 
 
-class DashboardPage(QWidget):
+class CrowdCard(Card):
+    """You vs the crowd: a number per source, side by side (approved 2026-10-16). A
+    source with nothing synced drops out and the rest share the row."""
+
+    COLORS = {"anime": theme.LILAC, "screen": theme.TEAL, "books": theme.AMBER,
+              "music": theme.CORAL}  # fmt: skip
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.body.addWidget(section("You vs the crowd"))
+        self.row = QHBoxLayout()
+        self.row.setSpacing(18)
+        self.body.addLayout(self.row)
+        self.empty = label(
+            "Sync a source to see how your scores compare with its crowd.", role="muted", wrap=True
+        )
+        self.body.addWidget(self.empty)
+        self.body.addStretch()
+        self.cells: dict[str, QWidget] = {}
+        self.numbers: list[overview.CrowdNumber] = []
+
+    def set_numbers(self, numbers: list[overview.CrowdNumber]) -> None:
+        self.numbers = numbers
+        for cell in self.cells.values():
+            self.row.removeWidget(cell)
+            cell.deleteLater()
+        self.cells = {}
+        for number in numbers:
+            cell = QWidget()
+            box = QVBoxLayout(cell)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.setSpacing(2)
+            value = label(number.value)
+            value.setFont(theme.number_font(36))
+            value.setStyleSheet(f"color: {self.COLORS[number.kind]};")
+            box.addWidget(value)
+            box.addWidget(label(number.caption, role="caption", wrap=True))
+            cell.setToolTip(plain_tip(number.tip))
+            self.row.addWidget(cell, 1)  # in its layout before it's ever shown
+            self.cells[number.kind] = cell
+        self.empty.setVisible(not numbers)
+
+    def shown(self) -> dict[str, tuple[str, str]]:
+        """{kind: (number, caption)} as on screen, for tests."""
+        return {n.kind: (n.value, n.caption) for n in self.numbers}
+
+
+class DashboardPage(LazyPage, QWidget):
     sync_started = Signal()
     sync_finished = Signal(dict)
     recs_updated = Signal()
@@ -562,6 +626,7 @@ class DashboardPage(QWidget):
         self.wide: bool | None = None
         self.page_width = 0
         self.has_data = True
+        self.cards_on = set(settings.DASHBOARD_CARDS)  # the profile's "Dashboard cards"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -579,18 +644,16 @@ class DashboardPage(QWidget):
         self.title = heading("Dashboard", 28)
         top.addWidget(self.title)
         top.addStretch()
-        self.sync_buttons: dict[str, QPushButton] = {}
-        for source, text in (
-            ("mal", "Sync MyAnimeList"),
-            ("lastfm", "Sync Last.fm"),
-            ("all", "Sync everything"),
-        ):
-            button = QPushButton(text)
-            if source == "all":
-                button.setProperty("role", "primary")
-            button.clicked.connect(lambda _=False, s=source: self.start_sync(s))
-            self.sync_buttons[source] = button
-            top.addWidget(button)
+        # One button for everything; its arrow lists each connected source.
+        self.sync_button = QToolButton()
+        self.sync_button.setObjectName("SyncButton")
+        self.sync_button.setText("Sync everything")
+        self.sync_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.sync_button.clicked.connect(lambda: self.start_sync("all"))
+        self.sync_menu = QMenu(self.sync_button)
+        self.sync_menu.aboutToShow.connect(motion.menu_effects)
+        self.sync_button.setMenu(self.sync_menu)
+        top.addWidget(self.sync_button)
         layout.addLayout(top)
 
         self.strip = SyncStrip()
@@ -598,8 +661,10 @@ class DashboardPage(QWidget):
         self.log = self.strip.log
         layout.addWidget(self.strip)
 
+        # On the status line, not a row of its own: a full library at 2560 x 1380 has
+        # about 15 px to spare, and a row of its own (52 px) made the page scroll.
         self.banner = Banner()
-        layout.addWidget(self.banner)
+        self.strip.row.insertWidget(2, self.banner)
         self.banner.setVisible(False)
 
         self.welcome = GettingStarted()
@@ -607,20 +672,7 @@ class DashboardPage(QWidget):
         self.welcome.sync_all.connect(lambda: self.start_sync("all"))
         layout.addWidget(self.welcome, 1)
 
-        self.critic = Card()
-        self.critic.body.addWidget(section("How critical you are"))
-        row = QHBoxLayout()
-        row.setSpacing(14)
-        self.critic_value = label("")
-        self.critic_value.setFont(theme.number_font(44))
-        self.critic_value.setStyleSheet(f"color: {theme.LILAC};")
-        row.addWidget(self.critic_value, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.critic_text = label("", wrap=True)
-        row.addWidget(self.critic_text, 1, Qt.AlignmentFlag.AlignVCenter)
-        self.critic.body.addLayout(row)
-        self.counts = label("", role="muted", wrap=True)
-        self.critic.body.addWidget(self.counts)
-        self.critic.body.addStretch()
+        self.crowd = CrowdCard()
 
         self.scores = Card()
         self.scores.body.addWidget(section("Your scores, 1 to 10"))
@@ -657,7 +709,7 @@ class DashboardPage(QWidget):
         for column in range(COLUMNS):
             self.grid.setColumnStretch(column, 1)
         self.cards = [
-            self.critic,
+            self.crowd,
             self.scores,
             self.month,
             self.recent,
@@ -665,6 +717,19 @@ class DashboardPage(QWidget):
             self.weeks,
             self.genres,
         ]
+        # The "Dashboard cards" setting's keys, and the card each one names.
+        self.keyed = {
+            "crowd": self.crowd,
+            "scores": self.scores,
+            "month": self.month,
+            "recent": self.recent,
+            "repeat": self.repeat,
+            "weeks": self.weeks,
+            "genres": self.genres,
+            "books": self.books,
+            "films": self.films,
+            "tv": self.tv,
+        }
         layout.addLayout(self.grid, 1)
         self._arrange(wide=False)
         self.scroll.viewport_resized.connect(self._on_width)
@@ -674,53 +739,71 @@ class DashboardPage(QWidget):
     def _arrange(self, wide: bool, force: bool = False) -> None:
         """Place the cards. Wide: three across with the genres down the right side.
         Narrow: two across. Rows share the height: picture rows get more of it. Shelves
-        for books, films, and TV go below, two to a row when wide."""
+        for books, films, and TV go below, side by side when wide.
+
+        Cards the profile hides (the "Dashboard cards" setting) drop out, and the ones
+        left in a row widen to share it; a row with nothing left goes."""
         if wide == self.wide and not force:
             return
         self.wide = wide
         for card in [self.taste, *self.cards, *self.extra]:
             self.grid.removeWidget(card)
+        side = self.genres if wide and "genres" in self.cards_on else None
         if wide:
-            places = [
-                (self.critic, 0, 0, 1, 4),
-                (self.scores, 0, 4, 1, 4),
-                (self.month, 0, 8, 1, 4),
-                (self.recent, 1, 0, 1, 8),
-                (self.genres, 1, 8, 2, 4),
-                (self.repeat, 2, 0, 1, 5),
-                (self.weeks, 2, 5, 1, 3),
+            rows = [
+                ([(self.crowd, 4), (self.scores, 4), (self.month, 4)], 2, COLUMNS),
+                ([(self.recent, 8)], 3, COLUMNS - 4 if side else COLUMNS),
+                ([(self.repeat, 5), (self.weeks, 3)], 3, COLUMNS - 4 if side else COLUMNS),
             ]
-            stretches = (2, 3, 3, 0)
         else:
-            places = [
-                (self.critic, 0, 0, 1, 6),
-                (self.scores, 0, 6, 1, 6),
-                (self.month, 1, 0, 1, 6),
-                (self.weeks, 1, 6, 1, 6),
-                (self.recent, 2, 0, 1, 12),
-                (self.repeat, 3, 0, 1, 6),
-                (self.genres, 3, 6, 1, 6),
+            rows = [
+                ([(self.crowd, 6), (self.scores, 6)], 2, COLUMNS),
+                ([(self.month, 6), (self.weeks, 6)], 2, COLUMNS),
+                ([(self.recent, 12)], 3, COLUMNS),
+                ([(self.repeat, 6), (self.genres, 6)], 3, COLUMNS),
             ]
-            stretches = (2, 2, 3, 3)
-        stretches = list(stretches)
         if self.taste_shown:
-            places = [(card, row + 1, *rest) for card, row, *rest in places]
-            places.insert(0, (self.taste, 0, 0, 1, COLUMNS))
-            stretches.insert(0, 2)
-        first = len(stretches) if stretches[-1] else len(stretches) - 1
+            rows.insert(0, ([(self.taste, COLUMNS)], 2, COLUMNS))
         # Wide: books, films, and TV side by side in one row, so a full screen fits
         # everything without scrolling. Narrow: one to a row.
-        per_row = max(len(self.extra_shown), 1) if wide else 1
-        for i, shelf in enumerate(self.extra_shown):
-            row = first + i // per_row
-            if i % per_row == 0:
-                stretches[row:row] = [3]
-            span = COLUMNS // per_row
-            places.append((shelf, row, (i % per_row) * span, 1, span))
-        for card, row, column, rows, columns in places:
-            self.grid.addWidget(card, row, column, rows, columns)
+        extras = [(shelf, 1) for shelf in self.extra_shown]
+        if extras:
+            groups = [extras] if wide else [[e] for e in extras]
+            rows += [(group, 3, COLUMNS) for group in groups]
+        places, stretches = [], []
+        side_rows = []
+        for cards, stretch, width in rows:
+            cards = [(c, span) for c, span in cards if self._card_on(c)]
+            if not cards:
+                continue
+            row = len(stretches)
+            if width < COLUMNS:
+                side_rows.append(row)
+            total = sum(span for _, span in cards)
+            column = 0
+            for i, (card, span) in enumerate(cards):
+                # Each widens by the same share; the last takes what rounding leaves.
+                share = width - column if i == len(cards) - 1 else round(span * width / total)
+                places.append((card, row, column, 1, share))
+                column += share
+            stretches.append(stretch)
+        if side is not None:
+            if side_rows:
+                places.append((side, side_rows[0], COLUMNS - 4, len(side_rows), 4))
+            else:  # nothing beside it: a row of its own
+                places.append((side, len(stretches), 0, 1, COLUMNS))
+                stretches.append(3)
+        for card, row, column, row_span, columns in places:
+            self.grid.addWidget(card, row, column, row_span, columns)
         for row in range(self.grid.rowCount()):
             self.grid.setRowStretch(row, stretches[row] if row < len(stretches) else 0)
+
+    def _card_on(self, card: QWidget) -> bool:
+        """Whether the profile's "Dashboard cards" setting shows this card. Your taste
+        is already left out when hidden (taste_shown)."""
+        return card is self.taste or any(
+            card is shown and key in self.cards_on for key, shown in self.keyed.items()
+        )
 
     def _on_width(self, width: int) -> None:
         self.page_width = width
@@ -736,7 +819,7 @@ class DashboardPage(QWidget):
         self.welcome.setVisible(not has_data)
         self.taste.setVisible(has_data and self.taste_shown)
         for card in self.cards:
-            card.setVisible(has_data)
+            card.setVisible(has_data and self._card_on(card))
         for shelf in self.extra:
             shelf.setVisible(has_data and shelf in self.extra_shown)
 
@@ -761,14 +844,10 @@ class DashboardPage(QWidget):
             scored = count("SELECT COUNT(*) FROM core_ratings WHERE source='mal'")
             plays = count("SELECT COUNT(*) FROM core_behavior_events WHERE source='lastfm'")
             summary = conn.execute("SELECT * FROM rpt_mal_critic_summary").fetchone()
-            synced = {}
-            for source, _ in SOURCES:
-                row = conn.execute(
-                    "SELECT ended_at FROM sync_runs WHERE source = ? AND status = 'success' "
-                    "AND mode <> 'enrich' ORDER BY sync_run_id DESC LIMIT 1",
-                    (source,),
-                ).fetchone()
-                synced[source] = row[0] if row else None
+            book_stats = bookstats.load(conn)  # loaded once for Your taste and the crowd card
+            counts = overview.artist_play_counts(conn)
+            crowd = overview.vs_crowd(conn, books=book_stats, counts=counts)
+            sources = source_status.load(conn, self.profile_id, self.ctx.store)
             interrupted = count("SELECT COUNT(*) FROM sync_lastfm_windows WHERE status = 'open'")
             distribution = overview.score_distribution(conn)
             finished = overview.recently_finished(conn, limit=SHELF_MAX)
@@ -776,31 +855,29 @@ class DashboardPage(QWidget):
             generous, harsh = overview.genre_lean(conn)
             scope_note = settings.lastfm_scope_note(conn)
             glance = activity.glance(conn, activity.current(conn, "month", now))
-            profile = persona.load(conn)
+            profile = persona.load(conn, books=book_stats, counts=counts)
             books = activity.recently_read(conn, SHELF_MAX)
             films = activity.recently_rated(conn, "movie", SHELF_MAX)
             shows = activity.recently_rated(conn, "tv", SHELF_MAX)
-            tmdb_synced = conn.execute(
-                "SELECT ended_at FROM sync_runs WHERE source = 'tmdb' AND status = 'success' "
-                "AND mode <> 'enrich' ORDER BY sync_run_id DESC LIMIT 1"
-            ).fetchone()
-            books_synced = conn.execute(
-                "SELECT ended_at FROM sync_runs WHERE source = 'hardcover' "
-                "AND status = 'success' ORDER BY sync_run_id DESC LIMIT 1"
-            ).fetchone()
             weeks, partial = charts.plays_by_period(conn, activity.today(conn, now))
         finally:
             conn.close()
 
         self.title.setText(cfg["display_name"] or self.profile_id)
+        self._fill_sync_menu([s for s in sources if s.connected])
+        cards_on = set(cfg["dashboard_cards"].split(","))
         shown = [
             shelf
-            for shelf, items in ((self.books, books), (self.films, films), (self.tv, shows))
-            if items
-        ]
-        if shown != self.extra_shown or (profile is not None) != self.taste_shown:
+            for shelf, items, key in (
+                (self.books, books, "books"), (self.films, films, "films"), (self.tv, shows, "tv")
+            )
+            if items and key in cards_on
+        ]  # fmt: skip
+        taste = profile is not None and "taste" in cards_on
+        if shown != self.extra_shown or taste != self.taste_shown or cards_on != self.cards_on:
             self.extra_shown = shown
-            self.taste_shown = profile is not None
+            self.taste_shown = taste
+            self.cards_on = cards_on
             self._arrange(bool(self.wide), force=True)
         self.taste.set_persona(profile, self._trait_columns())
         self.show_cards(bool(entries or plays or books or films or shows))
@@ -810,29 +887,7 @@ class DashboardPage(QWidget):
         )
         self.films.set_items([(f.poster_url, f.title, rated_caption(f), "") for f in films], "")
         self.tv.set_items([(f.poster_url, f.title, rated_caption(f), "") for f in shows], "")
-        self.counts.setText(
-            f"{entries:,} on your list · {scored:,} scored · {plays:,} Last.fm plays"
-        )
-        if summary and summary["shows_scored"]:
-            diff = summary["avg_diff"] + 0.0
-            self.critic_value.setText(f"{diff:+.2f}")
-            self.critic_value.setVisible(True)
-            direction = "below" if diff < 0 else "above"
-            self.critic_text.setText(
-                f"Points {direction} the MAL community on average, across "
-                f"{summary['shows_scored']:,} scored shows. You go lower than MAL on "
-                f"{summary['share_scored_below']:.0%} of them and higher on "
-                f"{summary['share_scored_above']:.0%}."
-            )
-            self.critic_text.setToolTip(
-                "Lower and higher compare your score with MAL's average rounded to a whole "
-                "number, the closest score you could give: a 7 for a show MAL rates 7.2 "
-                f"matches it. You matched on {summary['share_scored_same']:.0%}."
-            )
-        else:
-            self.critic_value.setVisible(False)  # a lone dash at this size reads as a bar
-            self.critic_text.setText("Sync MyAnimeList to see how critical you are.")
-            self.critic_text.setToolTip("")
+        self.crowd.set_numbers(crowd)
         if any(distribution):
             self.score_chart.set_data(
                 distribution,
@@ -883,33 +938,52 @@ class DashboardPage(QWidget):
         )
 
         if not self.is_syncing():
-            parts = []
-            for source, name in SOURCES:
-                when = synced[source]
-                described = local_time.describe(when, cfg["timezone"], now) if when else None
-                parts.append(f"{name} synced {described}." if when else f"{name}: never synced.")
-            if tmdb_synced:
-                parts.append(
-                    f"TMDB synced {local_time.describe(tmdb_synced[0], cfg['timezone'], now)}."
-                )
-            if books_synced:
-                when = local_time.describe(books_synced[0], cfg["timezone"], now)
-                parts.append(f"Hardcover synced {when}.")
-            text = " ".join(parts)
-            if interrupted:
-                text += " A Last.fm sync was interrupted; the next one resumes it."
-            if self.outcome is False:
-                text = "The last sync had problems; the log says what happened. " + text
-            self.strip.text.setText(text)
-            latest = max(filter(None, synced.values()), default=None)
-            if self.outcome is False:
-                short, state = "Last sync had problems", "error"
-            elif latest:
-                short = f"Synced {local_time.describe(latest, cfg['timezone'], now)}"
-                state = "ok"
-            else:
-                short, state = "Not synced yet", "idle"
-            self.status_changed.emit(short, state, text)
+            self._show_status(sources, cfg["timezone"], interrupted, now)
+
+    def refresh_status(self) -> None:
+        """Only the sync menu and status line (a key, username, or account changed), not
+        the whole page: that took about 0.3 s on a full library."""
+        if not self.profile_id or self.is_syncing():
+            return
+        now = self.ctx.now()
+        conn = self.ctx.connect(self.profile_id)
+        try:
+            sources = source_status.load(conn, self.profile_id, self.ctx.store)
+            tz_name = settings.get(conn, "timezone")
+            interrupted = conn.execute(
+                "SELECT COUNT(*) FROM sync_lastfm_windows WHERE status = 'open'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self._fill_sync_menu([s for s in sources if s.connected])
+        self._show_status(sources, tz_name, interrupted, now)
+
+    def lazy_refresh(self) -> None:  # LazyPage: after a sync, when shown
+        self.refresh()
+
+    def while_hidden(self) -> None:
+        self.refresh_status()  # the sidebar's last-sync line stays current
+
+    def _show_status(self, sources, tz_name: str, interrupted: int, now) -> None:
+        line = source_status.synced_line(sources, tz_name, now)
+        notes = []
+        if self.outcome is False:
+            notes.append("The last sync had problems. Show log says what happened.")
+        if interrupted:
+            notes.append("A Last.fm sync was interrupted; the next one resumes it.")
+        text = " ".join([*notes[:1], line.text, *notes[1:]])
+        self.strip.text.setText(text)
+        self.strip.text.setToolTip(plain_tip(line.tip))
+        details = "\n".join([*notes, line.tip])  # each source's own time, on hover
+        latest = line.latest
+        if self.outcome is False:
+            short, state = "Last sync had problems", "error"
+        elif latest:
+            short = f"Synced {local_time.describe(latest, tz_name, now)}"
+            state = "ok"
+        else:
+            short, state = "Not synced yet", "idle"
+        self.status_changed.emit(short, state, details)
 
     # -- syncing ------------------------------------------------------------
 
@@ -917,16 +991,24 @@ class DashboardPage(QWidget):
         return self.worker is not None and self.worker.isRunning()
 
     def set_blocked(self, blocked: bool) -> None:
-        for button in self.sync_buttons.values():
-            button.setEnabled(not blocked and not self.is_syncing())
-            button.setToolTip("Wait for the recommendations to finish." if blocked else "")
+        self.sync_button.setEnabled(not blocked and not self.is_syncing())
+        self.sync_button.setToolTip("Wait for the recommendations to finish." if blocked else "")
+
+    def _fill_sync_menu(self, connected: list[source_status.SourceStatus]) -> None:
+        """The arrow's menu: each connected source, or the way to Settings."""
+        self.sync_menu.clear()
+        for status in connected:
+            action = self.sync_menu.addAction(theme.source_dot(status.source), status.label)
+            action.triggered.connect(lambda _=False, s=status.source: self.start_sync(s))
+        if not connected:
+            action = self.sync_menu.addAction("Add your sources in Settings")
+            action.triggered.connect(lambda: self.open_page.emit("Settings"))
 
     def start_sync(self, source: str) -> None:
         if not self.profile_id or self.is_syncing() or self.is_blocked():
             return
         self.strip.start()
-        for button in self.sync_buttons.values():
-            button.setEnabled(False)
+        self.sync_button.setEnabled(False)
         self.worker = SyncWorker(
             self.profile_id,
             source,
@@ -944,16 +1026,15 @@ class DashboardPage(QWidget):
 
     def _on_done(self, results: dict) -> None:
         self.worker.wait()
-        for button in self.sync_buttons.values():
-            button.setEnabled(not self.is_blocked())
+        self.sync_button.setEnabled(not self.is_blocked())
         self.outcome = bool(results) and all(results.values())
         self.strip.finish(self.outcome)
-        self.refresh()
+        self.refresh_later()  # a Sync now from Settings: the rest when the Dashboard shows
         self.sync_finished.emit(results)
 
 
 class Banner(QFrame):
-    """A one-line notice with a button, like "Your October recap is ready"."""
+    """A one-line notice on the status line, like "Your October recap is ready. Open"."""
 
     opened = Signal()
 
@@ -961,11 +1042,12 @@ class Banner(QFrame):
         super().__init__()
         self.setProperty("role", "banner")
         row = QHBoxLayout(self)
-        row.setContentsMargins(16, 10, 10, 10)
-        self.text = label("", wrap=True)
-        row.addWidget(self.text, 1)
+        row.setContentsMargins(12, 2, 6, 2)
+        row.setSpacing(4)
+        self.text = label("")
+        row.addWidget(self.text)
         self.open_button = QPushButton("Open")
-        self.open_button.setProperty("role", "primary")
+        self.open_button.setProperty("role", "link")
         self.open_button.clicked.connect(self._open)
         row.addWidget(self.open_button)
         close = QPushButton("Dismiss")
@@ -975,12 +1057,12 @@ class Banner(QFrame):
 
     def show_text(self, text: str) -> None:
         self.text.setText(text)
-        if not motion.is_open(self):
-            motion.reveal(self, True)
+        if self.isHidden():
+            self.setVisible(True)  # already in the strip's layout
+            motion.fade_in([self], stagger=False)
 
     def hide_banner(self) -> None:
-        if motion.is_open(self):
-            motion.reveal(self, False)
+        self.setVisible(False)
 
     def _open(self) -> None:
         self.hide_banner()
@@ -988,9 +1070,9 @@ class Banner(QFrame):
 
 
 def book_caption(book: activity.Book) -> str:
-    """Like "You 4.5★ · Hardcover 3.84"."""
+    """Like "You 4.5★ · Hardcover 3.8" (one decimal, like TMDB's, so it fits one line)."""
     mine = f"You {book.my_rating:g}★" if book.my_rating else "Not rated"
-    return f"{mine} · Hardcover {book.average:.2f}" if book.average else mine
+    return f"{mine} · Hardcover {book.average:.1f}" if book.average else mine
 
 
 def rated_caption(item: activity.Rated) -> str:

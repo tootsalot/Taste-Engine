@@ -90,10 +90,10 @@ def test_a_sign_in_can_be_stopped():
         sign_in.wait(timeout=10)
 
 
-def synced(conn, make_client, fake=None):
+def synced(conn, make_client, fake=None, **kwargs):
     fake = fake or FakeHardcover()
     client, transport = make_client(fake)
-    result = hardcover.sync(conn, client, fake.access, lambda m: None)
+    result = hardcover.sync(conn, client, fake.access, lambda m: None, **kwargs)
     return result, fake, transport
 
 
@@ -150,13 +150,43 @@ def test_syncing_twice_changes_nothing_and_removals_are_kept(conn, make_client):
     smaller = [e for e in fake_hardcover.LIBRARY if e["id"] != 102]
     # A read-through deleted on Hardcover goes too.
     smaller[0] = entry(101, smaller[0]["book"], rating=4.5, reads=[(1001, None, "2026-09-04")])
-    result, _, _ = synced(conn, make_client, FakeHardcover(smaller))
-    assert result.removed == 1
+    result, _, _ = synced(conn, make_client, FakeHardcover(smaller), full=True)
+    assert result.removed == 1  # a full read sees what's gone
     gone = conn.execute("SELECT removed_at FROM stg_hardcover_user_books WHERE user_book_id = 102")
     assert gone.fetchone()[0] is not None
     keys = {r[0] for r in conn.execute("SELECT source_event_key FROM core_behavior_events")}
     assert "102:read:1003" not in keys and "101:read:1002" not in keys
     assert "101:read:1001" in keys
+
+
+def test_a_sync_reads_only_what_changed_and_everything_weekly(conn, make_client):
+    synced(conn, make_client)  # the first one reads everything
+    library = [dict(e) for e in fake_hardcover.LIBRARY]
+    library[1] = dict(library[1], rating=5.0, updated_at="2099-01-01T00:00:00+00:00")
+    del library[0]  # gone, but a changes-only read can't tell
+    result, fake, _ = synced(conn, make_client, FakeHardcover(library))
+    assert fake.calls == ["me", "library-since:0"]
+    assert result.books == 1 and result.removed == 0
+    rating = conn.execute("SELECT rating FROM stg_hardcover_user_books WHERE user_book_id = 102")
+    assert rating.fetchone()[0] == 5.0
+    mode = conn.execute("SELECT mode FROM sync_runs ORDER BY sync_run_id DESC LIMIT 1")
+    assert mode.fetchone()[0] == "incremental"
+    # A week after the last full read, it reads everything again and sees the removal.
+    later = datetime.now(timezone.utc) + hardcover.FULL_EVERY
+    result, fake, _ = synced(conn, make_client, FakeHardcover(library), now=later)
+    assert fake.calls[1] == "library:0" and result.removed == 1
+
+
+def test_without_a_changes_filter_it_reads_everything(conn, make_client):
+    synced(conn, make_client)
+    fake = FakeHardcover()
+    fake.knows_updated_at = False
+    lines = []
+    client, _ = make_client(fake)
+    result = hardcover.sync(conn, client, fake.access, lines.append)
+    assert result.status == "success" and result.books == len(fake_hardcover.LIBRARY)
+    assert fake.calls == ["me", "library:0"]
+    assert any("reading the whole library" in line for line in lines)
 
 
 def test_a_big_library_comes_in_pages(conn, make_client):
@@ -218,6 +248,23 @@ def test_sync_all_includes_hardcover_once_connected(conn, make_client, tmp_path)
         now=NOW.timestamp,
     )  # fmt: skip
     assert results == {"hardcover": True}
+
+
+def test_test_connection_asks_hardcover_whose_account_it_is(conn, make_client, tmp_path):
+    store = SecretStore(tmp_path, backend=FakeKeyring())
+    fake = FakeHardcover()
+    factory = lambda secrets: make_client(fake)[0]  # noqa: E731
+    ok, message = runner.check_connection(conn, "me", "hardcover", store=store)
+    assert not ok
+    assert message == "Hardcover: connect your Hardcover account on the Settings page first."
+    credentials.save_hardcover(
+        "me", store, hardcover.Tokens(fake.access, fake.refresh, "2026-12-01 00:00:00")
+    )
+    ok, message = runner.check_connection(
+        conn, "me", "hardcover", store=store, client_factory=factory
+    )
+    assert ok and message == "Hardcover: connected as example_user."
+    assert fake.access not in message
 
 
 def test_books_read_in_a_month(conn, make_client):

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from datetime import datetime, timedelta, timezone
+
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import __version__, profiles, recap, recommend
+from taste import __version__, local_time, profiles, recap, recommend, settings, source_status
 from taste.activity import Period
 from taste.desktop import motion, theme, ui_state
 from taste.desktop.context import AppContext
@@ -49,6 +51,7 @@ PAGE_ICONS = {
 # The sidebar rows under the Reports heading, and the report page each one shows.
 REPORT_ROWS = {"Anime": "anime", "Music": "music", "Books": "books", "Films and TV": "screen"}
 STATUS_MS = 8000  # how long a status bar message stays
+LAUNCH_SYNC_DELAY_MS = 1500
 NAV_WIDTH = 200
 NAV_COLLAPSED_WIDTH = 60  # icons only
 
@@ -132,17 +135,17 @@ class MainWindow(QMainWindow):
         body.addWidget(self.stack, 1)
         outer.addLayout(body, 1)
 
-        self.dashboard.sync_finished.connect(lambda _: self.reports.refresh())
-        self.dashboard.sync_finished.connect(lambda _: self.for_you.reload())
-        self.dashboard.sync_finished.connect(lambda _: self.recap.refresh())
-        self.dashboard.sync_finished.connect(lambda _: self.make_recaps())
+        self.dashboard.sync_finished.connect(self._after_sync)
         self.dashboard.banner.opened.connect(self._open_banner_recap)
-        self.dashboard.recs_updated.connect(self.for_you.reload)
+        self.dashboard.recs_updated.connect(self.for_you.refresh_later)
         self.dashboard.status_changed.connect(self.sidebar.set_status)
         self.dashboard.open_page.connect(self.show_page)
         self.settings.settings_saved.connect(self._after_settings_saved)
         self.settings.profile_deleted.connect(self._after_profile_deleted)
-        self.settings.hardcover_connected.connect(lambda: self.dashboard.start_sync("hardcover"))
+        sources = self.settings.sources
+        sources.hardcover_connected.connect(lambda: self.dashboard.start_sync("hardcover"))
+        sources.sync_requested.connect(self.dashboard.start_sync)
+        sources.changed.connect(self.dashboard.refresh_status)  # the sync menu and status
         # A sync and a recommendations refresh never run at the same time: both write
         # the run log, and a new run marks any other running one as interrupted.
         self.settings.is_busy = self.is_busy
@@ -168,6 +171,8 @@ class MainWindow(QMainWindow):
         self.nav_collapsed = False
         self.set_nav_collapsed(bool(ui_state.load().get("nav_collapsed")), remember=False)
         self.reload_profiles()
+        # "Sync when the app opens": a moment after the window is up, so it paints first.
+        QTimer.singleShot(LAUNCH_SYNC_DELAY_MS, self.sync_on_launch)
         # Start keyboard focus on the page list, not on whichever button comes first
         # (a focus ring on "New profile" at launch looks like a pending action).
         self.sidebar.focus_current()
@@ -233,6 +238,7 @@ class MainWindow(QMainWindow):
         if not has_profile:
             self.stack.setCurrentWidget(self.empty)
             return
+        self._apply_preferences(pid)
         for page in (self.dashboard, self.for_you, self.reports, self.recap, self.settings):
             page.set_profile(pid)
         self.make_recaps()
@@ -246,7 +252,9 @@ class MainWindow(QMainWindow):
             return
         name = PAGES[row]
         target = self.page_for(name)
-        if name in REPORT_ROWS:
+        if name not in REPORT_ROWS and hasattr(target, "refresh_if_stale"):
+            target.refresh_if_stale()  # a sync ran while it was off screen
+        if name in REPORT_ROWS:  # show_section catches up, drawing only that section
             if self.stack.currentWidget() is self.reports:
                 self.reports.show_section(REPORT_ROWS[name])  # fades on its own
                 return
@@ -264,6 +272,13 @@ class MainWindow(QMainWindow):
             "Rev": self.recap,
             "Settings": self.settings,
         }[name]
+
+    def _after_sync(self, _results: dict) -> None:
+        """Pages off screen redraw when they're next shown, not now (step 5)."""
+        for page in (self.reports, self.for_you, self.recap):
+            page.refresh_later()
+        self.make_recaps()
+        self.settings.refresh_status()
 
     # -- recaps -------------------------------------------------------------
 
@@ -309,12 +324,36 @@ class MainWindow(QMainWindow):
         if name in PAGES and self.current_profile() is not None:
             self.sidebar.setCurrentRow(PAGES.index(name))
 
+    def sync_on_launch(self) -> bool:
+        """Start a Sync everything if the profile asks for one on launch: every time, or
+        when the last sync was a day ago or more. Returns whether it started."""
+        pid = self.current_profile()
+        if pid is None or self.is_busy():
+            return False
+        conn = self.ctx.connect(pid)
+        try:
+            choice = settings.get(conn, "sync_on_launch")
+            sources = source_status.load(conn, pid, self.ctx.store)
+        finally:
+            conn.close()
+        if choice == "off" or not any(s.connected for s in sources):
+            return False
+        if choice == "daily":
+            latest = max((s.last_sync for s in sources if s.last_sync), default=None)
+            if latest:
+                when = datetime.strptime(latest, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - when < timedelta(days=1):
+                    return False
+        self.dashboard.start_sync("all")
+        return self.dashboard.is_syncing()
+
     def is_busy(self) -> bool:
         return self.dashboard.is_syncing() or self.for_you.is_refreshing()
 
     def _update_busy(self, *_args) -> None:
         self.dashboard.set_blocked(self.for_you.is_refreshing())
         self.for_you.set_blocked(self.dashboard.is_syncing())
+        self.settings.sources.set_busy(self.is_busy())
         self.profile_picker.setEnabled(self.current_profile() is not None and not self.is_busy())
 
     def _ask_new_profile(self) -> tuple[str, str] | None:
@@ -341,12 +380,25 @@ class MainWindow(QMainWindow):
     def say(self, text: str) -> None:
         self.statusBar().showMessage(text, STATUS_MS)
 
+    def _apply_preferences(self, profile_id: str) -> None:
+        """Settings that change how everything reads, not what it shows: the clock."""
+        conn = self.ctx.connect(profile_id)
+        try:
+            local_time.use_clock(settings.get(conn, "clock_format"))
+        finally:
+            conn.close()
+
     def _after_settings_saved(self, changed: list[str]) -> None:
         pid = self.current_profile()
+        if "clock_format" in changed or "week_start" in changed:
+            self._apply_preferences(pid)
+            # Times and weeks are on every page: they all redraw, each when it's shown.
+            for page in (self.for_you, self.recap):
+                page.refresh_later()
         index = self.profile_picker.currentIndex()
         self.profile_picker.setItemText(index, profiles.display_name(pid))
-        self.dashboard.refresh()
-        self.reports.refresh()
+        self.dashboard.refresh_later()
+        self.reports.refresh_later()
         if set(changed) & set(recommend.REC_SETTINGS):
             # Plan to Watch, minimum raters, and so on change the lists: recompute from
             # what's cached (no network, about a second, in the background).

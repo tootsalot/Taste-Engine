@@ -32,7 +32,7 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 
-from taste import activity
+from taste import activity, local_time
 from taste.desktop import theme
 from taste.recap import Item, RecapData
 
@@ -249,7 +249,7 @@ def day_name(day: str) -> str:
 
 
 def _hour(h: int) -> str:
-    return f"{h % 12 or 12} {'AM' if h < 12 else 'PM'}"
+    return local_time.hour_text(h)
 
 
 def headline(p: QPainter, y: float, value: str, accent: str, size: int = 110) -> float:
@@ -419,7 +419,7 @@ def clock(p: QPainter, data: RecapData, pictures: Pictures) -> float:
             QPointF(center.x() + dx * near, center.y() + dy * near),
             QPointF(center.x() + dx * far, center.y() + dy * far),
         )
-    for h, name in ((0, "12 AM"), (6, "6 AM"), (12, "12 PM"), (18, "6 PM")):
+    for h, name in ((h, local_time.hour_text(h)) for h in (0, 6, 12, 18)):
         angle = math.radians(h * 15 - 90)
         x = center.x() + math.cos(angle) * (outer + 52)
         ty = center.y() + math.sin(angle) * (outer + 52)
@@ -436,13 +436,14 @@ def _day_strip(p: QPainter, data: RecapData, top: float) -> float:
         return top
     most = max(n for _, n in days) or 1
     first = date.fromisoformat(days[0][0])
-    offset = (first.weekday() + 1) % 7  # Sunday first
+    offset = (first.weekday() + (0 if data.monday_first else 1)) % 7
+    letters = WEEKDAY_LETTERS[1:] + WEEKDAY_LETTERS[:1] if data.monday_first else WEEKDAY_LETTERS
     text(p, QRectF(M, top, W - 2 * M, 44), "PLAYS PER DAY", font(26), theme.MUTED)
     p.setPen(Qt.PenStyle.NoPen)
     if data.period.kind == "month":
         size, gap = 116.0, 10.0
         y0 = top + 56
-        for i, letter in enumerate(WEEKDAY_LETTERS):
+        for i, letter in enumerate(letters):
             box = QRectF(M + i * (size + gap), y0, size, 34)
             text(p, box, letter, font(24), theme.MUTED, CENTER)
         y0 += 42
@@ -541,7 +542,7 @@ def _screen(p: QPainter, s, what: str, noun: str, pictures: Pictures) -> float:
         line = f"Most rated {role}: {s.top_person[0]}, {s.top_person[1]} {noun}s."
         y = chip(p, y, line, theme.TEAL) + 20
     elif s.top_decade and s.top_decade[1] > 1:
-        line = f"Most of them from the {s.top_decade[0]}: {s.top_decade[1]}."
+        line = f"{s.top_decade[1]} of the {s.rated} from the {s.top_decade[0]}."
         y = chip(p, y, line, theme.TEAL) + 20
     return y
 

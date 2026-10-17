@@ -145,3 +145,64 @@ def test_a_sync_fetches_details_only_for_titles_on_my_account(conn, make_client)
     fake.calls.clear()
     tmdb.sync(conn, client, CFG, out=lambda m: None)
     assert ("GET", "/3/movie/22") not in fake.calls  # that's the refresh's job, not a sync's
+
+
+def test_film_picks_skip_unreleased_films_and_doubt_thin_averages(conn, make_client):
+    from datetime import date
+
+    from taste import recommend
+
+    fake = FakeTmdb()
+    client, _ = client_for(make_client, fake)
+    tmdb.sync(conn, client, CFG, out=lambda m: None)
+    tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None)
+    today = date(2026, 10, 16)
+    conn.execute("UPDATE stg_tmdb_movies SET release_date = '2026-12-18' WHERE tmdb_id = 22")
+    recs, _ = recommend.film_recommendations(conn, today)
+    assert [r.title for r in recs] == ["Example Candidate Film"]  # not out yet: left out
+
+    def predicted(votes: int) -> float:
+        conn.execute(
+            "UPDATE stg_tmdb_movies SET vote_average = 9.5, vote_count = ? WHERE tmdb_id = 21",
+            (votes,),
+        )
+        recs, _ = recommend.film_recommendations(conn, today)
+        return next(r.score for r in recs if r.item_key == "21")
+
+    # 9.5 from 300 early votes counts for much less than 9.5 from 30,000.
+    assert predicted(300) < predicted(30_000) - 0.5
+    pick = next(r for r in recommend.film_recommendations(conn, today)[0] if r.item_key == "21")
+    assert pick.facts["tmdb_mean"] == 9.5  # the card still shows TMDB's own number
+
+
+def test_a_thin_average_is_pulled_toward_the_typical_one():
+    from taste import recommend
+
+    typical = 6.9
+    assert recommend.shrunk(9.1, 0, typical) == typical
+    assert recommend.shrunk(9.1, recommend.FILM_PRIOR_VOTES, typical) == (9.1 + typical) / 2
+    assert abs(recommend.shrunk(9.1, 1_000_000, typical) - 9.1) < 0.01
+
+
+def test_film_caution_is_a_setting(conn, make_client):
+    from datetime import date
+
+    from taste import recommend, settings
+
+    fake = FakeTmdb()
+    client, _ = client_for(make_client, fake)
+    tmdb.sync(conn, client, CFG, out=lambda m: None)
+    tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None)
+    conn.execute(
+        "UPDATE stg_tmdb_movies SET vote_average = 9.5, vote_count = 300 WHERE tmdb_id = 21"
+    )
+    today = date(2026, 10, 16)
+
+    def pick() -> float:
+        recs, _ = recommend.film_recommendations(conn, today)
+        return next(r.score for r in recs if r.item_key == "21")
+
+    cautious = pick()
+    settings.set_value(conn, "film_prior_votes", 0)  # trust every average as it is
+    assert pick() > cautious + 0.5
+    assert "film_prior_votes" in recommend.REC_SETTINGS  # changing it recomputes the lists

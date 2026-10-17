@@ -215,6 +215,48 @@ class Segmented(QFrame):
         self._move_pill(animate=False)
 
 
+class LazyPage:
+    """For a page: refresh now if it's the page in front, else when it's next shown.
+
+    A sync used to redraw every page whether anyone was looking (2.1). The page calls
+    `refresh_later()` instead of its refresh; `lazy_refresh()` names what to run, and
+    `while_hidden()` what to do at once anyway (the Dashboard's status line).
+    """
+
+    stale = False
+
+    def lazy_refresh(self) -> None:
+        raise NotImplementedError
+
+    def while_hidden(self) -> None:
+        pass
+
+    def refresh_later(self) -> None:
+        if self.isVisibleTo(self.window()):  # the page in front, window shown or not
+            self.stale = False
+            self.lazy_refresh()
+        else:
+            self.stale = True
+            self.while_hidden()
+
+    def refresh_if_stale(self) -> None:
+        """Catch up after syncs that ran while the page was off screen."""
+        if self.stale:
+            self.stale = False
+            self.lazy_refresh()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().showEvent(event)
+        self.refresh_if_stale()
+
+
+def set_role(widget: QWidget, role: str) -> None:
+    """Change a widget's style role and re-apply the stylesheet."""
+    widget.setProperty("role", role)
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
 class ScrollArea(QScrollArea):
     """A scroll area that says when the width its content really gets changes (the
     viewport, which also narrows when a scroll bar appears).
@@ -401,28 +443,50 @@ class BarChart(QWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(self.color)
                 painter.drawRoundedRect(rect, 3, 3)
-        above = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom
-        if self.value_labels:
-            painter.setPen(QColor(theme.TEXT))
-            for rect, value in zip(rects, values, strict=True):
-                if value:
-                    painter.drawText(
-                        QRectF(rect.center().x() - 30, rect.top() - 16, 60, 14),
-                        above,
-                        f"{value:,.0f}",
-                    )
-        if self.partial_last:
-            rect = rects[last]
-            painter.setPen(muted)
-            painter.drawText(
-                QRectF(rect.right() - 60, rect.top() - 16, 60, 14),
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
-                "so far",
-            )
+        for box, align, text in self.top_texts():
+            partial = self.partial_last and text.endswith("so far")
+            painter.setPen(muted if partial else QColor(theme.TEXT))
+            painter.drawText(box, align, text)
         painter.setFont(self.font())
         painter.setPen(muted)
         for box, align, text in self.axis_labels():
             painter.drawText(box, align, text)
+
+    def top_texts(self) -> list[tuple[QRectF, Qt.AlignmentFlag, str]]:
+        """What goes above the bars: each count (value_labels) and "so far" over a bar
+        still filling up."""
+        rects = self.bar_rects()
+        values = self.shown()
+        metrics = QFontMetrics(small_font(self))
+        bottom = Qt.AlignmentFlag.AlignBottom
+        center = Qt.AlignmentFlag.AlignHCenter | bottom
+        right = Qt.AlignmentFlag.AlignRight | bottom
+
+        def box(rect: QRectF, text: str, flush_right: bool = False) -> QRectF:
+            width = metrics.horizontalAdvance(text) + 2
+            x = rect.right() - width if flush_right else rect.center().x() - width / 2
+            x = min(max(x, 0), self.width() - width)
+            # Above every bar it reaches over, so a taller neighbor never hides it.
+            top = min(r.top() for r in rects if r.right() >= x and r.left() <= x + width)
+            return QRectF(x, min(top, rect.top()) - 16, width, 14)
+
+        texts: list[tuple[QRectF, Qt.AlignmentFlag, str]] = []
+        last = len(rects) - 1
+        for i, (rect, value) in enumerate(zip(rects, values, strict=True)):
+            partial = self.partial_last and i == last
+            if self.value_labels and value:
+                text = f"{value:,.0f}"
+                if partial:
+                    # "12 so far" when it clears the bar before's number; else the
+                    # number alone (the dashed bar and its hover text still say so).
+                    joined = box(rect, f"{text} so far")
+                    before = texts[-1][0] if texts else None
+                    if before is None or joined.left() >= before.right() + self.LABEL_GAP / 2:
+                        text += " so far"
+                texts.append((box(rect, text), center, text))
+            elif partial:
+                texts.append((box(rect, "so far", flush_right=True), right, "so far"))
+        return texts
 
     def axis_labels(self) -> list[tuple[QRectF, Qt.AlignmentFlag, str]]:
         """Where the labels under the bars go. Every bar gets one when they fit, centered;
@@ -826,29 +890,48 @@ class RankList(QWidget):
             self._rows.append((name, f"{value:,}"))
 
 
-def band_tip(band: charts.Band) -> str:
-    shows = "1 show" if band.shows == 1 else f"{band.shows} shows"
-    text = f"MAL {band.mal_from:.1f} to {band.mal_to:.1f}: {shows}. You average {band.average:.2f}"
+def band_tip(
+    band: charts.Band, crowd: str = "MAL", noun: str = "show", scores: str = "scores"
+) -> str:
+    count = f"1 {noun}" if band.shows == 1 else f"{band.shows} {noun}s"
+    places = 1 if band.mal_to - band.mal_from >= 0.5 else 2
+    text = (
+        f"{crowd} {band.mal_from:.{places}f} to {band.mal_to:.{places}f}: {count}. "
+        f"You average {band.average:.2f}"
+    )
     if band.middle:
         low, high = band.middle
-        return f"{text}, and the middle half of your scores is {low:g} to {high:g}."
+        return f"{text}, and the middle half of your {scores} is {low:g} to {high:g}."
     return text + "."
 
 
 class BandChart(QWidget):
-    """My average score for each band of the MAL mean, against the "same as MAL" line.
+    """My average score for each band of the crowd's average, against the "same as" line:
+    MAL scores out of 10 on Anime, Hardcover stars out of 5 on Books.
 
     The bar behind each dot covers the middle half of my scores in that band. Dots for
-    bands with few shows are smaller. Hovering a band explains it in words.
+    bands with few titles are smaller. Hovering a band explains it in words.
     """
 
     LEFT, BOTTOM, TOP, RIGHT = 30, 40, 24, 10
-    Y_LO, Y_HI = 0.5, 10.5  # half a point of room so 1 and 10 aren't cut off
 
-    def __init__(self, color: str = theme.LILAC, empty_text: str = "No scores yet") -> None:
+    def __init__(
+        self,
+        color: str = theme.LILAC,
+        empty_text: str = "No scores yet",
+        *,
+        crowd: str = "MAL",
+        top: int = 10,
+        noun: str = "show",
+        scores: str = "scores",
+    ) -> None:
         super().__init__()
         self.color = QColor(color)
         self.empty_text = empty_text
+        self.crowd, self.noun, self.scores = crowd, noun, scores
+        self.top = top
+        room = top / 20  # so the lowest and highest score aren't cut off
+        self.Y_LO, self.Y_HI = (1 if top == 10 else 0.5) - room, top + room
         self.bands: list[charts.Band] = []
         self.setMinimumHeight(250)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -859,6 +942,18 @@ class BandChart(QWidget):
 
     def x_range(self) -> tuple[float, float]:
         return min(b.mal_from for b in self.bands), max(b.mal_to for b in self.bands)
+
+    def y_ticks(self) -> list[int]:
+        ticks = list(range(2, 11, 2)) if self.top == 10 else list(range(1, self.top + 1))
+        # A short chart keeps every other one, so the numbers never touch.
+        gap = (self.height() - self.BOTTOM - self.TOP) / max(len(ticks), 1)
+        return ticks[::2] if 0 < gap < 22 else ticks
+
+    def x_ticks(self) -> list[float]:
+        lo, hi = self.x_range()
+        step = 1.0 if hi - lo >= 2.5 else 0.5
+        first = math.ceil(lo / step) * step
+        return [first + i * step for i in range(int((hi - first) / step + 1e-9) + 1)]
 
     def point(self, mal: float, score: float) -> tuple[float, float]:
         """Widget coordinates for a MAL mean and a score."""
@@ -875,7 +970,8 @@ class BandChart(QWidget):
     def tip_at(self, x: float) -> str:
         if not self.bands:
             return ""
-        return band_tip(min(self.bands, key=lambda b: abs(self._center(b)[0] - x)))
+        band = min(self.bands, key=lambda b: abs(self._center(b)[0] - x))
+        return band_tip(band, self.crowd, self.noun, self.scores)
 
     def event(self, event) -> bool:
         if event.type() == QEvent.Type.ToolTip:
@@ -900,7 +996,7 @@ class BandChart(QWidget):
         top, bottom = self.point(lo, self.Y_HI)[1], self.point(lo, self.Y_LO)[1]
         grid = QColor(theme.LINE)
         painter.setFont(small_font(self, 12))
-        for score in (2, 4, 6, 8, 10):
+        for score in self.y_ticks():
             _, y = self.point(lo, score)
             painter.fillRect(QRectF(left, y, right - left, 1), grid)
             painter.setPen(muted)
@@ -909,17 +1005,21 @@ class BandChart(QWidget):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 str(score),
             )
-        for mal in range(math.ceil(lo), math.floor(hi) + 1):
-            x, _ = self.point(mal, self.Y_LO)
+        for mark in self.x_ticks():
+            x, _ = self.point(mark, self.Y_LO)
             painter.setPen(muted)
             painter.drawText(
-                QRectF(x - 12, bottom + 4, 24, 16), Qt.AlignmentFlag.AlignHCenter, str(mal)
+                QRectF(x - 16, bottom + 4, 32, 16), Qt.AlignmentFlag.AlignHCenter, f"{mark:g}"
             )
-        painter.drawText(QRectF(0, 0, 200, 16), Qt.AlignmentFlag.AlignLeft, "Your score")
+        painter.drawText(
+            QRectF(0, 0, 200, 16),
+            Qt.AlignmentFlag.AlignLeft,
+            "Your score" if self.scores == "scores" else f"Your {self.scores}",
+        )
         painter.drawText(
             QRectF(left, self.height() - 16, right - left, 16),
             Qt.AlignmentFlag.AlignHCenter,
-            "MAL mean",
+            "MAL mean" if self.crowd == "MAL" else f"{self.crowd} average",
         )
         # Where my score would equal MAL's, dashed so it reads as a guide, not data.
         edge = QColor(theme.EDGE)
@@ -929,9 +1029,9 @@ class BandChart(QWidget):
         painter.setPen(muted)
         ex, ey = self.point(end, end)
         painter.drawText(
-            QRectF(ex - 90, max(ey - 18, top - 20), 88, 16),
+            QRectF(ex - 140, max(ey - 18, top - 20), 138, 16),
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            "same as MAL",
+            f"same as {self.crowd}",
         )
         # The middle half of my scores per band, then my average as a line and dots.
         spread = QColor(self.color)

@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -30,7 +29,16 @@ from taste import local_time, recommend, settings
 from taste.desktop import motion, theme
 from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import Card, ScrollArea, elided_lines, heading, label, plain_tip, section
+from taste.desktop.widgets import (
+    Card,
+    LazyPage,
+    ScrollArea,
+    elided_lines,
+    heading,
+    label,
+    plain_tip,
+    section,
+)
 from taste.desktop.workers import RecsWorker
 from taste.recommend import Rec, whole_score
 
@@ -122,8 +130,8 @@ def score_text(kind: str, rec: Rec) -> tuple[str, str]:
             f"for you · Hardcover {mean:.2f}" if mean else "predicted for you",
         )
     if kind == "music_discover":
-        label_text = rec.facts.get("match_label")
-        return (label_text, "") if label_text else (f"{rec.score:.2f}", "match")
+        # Last.fm's similarity, 0 to 1, as a percentage; the words say which third it's in.
+        return f"{rec.score:.0%}", rec.facts.get("match_label") or "match"
     return f"{int(rec.score):,}", "plays"
 
 
@@ -224,12 +232,8 @@ class RecCard(Card):
         side.setSpacing(4)
         number, caption = score_text(list_kind, rec)
         self.score = label(number)
-        if rec.facts.get("match_label") and list_kind == "music_discover":
-            self.score.setProperty("role", "match")  # a word, drawn as a coral pill
-            self.score.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        else:
-            self.score.setFont(theme.number_font(40))
-            self.score.setStyleSheet(f"color: {accent};")
+        self.score.setFont(theme.number_font(40))
+        self.score.setStyleSheet(f"color: {accent};")
         side.addWidget(self.score, 0, Qt.AlignmentFlag.AlignLeft)
         self.caption = label(caption, role="muted", wrap=True)
         side.addWidget(self.caption)
@@ -328,8 +332,7 @@ class RecList(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setSpacing(10)
-        music = list_kind.startswith("music")
-        self.note = label("", role="scope" if music else "muted", wrap=True)
+        self.note = label("", role="muted", wrap=True)  # every tab's note alike
         layout.addWidget(self.note)
         body = QHBoxLayout()
         body.setSpacing(16)
@@ -375,6 +378,9 @@ class RecList(QWidget):
 
     def render(self, ctx: AppContext, on_open, on_dismiss) -> None:
         self._ctx, self._on_open, self._on_dismiss = ctx, on_open, on_dismiss
+        # Only cards that weren't on screen fade in: in 2.0 every refresh, hidden pick,
+        # and suggestions update faded the whole grid out and back, sometimes twice.
+        shown = {t.rec.item_key for t in self.tiles}
         for tile in self.tiles:
             self.grid.removeWidget(tile)
             tile.deleteLater()
@@ -395,7 +401,7 @@ class RecList(QWidget):
             self.select(min(self.selected, len(self.recs) - 1), animate=False)
         else:
             self._clear_detail()
-        motion.fade_in(self.tiles)
+        motion.fade_in([t for t in self.tiles if t.rec.item_key not in shown])
 
     def select(self, index: int, animate: bool = True) -> None:
         """Show one suggestion in full in the panel."""
@@ -442,7 +448,7 @@ class RecList(QWidget):
             self._place()
 
 
-class ForYouPage(QWidget):
+class ForYouPage(LazyPage, QWidget):
     refresh_started = Signal()
     refresh_finished = Signal(dict)
 
@@ -491,6 +497,9 @@ class ForYouPage(QWidget):
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
         self.say("")
+        self.reload()
+
+    def lazy_refresh(self) -> None:  # LazyPage: after a sync, when shown
         self.reload()
 
     def reload(self) -> None:

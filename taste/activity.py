@@ -24,6 +24,7 @@ MONTH_NAMES = [
 ]  # fmt: skip
 WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 HOURS_MIN_COVERAGE = 0.5  # fewer plays with a known length than this and hours aren't shown
+ALL_TIME = ("0000-01-01", "9999-12-31")  # (start, end) local days that hold every play
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,16 @@ def open_spans(conn: sqlite3.Connection, now: datetime | None = None) -> list[tu
     return spans
 
 
+def length_spans(conn: sqlite3.Connection, now: datetime | None = None) -> list[tuple[str, str]]:
+    """Where a sync looks up track lengths: the open periods first, then all time while
+    too few plays have a length for all-time hours. Most played tracks come first in
+    each, so all time crosses HOURS_MIN_COVERAGE in the fewest lookups."""
+    spans = open_spans(conn, now)
+    if music_hours(conn, *ALL_TIME).hours is None:
+        spans.append(ALL_TIME)
+    return spans
+
+
 # ---------------------------------------------------------------------------
 # Music
 # ---------------------------------------------------------------------------
@@ -155,16 +166,19 @@ def top_tracks(conn: sqlite3.Connection, start: str, end: str, n: int = 5):
 
 def top_albums(conn: sqlite3.Connection, start: str, end: str, n: int = 5):
     """[(album, artist, plays, cover url)], most played first."""
+    # Plays are counted per track first, then the far fewer tracks are joined to their
+    # albums: one join chain per play took about 0.1 s on 20,000 plays (2026-10-16).
     rows = conn.execute(
-        "SELECT al.title, c.name, COUNT(*) AS plays, img.url FROM core_behavior_events e "
-        "JOIN core_event_local_times l ON l.event_id = e.event_id "
-        "JOIN core_item_links ln ON ln.child_item_id = e.item_id AND ln.link_type = 'appears_on' "
+        "WITH per_track AS (SELECT e.item_id, COUNT(*) AS plays FROM core_behavior_events e "
+        "  JOIN core_event_local_times l ON l.event_id = e.event_id "
+        "  WHERE e.source = 'lastfm' AND e.event_type = 'play' "
+        "  AND l.local_date >= ? AND l.local_date < ? GROUP BY e.item_id) "
+        "SELECT al.title, c.name, SUM(t.plays) AS plays, img.url FROM per_track t "
+        "JOIN core_item_links ln ON ln.child_item_id = t.item_id AND ln.link_type = 'appears_on' "
         "JOIN core_items al ON al.item_id = ln.parent_item_id AND al.media_type = 'album' "
         "JOIN core_item_creators ic ON ic.item_id = al.item_id AND ic.role = 'artist' "
         "JOIN core_creators c ON c.creator_id = ic.creator_id "
         "LEFT JOIN core_item_images img ON img.item_id = al.item_id AND img.kind = 'cover' "
-        "WHERE e.source = 'lastfm' AND e.event_type = 'play' "
-        "AND l.local_date >= ? AND l.local_date < ? "
         "GROUP BY al.item_id, al.title, c.name, img.url ORDER BY plays DESC, al.title LIMIT ?",
         (start, end, n),
     ).fetchall()
@@ -208,6 +222,7 @@ def plays_by_day(conn: sqlite3.Connection, start: str, end: str) -> dict[str, in
 class Hours:
     hours: float | None  # None when too few plays have a known length
     coverage: float  # share of plays with a known track length
+    known: float = 0.0  # hours of the plays whose length is known (at least this many)
 
 
 def music_hours(conn: sqlite3.Connection, start: str, end: str) -> Hours:
@@ -232,7 +247,7 @@ def music_hours(conn: sqlite3.Connection, start: str, end: str) -> Hours:
     known = [r[0] for r in rows if r[0]]
     coverage = len(known) / len(rows)
     if coverage < HOURS_MIN_COVERAGE:
-        return Hours(None, coverage)
+        return Hours(None, coverage, sum(known) / 3_600_000)
     total_ms = sum(known) + (len(rows) - len(known)) * median(known)
     return Hours(total_ms / 3_600_000, coverage)
 

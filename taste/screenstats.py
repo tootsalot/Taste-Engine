@@ -14,6 +14,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from statistics import mean
 
+from taste.bands import Band, score_bands
 from taste.bookstats import Share
 from taste.sources import tmdb
 
@@ -64,7 +65,8 @@ class ScreenStats:
     tv_spread: list[int]
     genres: list[Share]
     decades: list[tuple[str, int]]
-    per_year: list[tuple[str, int]]  # rated per year, every year from first to last
+    film_bands: list[Band] = field(default_factory=list)  # my rating per band of TMDB's
+    tv_bands: list[Band] = field(default_factory=list)
     people: list[Person] = field(default_factory=list)
 
 
@@ -132,10 +134,6 @@ def load(conn: sqlite3.Connection, span: str = "all") -> ScreenStats:
     decades = Counter(f"{r.year // 10 * 10}s" for r in rated if r.year)
     genres = Counter(g for r in rated for g in r.genres)
     per_year = Counter(r.day[:4] for r in every if r.day)
-    span_years = sorted(per_year)
-    year_list = (
-        [str(y) for y in range(int(span_years[0]), int(span_years[-1]) + 1)] if span_years else []
-    )
     by_person: dict[str, list[Rated]] = {}
     for r in films:
         for name in r.people:
@@ -171,6 +169,7 @@ def load(conn: sqlite3.Connection, span: str = "all") -> ScreenStats:
             for name, n in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:TOP_GENRES]
         ],
         decades=sorted(decades.items()),
-        per_year=[(y, per_year.get(y, 0)) for y in year_list],
+        film_bands=score_bands([(r.average, r.rating) for r in films if r.average]),
+        tv_bands=score_bands([(r.average, r.rating) for r in shows if r.average]),
         people=people[:PEOPLE_SHOWN],
     )

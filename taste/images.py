@@ -8,7 +8,7 @@ Rules:
 - Only https URLs on the known image hosts (ALLOWED_HOSTS) are fetched. Redirects
   aren't followed, so a redirect can't lead somewhere else.
 - Each file is capped at MAX_FILE_BYTES and must say it's an image.
-- The whole cache is capped (100 MB by default). When it's over, the least
+- The whole cache is capped (300 MB by default). When it's over, the least
   recently used files go first. Reading a cached file counts as using it.
 
 No Qt here: the desktop app calls this from worker threads (taste/desktop/art.py).
@@ -16,6 +16,7 @@ No Qt here: the desktop app calls this from worker threads (taste/desktop/art.py
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import threading
@@ -44,7 +45,9 @@ ALLOWED_HOSTS = frozenset(
 )
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 REDIRECTS = {301, 302, 303, 307, 308}
-MAX_CACHE_BYTES = 100 * 1024 * 1024
+# 300 MB since 2.1: a full library is about 1,400 posters and covers plus albums, artists,
+# and suggestions, and Hardcover covers can be full-size: 100 MB risked walls re-downloading.
+MAX_CACHE_BYTES = 300 * 1024 * 1024
 MAX_FILE_BYTES = 5 * 1024 * 1024
 TIMEOUT_SECONDS = (5, 10)  # connect, read: short, so quitting the app never waits long
 PARTIAL = ".part"
@@ -181,6 +184,14 @@ class ImageCache:
 
     def size(self) -> int:
         return sum(f.stat().st_size for f in self._files())
+
+    def clear(self) -> None:
+        """Delete every cached picture. They download again when next shown."""
+        with self._lock:
+            for f in self._files():
+                with contextlib.suppress(OSError):  # in use elsewhere: it goes next time
+                    f.unlink()
+            self._total = None
 
     def _files(self) -> list[Path]:
         if not self.root.is_dir():

@@ -73,11 +73,12 @@ def sync_sources(
                 result = lastfm.sync(conn, client, cfg, out=out, **sync_kwargs)
                 results[name] = result.status == "success"
                 if results[name]:
-                    # Lengths for "about how many hours" in the recaps still open.
+                    # Lengths for "about how many hours": the recaps still open first,
+                    # then all time until enough plays have one.
                     clock = sync_kwargs.get("now")
                     now = datetime.fromtimestamp(clock(), timezone.utc) if clock else None
                     enrich.fetch_track_lengths(
-                        conn, client, cfg, activity.open_spans(conn, now), out, now=now
+                        conn, client, cfg, activity.length_spans(conn, now), out, now=now
                     )
         except ConfigError as exc:
             out(f"{SOURCE_LABELS[name]}: {exc}")
@@ -103,6 +104,12 @@ def check_connection(
     store = store or SecretStore()
     label = SOURCE_LABELS[source]
     try:
+        if source == "hardcover":
+            tokens = hardcover_tokens(profile_id, store, client_factory)
+            client = client_factory([tokens.access, tokens.refresh])
+            client.max_retries = 1
+            name = hardcover.me(client, tokens.access)[1]
+            return True, f"{label}: connected as {name}." if name else f"{label}: connected."
         if source == "tmdb":
             cfg = credentials.tmdb(conn, profile_id, store)
             client = client_factory([cfg.read_token])

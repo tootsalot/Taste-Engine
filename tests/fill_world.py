@@ -13,7 +13,8 @@ from __future__ import annotations
 import random
 from datetime import datetime, timedelta, timezone
 
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtCore import QPoint, QRect
+from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QWidget
 
 from taste import credentials
@@ -345,21 +346,55 @@ def bare_share(widget: QWidget, background: str = theme.BG) -> float:
 
     Squares cut off at the right or bottom edge count by their area.
     """
+    return empty_share(widget, (background,))
+
+
+CHART_MARK = "#FF00FF"  # never a color the app draws
+
+
+def empty_share(
+    widget: QWidget,
+    colors: tuple[str, ...] = (theme.BG, theme.SURFACE),
+    ignore: tuple[type, ...] = (),
+) -> float:
+    """The share of `widget`, in SQUARE px squares, that is one flat color from `colors`:
+    by default bare window background or the inside of a card with nothing in it.
+
+    Until 2.1 the test counted only bare background, so a card stretched over empty
+    space passed. Squares cut off at the right or bottom edge count by their area.
+    """
     image = widget.grab().toImage().convertToFormat(QImage.Format.Format_RGB32)
     width, height = image.width(), image.height()
     if not width or not height:
         return 0.0
-    solid = QImage(SQUARE, SQUARE, QImage.Format.Format_RGB32)
-    solid.fill(QColor(background))
-    bare = 0
+    if ignore:
+        # A chart's own open space (above short bars, between points) is part of reading
+        # it, not empty layout: its area is painted over so it never counts.
+        painter = QPainter(image)
+        try:
+            for kind in ignore:
+                for child in widget.findChildren(kind):
+                    if child.isVisible() and child.window() is widget.window():
+                        top_left = child.mapTo(widget, QPoint(0, 0))
+                        painter.fillRect(QRect(top_left, child.size()), QColor(CHART_MARK))
+        finally:
+            painter.end()
+    solids = []
+    for color in colors:
+        solid = QImage(SQUARE, SQUARE, QImage.Format.Format_RGB32)
+        solid.fill(QColor(color))
+        solids.append(solid)
+    empty = 0
     for top in range(0, height, SQUARE):
         for left in range(0, width, SQUARE):
             piece = image.copy(left, top, SQUARE, SQUARE)
             w, h = min(SQUARE, width - left), min(SQUARE, height - top)
-            if w == SQUARE and h == SQUARE:
-                same = piece == solid
-            else:
-                same = piece.copy(0, 0, w, h) == solid.copy(0, 0, w, h)
-            if same:
-                bare += w * h
-    return bare / (width * height)
+            for solid in solids:
+                if w == SQUARE and h == SQUARE:
+                    same = piece == solid
+                else:
+                    same = piece.copy(0, 0, w, h) == solid.copy(0, 0, w, h)
+                if same:
+                    empty += w * h
+                    break
+    return empty / (width * height)

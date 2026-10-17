@@ -11,11 +11,18 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from taste import activity, enrich, recap, settings
+from taste import activity, enrich, recap, runner, settings
 from taste.activity import Period
 from taste.config import LastfmSettings, MalSettings
+from taste.http_client import HttpClient
+from taste.secrets_store import SecretStore
 from taste.sources import lastfm, mal
-from tests.conftest import FAKE_LASTFM_KEY, FAKE_MAL_CLIENT_ID
+from tests.conftest import (
+    FAKE_LASTFM_KEY,
+    FAKE_MAL_CLIENT_ID,
+    FakeKeyring,
+    FakeTransport,
+)
 from tests.fake_recs import FakeLastfmApi, FakeMal, anime, scrobble
 from tests.test_lastfm_sync import FakeLastfm
 
@@ -182,6 +189,33 @@ def test_track_lengths_are_looked_up_once_and_hours_are_about(world):
         "SELECT request_params FROM raw_api_pages WHERE endpoint = 'track.getinfo'"))  # fmt: skip
 
 
+def test_a_sync_backfills_lengths_until_all_time_hours_can_show(conn):
+    recent = FakeLastfm()
+    # Most plays are a year old: the open months alone never cover half of all time.
+    recent.scrobbles = [
+        scrobble("Example Band", f"Old Song {i}", "Old LP", at("2025-05-03", 8 + i), "lp0")
+        for i in range(6)
+    ] + [scrobble("Example Band", "Song Late", "First LP", at("2026-10-02"), "lp1")]
+    music = FakeLastfmApi(recent)
+    store = SecretStore(backend=FakeKeyring())
+    store.set("me", "LASTFM_API_KEY", FAKE_LASTFM_KEY)
+    settings.set_value(conn, "lastfm_username", "example_user")
+
+    def client_factory(secrets):
+        return HttpClient(
+            FakeTransport(music), secrets=secrets, sleep=lambda s: None, jitter=lambda: 0.0
+        )
+
+    now = int(OCT_14.timestamp())
+    runner.sync_sources(
+        conn, "me", "lastfm", store=store, out=lambda m: None, client_factory=client_factory,
+        now=lambda: now,
+    )  # fmt: skip
+    assert activity.music_hours(conn, *activity.ALL_TIME).hours == pytest.approx(7 * 4 / 60)
+    # Covered: later syncs only look up what the open months need.
+    assert activity.length_spans(conn, OCT_14) == activity.open_spans(conn, OCT_14)
+
+
 def test_open_spans_cover_the_recaps_that_can_still_change(world):
     conn = world["conn"]
     assert activity.open_spans(conn, OCT_14) == [
@@ -228,6 +262,10 @@ def test_a_month_recap(world):
     ]
     assert data.closing == "An Example Autumn Drama month, with a lot of Example Band."
     assert data.profile_name == "Example Person"
+    assert [c for _, c in data.cover_numbers] == ["shows finished", "plays", "episodes"]
+    # October so far: one play and no show finished. No "0 shows finished" tile.
+    october = recap.build(conn, Period("month", "2026-10"), OCT_14)
+    assert [c for _, c in october.cover_numbers] == ["play"]
     assert data.fingerprint == recap.build(conn, Period("month", "2026-09"), OCT_14).fingerprint
 
 

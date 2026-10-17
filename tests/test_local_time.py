@@ -43,3 +43,20 @@ def test_deleted_events_drop_their_local_rows(conn):
     add_play(conn, AFTER_DST)
     conn.execute("DELETE FROM core_behavior_events")
     assert conn.execute("SELECT COUNT(*) FROM core_event_local_times").fetchone()[0] == 0
+
+
+def test_the_clock_reads_12_or_24_hour(monkeypatch):
+    from datetime import datetime, timezone
+
+    from taste import local_time
+
+    monkeypatch.setattr(local_time, "_clock", {"format": "12h"})
+    assert local_time.hour_text(22) == "10 PM" and local_time.hour_text(0, short=True) == "12a"
+    assert local_time.time_text(22, 52) == "10:52 PM"
+    local_time.use_clock("24h")
+    assert local_time.hour_text(22) == "22:00" and local_time.hour_text(7, short=True) == "07"
+    assert local_time.time_text(9, 5) == "09:05"
+    now = datetime(2026, 10, 16, 6, 30, tzinfo=timezone.utc)
+    assert local_time.describe("2026-10-16 05:52:00", "America/Phoenix", now) == "today at 22:52"
+    local_time.use_clock("nonsense")  # anything else reads as 12-hour
+    assert local_time.time_text(22, 52) == "10:52 PM"

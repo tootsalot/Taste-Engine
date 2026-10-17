@@ -16,20 +16,13 @@ from collections import Counter
 from dataclasses import dataclass, field
 from statistics import mean
 
+from taste.bands import Band, score_bands
+
 READ = 3  # Hardcover's status id for "Read"
 TOP_SHOWN = 8  # genres and moods listed
 AUTHORS_SHOWN = 6
 AUTHOR_COVERS = 6
-LENGTHS = (
-    ("1-100", 1, 100),
-    ("101-200", 101, 200),
-    ("201-300", 201, 300),
-    ("301-400", 301, 400),
-    ("401-500", 401, 500),
-    ("501-600", 501, 600),
-    ("601-1000", 601, 1000),
-    ("1000+", 1001, 10**9),
-)
+STAR_BAND = 0.25  # Hardcover averages sit close together: quarter-star bands
 FORMATS = {1: "Physical", 2: "Audio", 3: "Physical", 4: "Ebook"}
 KINDS = {1: "Fiction", 2: "Nonfiction"}
 
@@ -68,8 +61,9 @@ class BookStats:
     undated: int  # reads with no date (all time only)
     pages: int  # pages of the reads with a known length
     pages_known: int  # how many reads that is
-    audio_hours: float
+    audio_hours: float | None  # of the audiobooks with a known length; None if none has one
     audiobooks: int
+    audio_unknown: int  # audiobooks Hardcover has no length for
     authors: int
     new_authors: int | None  # authors first read in this year (None for all time)
     my_average: float | None
@@ -84,9 +78,9 @@ class BookStats:
     moods_missing: int
     kinds: list[Share]  # Fiction, Nonfiction, Not set
     formats: list[Share]  # Physical, Ebook, Audio, Not set
+    starred: list[Share]  # Starred, Not starred
     stars: list[int]  # 0.5 to 5 in halves: ten counts
-    lengths: list[tuple[str, int]]
-    average_pages: int | None
+    bands: list[Band]  # my stars per quarter star of Hardcover's average
     top_authors: list[AuthorStat] = field(default_factory=list)
 
 
@@ -176,6 +170,7 @@ def load(conn: sqlite3.Connection, span: str = "all") -> BookStats:
 
     pages = [books[b].pages for b, _ in reads if books[b].pages]
     audio = [books[b] for b, _ in reads if books[b].format_id == 2]
+    timed = [b for b in audio if b.seconds]  # a length Hardcover doesn't know isn't 0 hours
     authors = Counter(a for b, _ in reads for a in books[b].authors)
     new_authors = None
     if span != "all":
@@ -199,11 +194,6 @@ def load(conn: sqlite3.Connection, span: str = "all") -> BookStats:
     stars = [0] * 10
     for b in rated:
         stars[min(max(round(b.my_rating * 2) - 1, 0), 9)] += 1
-    lengths = [
-        (name, sum(1 for b in unique if b.pages and low <= b.pages <= high))
-        for name, low, high in LENGTHS
-    ]
-    known = [b.pages for b in unique if b.pages]
 
     top = []
     for name, count in sorted(authors.items(), key=lambda kv: (-kv[1], kv[0]))[:AUTHORS_SHOWN]:
@@ -234,8 +224,9 @@ def load(conn: sqlite3.Connection, span: str = "all") -> BookStats:
         undated=sum(1 for _, d in reads if d is None),
         pages=sum(pages),
         pages_known=len(pages),
-        audio_hours=round(sum(b.seconds or 0 for b in audio) / 3600, 1),
+        audio_hours=round(sum(b.seconds for b in timed) / 3600, 1) if timed else None,
         audiobooks=len({b.user_book_id for b in audio}),
+        audio_unknown=len({b.user_book_id for b in audio if not b.seconds}),
         authors=len(authors),
         new_authors=new_authors,
         my_average=round(mean(b.my_rating for b in rated), 2) if rated else None,
@@ -259,8 +250,10 @@ def load(conn: sqlite3.Connection, span: str = "all") -> BookStats:
         moods_missing=sum(1 for b in unique if not b.moods),
         kinds=_shares(kinds, len(unique)),
         formats=_shares(formats, len(unique)),
+        starred=_shares(
+            Counter("Starred" if b.my_rating else "Not starred" for b in unique), len(unique)
+        ),
         stars=stars,
-        lengths=lengths,
-        average_pages=round(mean(known)) if known else None,
+        bands=score_bands([(b.average, b.my_rating) for b in both], width=STAR_BAND),
         top_authors=top,
     )

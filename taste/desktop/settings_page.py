@@ -1,14 +1,14 @@
-"""Settings: API keys, profile settings, data folder, and deleting the profile."""
+"""Settings: sources (taste.desktop.sources_card), profile settings, appearance, the data
+folder, deleting the profile, and About."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QCompleter,
@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -27,19 +27,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import __version__, credentials, local_time, profiles, settings
+from taste import __version__, profiles, settings
 from taste.config import data_dir
 from taste.desktop import motion, theme, ui_state
 from taste.desktop.context import AppContext
 from taste.desktop.dialogs import ConfirmDeleteDialog
+from taste.desktop.sources_card import SourcesCard
 from taste.desktop.widgets import Card, ScrollArea, Segmented, heading, label, section
-from taste.desktop.workers import CallWorker, ConnectionTestWorker
-from taste.http_client import HttpClient
-from taste.secrets_store import KEY_LABELS, KEY_NAMES, SecretStoreError
 from taste.settings import SettingError
-from taste.sources import hardcover, tmdb
 
-KEY_SOURCES = {"MAL_CLIENT_ID": "mal", "LASTFM_API_KEY": "lastfm", "TMDB_READ_TOKEN": "tmdb"}
+CACHE_SIZES = ((100, "100 MB"), (300, "300 MB"), (1000, "1 GB"))
+FORM_SETTINGS = [f for f in settings.SETTINGS if f.group in settings.FORM_GROUPS]
 LABEL_WIDTH = 320
 TMDB_LOGO_HEIGHT = 14  # the app's own logo is 30 px in the top bar
 FIELD_WIDTH = 600  # inputs stop here, so nothing stretches across a wide screen
@@ -53,24 +51,16 @@ CREDITS = (
     "from TMDB; Taste Engine isn't affiliated with any of them. This product uses the TMDB "
     "API but is not endorsed or certified by TMDB."
 )
-STATUS_TEXT = {
-    "keyring": ("Saved in Windows Credential Manager", "ok"),
-    "file": ("Saved in an unencrypted local file", "error"),
-    "env": ("Using an environment variable", "ok"),
-    None: ("Not set", "error"),
-}
 
 
 class SettingsPage(QWidget):
     profile_deleted = Signal(str)
-    hardcover_connected = Signal()  # signed in: sync the books now
     settings_saved = Signal(list)  # keys that changed
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
         self.profile_id: str | None = None
-        self.testers: list[ConnectionTestWorker] = []
         self.is_busy = lambda: False  # the main window points this at "is a sync running?"
 
         outer = QVBoxLayout(self)
@@ -97,126 +87,19 @@ class SettingsPage(QWidget):
         self.mode_buttons = self.mode_switch.buttons
         top.addWidget(self.mode_switch)
         layout.addLayout(top)
-        columns = QHBoxLayout()
-        columns.setSpacing(16)
+        self.columns = QHBoxLayout()
+        self.columns.setSpacing(16)
         self.left = QVBoxLayout()
         self.left.setSpacing(16)
         self.right = QVBoxLayout()
         self.right.setSpacing(16)
-        columns.addLayout(self.left, 1)
-        columns.addLayout(self.right, 1)
-        layout.addLayout(columns, 1)
+        self.columns.addLayout(self.left, 1)
+        self.columns.addLayout(self.right, 1)
+        layout.addLayout(self.columns, 1)
 
-        # API keys
-        keys = Card()
-        keys.body.addWidget(heading("API keys", 18))
-        self.insecure_note = label(
-            "This computer has no system credential store, so saved keys go in an "
-            "unencrypted file in the data folder. On Windows this never happens.",
-            role="error",
-            wrap=True,
-        )
-        keys.body.addWidget(self.insecure_note)
-        keys.body.addWidget(
-            label(
-                "Saved keys are never shown again. Get a MAL client ID at "
-                "myanimelist.net/apiconfig, a Last.fm key at last.fm/api/account/create, and "
-                "a TMDB read access token (optional, for films and TV) at "
-                "themoviedb.org/settings/api.",
-                role="muted",
-                wrap=True,
-            )
-        )
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        self.key_inputs: dict[str, QLineEdit] = {}
-        self.key_status: dict[str, object] = {}
-        self.key_remove: dict[str, QPushButton] = {}
-        for row, name in enumerate(KEY_NAMES):
-            field = QLineEdit()
-            field.setEchoMode(QLineEdit.EchoMode.Password)
-            field.setPlaceholderText("paste a new key")
-            status = label("", role="muted")
-            save = QPushButton("Save")
-            save.clicked.connect(lambda _=False, n=name: self.save_key(n))
-            remove = QPushButton("Remove")
-            remove.clicked.connect(lambda _=False, n=name: self.remove_key(n))
-            test = QPushButton("Test connection")
-            test.clicked.connect(lambda _=False, n=name: self.test_connection(KEY_SOURCES[n]))
-            grid.addWidget(label(KEY_LABELS[name]), row * 2, 0)
-            grid.addWidget(status, row * 2, 1, 1, 4)
-            grid.addWidget(field, row * 2 + 1, 0, 1, 2)
-            grid.addWidget(save, row * 2 + 1, 2)
-            grid.addWidget(remove, row * 2 + 1, 3)
-            grid.addWidget(test, row * 2 + 1, 4)
-            self.key_inputs[name] = field
-            self.key_status[name] = status
-            self.key_remove[name] = remove
-        keys.body.addLayout(grid)
-        self.key_message = label("", wrap=True)
-        keys.body.addWidget(self.key_message)
-        self.keys_card = keys
-
-        # Books, films, and TV: a Hardcover account (and TMDB below it)
-        media = Card()
-        media.body.addWidget(heading("Books, films, and TV", 18))
-        media.body.addWidget(section("Hardcover"))
-        media.body.addWidget(
-            label(
-                "Books come from your Hardcover library: your stars, what you've read and "
-                "when, and the genres and moods readers gave each book. Connecting opens "
-                "Hardcover in your browser to approve Taste Engine, which can only read. "
-                "Books still on Goodreads? Hardcover can import a Goodreads export for you.",
-                role="muted",
-                wrap=True,
-            )
-        )
-        hardcover_row = QHBoxLayout()
-        self.hardcover_connect = QPushButton("Connect my Hardcover account…")
-        self.hardcover_connect.clicked.connect(lambda: self.connect_hardcover())
-        self.hardcover_stop = QPushButton("Stop")
-        self.hardcover_stop.clicked.connect(lambda: self.stop_hardcover())
-        self.hardcover_disconnect = QPushButton("Disconnect")
-        self.hardcover_disconnect.clicked.connect(lambda: self.disconnect_hardcover())
-        self.hardcover_copy = QPushButton("Copy the link")
-        self.hardcover_copy.setProperty("role", "link")
-        self.hardcover_copy.setToolTip("For when your browser didn't open by itself.")
-        self.hardcover_copy.clicked.connect(lambda: self.copy_hardcover_link())
-        for button in (
-            self.hardcover_connect, self.hardcover_stop, self.hardcover_disconnect,
-            self.hardcover_copy,
-        ):  # fmt: skip
-            hardcover_row.addWidget(button)
-        hardcover_row.addStretch()
-        media.body.addLayout(hardcover_row)
-        self.hardcover_status = label("", wrap=True)
-        media.body.addWidget(self.hardcover_status)
-        self.hardcover_worker: CallWorker | None = None
-        self.sign_in: hardcover.SignIn | None = None
-        media.body.addWidget(section("TMDB"))
-        media.body.addWidget(
-            label(
-                "Films and TV come from the ratings, watchlist, and favorites on your TMDB "
-                "account. Save the TMDB read access token above, then connect your account: "
-                "TMDB opens in your browser to ask you to approve Taste Engine, which can only "
-                "read. TMDB keeps when you rated something, not when you watched it.",
-                role="muted",
-                wrap=True,
-            )
-        )
-        tmdb_row = QHBoxLayout()
-        self.tmdb_connect = QPushButton("Connect my TMDB account…")
-        self.tmdb_connect.clicked.connect(lambda: self.connect_tmdb())
-        self.tmdb_disconnect = QPushButton("Disconnect")
-        self.tmdb_disconnect.clicked.connect(lambda: self.disconnect_tmdb())
-        tmdb_row.addWidget(self.tmdb_connect)
-        tmdb_row.addWidget(self.tmdb_disconnect)
-        tmdb_row.addStretch()
-        media.body.addLayout(tmdb_row)
-        self.tmdb_status = label("", wrap=True)
-        media.body.addWidget(self.tmdb_status)
-        self.media_card = media
-        self.tmdb_worker: CallWorker | None = None
+        # Every source in one card: keys, usernames, connecting, syncing
+        self.sources = SourcesCard(ctx)
+        self.sources_card = self.sources
 
         # Profile settings, generated from the registry, one heading per group
         form_card = Card()
@@ -228,8 +111,8 @@ class SettingsPage(QWidget):
         self.group_of: dict[str, str] = {}
         self._form_of: dict[str, QFormLayout] = {}
         self.group_widgets: dict[str, QWidget] = {}
-        for group in settings.GROUPS:
-            fields = [f for f in settings.SETTINGS if f.group == group]
+        for group in settings.FORM_GROUPS:
+            fields = [f for f in FORM_SETTINGS if f.group == group]
             if not fields:
                 continue
             box = QWidget()
@@ -316,6 +199,23 @@ class SettingsPage(QWidget):
         row.addStretch()
         row.addWidget(self.delete_button)
         data_card.body.addLayout(row)
+        # Posters and covers are kept on disk for every profile (Advanced).
+        self.picture_row = QWidget()
+        pictures = QHBoxLayout(self.picture_row)
+        pictures.setContentsMargins(0, 6, 0, 0)
+        pictures.addWidget(label("Pictures kept on disk"))
+        self.cache_switch = Segmented([(str(mb), name) for mb, name in CACHE_SIZES])
+        self.cache_switch.changed.connect(self.set_cache_size)
+        pictures.addWidget(self.cache_switch)
+        self.picture_use = label("", role="muted")
+        pictures.addWidget(self.picture_use)
+        pictures.addStretch()
+        clear = QPushButton("Clear pictures")
+        clear.setToolTip("Delete the saved posters and covers. They download again when shown.")
+        clear.clicked.connect(self.clear_pictures)
+        pictures.addWidget(clear)
+        data_card.body.addWidget(self.picture_row)
+        self.cache_switch.set_value(str(ui_state.load().get("image_cache_mb", 300)))
         self.data_card = data_card
 
         # About and credits
@@ -365,8 +265,7 @@ class SettingsPage(QWidget):
             return
         self.layout_key = key
         cards = (
-            self.keys_card,
-            self.media_card,
+            self.sources_card,
             self.appearance_card,
             self.form_card,
             self.data_card,
@@ -375,20 +274,18 @@ class SettingsPage(QWidget):
         for layout in (self.left, self.right):
             for card in cards:
                 layout.removeWidget(card)
+        # One column takes the whole width; the empty right one had been taking a share.
+        self.columns.setStretch(1, 0 if columns == 1 else 1)
         if columns == 1:
             for card in cards:
                 self.left.addWidget(card)
         else:
-            left = (
-                self.keys_card,
-                self.media_card,
-                self.appearance_card,
-                self.data_card,
-                self.about_card,
-            )
-            for card in left:
+            for card in (self.sources_card, self.about_card):
                 self.left.addWidget(card)
-            self.right.addWidget(self.form_card)
+            # Appearance and Data under the profile settings, so the two columns come out
+            # about the same height (as little empty card as possible, 2026-10-16).
+            for card in (self.form_card, self.appearance_card, self.data_card):
+                self.right.addWidget(card)
             # The columns end together at the bottom of the window.
             self.left.setStretchFactor(self.about_card, 1)
             self.right.setStretchFactor(self.form_card, 1)
@@ -404,7 +301,7 @@ class SettingsPage(QWidget):
             1
             + sum(
                 1
-                for f in settings.SETTINGS
+                for f in FORM_SETTINGS
                 if f.group == g and (self.mode == "advanced" or not f.advanced)
             )
             for g in groups
@@ -425,18 +322,29 @@ class SettingsPage(QWidget):
         """Simple shows the everyday settings; Advanced shows every one. Hidden settings
         keep their values and are saved unchanged."""
         mode = "advanced" if mode == "advanced" else "simple"
+        if remember and mode != self.mode and self.isVisible():
+            # Rows come and go and the columns reflow: fade it in like a page change.
+            def switch() -> None:
+                self.set_mode(mode, remember=False)
+                ui_state.save(settings_mode=mode)
+
+            motion.crossfade(self.scroll.viewport(), switch)
+            return
         self.mode = mode
         self.mode_switch.set_value(mode)
         advanced = mode == "advanced"
-        for field in settings.SETTINGS:
+        for field in FORM_SETTINGS:
             self._form_of[field.key].setRowVisible(
                 self.inputs[field.key], advanced or not field.advanced
             )
         for group, title in self.heading_widgets.items():
             title.setVisible(
-                advanced or any(not f.advanced for f in settings.SETTINGS if f.group == group)
+                advanced or any(not f.advanced for f in FORM_SETTINGS if f.group == group)
             )
-        hidden = sum(f.advanced for f in settings.SETTINGS)
+        self.picture_row.setVisible(advanced)
+        if advanced:
+            self.refresh_picture_use()
+        hidden = sum(f.advanced for f in FORM_SETTINGS)
         self.hidden_note.setText(f"{hidden} more settings in Advanced.")
         self.hidden_note.setVisible(not advanced)
         if self.layout_key is not None:
@@ -482,10 +390,8 @@ class SettingsPage(QWidget):
 
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
-        self.key_message.setText("")
         self.settings_message.setText("")
-        for field in self.key_inputs.values():
-            field.clear()
+        self.sources.set_profile(profile_id)
         self.refresh()
 
     def refresh(self) -> None:
@@ -496,13 +402,15 @@ class SettingsPage(QWidget):
             values = settings.get_all(conn)
         finally:
             conn.close()
-        for field in settings.SETTINGS:
+        for field in FORM_SETTINGS:
             self._set_input(self.inputs[field.key], field, values[field.key])
-        self.insecure_note.setVisible(not self.ctx.store.secure)
         self.data_path.setText(f"Every profile is stored in {data_dir().resolve()}")
-        self._refresh_hardcover()
-        self._refresh_tmdb()
-        self._refresh_keys()
+        self.refresh_status()
+
+    def refresh_status(self) -> None:
+        """The sources' state lines (connected, last synced), without touching the form,
+        so a sync ending never throws away settings being edited."""
+        self.sources.refresh_status()
 
     @staticmethod
     def _set_input(widget: QWidget, field: settings.Setting, value) -> None:
@@ -533,21 +441,6 @@ class SettingsPage(QWidget):
             return widget.currentData()
         return widget.text()
 
-    def _refresh_keys(self) -> None:
-        for name in KEY_NAMES:
-            try:
-                _, source = self.ctx.store.get_with_source(self.profile_id, name)
-                text, role = STATUS_TEXT[source]
-            except SecretStoreError as exc:
-                source, text, role = None, str(exc), "error"
-            status = self.key_status[name]
-            status.setText(text)
-            status.setProperty("role", role)
-            status.style().unpolish(status)
-            status.style().polish(status)
-            self.key_remove[name].setEnabled(source in ("keyring", "file"))
-        self._refresh_tmdb()
-
     def _message(self, widget, text: str, ok: bool) -> None:
         widget.setText(text)
         widget.setProperty("role", "ok" if ok else "error")
@@ -561,7 +454,7 @@ class SettingsPage(QWidget):
         changed = []
         conn = self.ctx.connect(self.profile_id)
         try:
-            for field in settings.SETTINGS:
+            for field in FORM_SETTINGS:
                 value = self._read_input(self.inputs[field.key])
                 try:
                     # Compare in stored form: ticked boxes are a list, the stored value text.
@@ -580,34 +473,23 @@ class SettingsPage(QWidget):
         self.settings_saved.emit(changed)
         return not errors
 
-    def save_key(self, name: str) -> None:
-        field = self.key_inputs[name]
-        try:
-            self.ctx.store.set(self.profile_id, name, field.text())
-            self._message(self.key_message, f"Saved the {KEY_LABELS[name]}.", ok=True)
-        except SecretStoreError as exc:
-            self._message(self.key_message, str(exc), ok=False)
-        field.clear()  # never leave a key sitting in the window
-        self._refresh_keys()
+    # -- Pictures -------------------------------------------------------------
 
-    def remove_key(self, name: str) -> None:
-        try:
-            self.ctx.store.delete(self.profile_id, name)
-            self._message(self.key_message, f"Removed the {KEY_LABELS[name]}.", ok=True)
-        except SecretStoreError as exc:
-            self._message(self.key_message, str(exc), ok=False)
-        self._refresh_keys()
+    def set_cache_size(self, megabytes: str) -> None:
+        """100 MB, 300 MB, or 1 GB of posters and covers, for every profile."""
+        value = int(megabytes) if megabytes.isdigit() else 300
+        self.cache_switch.set_value(str(value))
+        self.ctx.art.cache.max_bytes = value << 20
+        ui_state.save(image_cache_mb=value)
+        self.refresh_picture_use()
 
-    def test_connection(self, source: str) -> ConnectionTestWorker:
-        self._message(self.key_message, "Testing...", ok=True)
-        worker = ConnectionTestWorker(
-            self.profile_id, source, self.ctx.store, self.ctx.client_factory
-        )
-        worker.done.connect(lambda ok, msg: self._message(self.key_message, msg, ok))
-        worker.finished.connect(lambda: self.testers.remove(worker))
-        self.testers.append(worker)
-        worker.start()
-        return worker
+    def refresh_picture_use(self) -> None:
+        used = self.ctx.art.cache.size() / (1 << 20)
+        self.picture_use.setText("Using under 1 MB" if used < 1 else f"Using {used:,.0f} MB")
+
+    def clear_pictures(self) -> None:
+        self.ctx.art.cache.clear()
+        self.refresh_picture_use()
 
     # -- Motion ---------------------------------------------------------------
 
@@ -618,7 +500,7 @@ class SettingsPage(QWidget):
         if remember:
             ui_state.save(motion=choice)
         notes = {
-            "full": "Pages fade and rise, panels slide, and pictures fade in.",
+            "full": "Pages and new cards fade in, panels slide, and pictures fade in.",
             "reduced": "Quick fades only. Nothing slides or moves across the screen.",
             "off": "Everything changes at once.",
         }
@@ -626,230 +508,6 @@ class SettingsPage(QWidget):
         if not motion.windows_allows():
             note += " Windows' animation effects are off, so the app doesn't animate either."
         self.motion_note.setText(note)
-
-    # -- TMDB ---------------------------------------------------------------
-
-    def _refresh_tmdb(self) -> None:
-        connected = credentials.tmdb_connected(self.profile_id, self.ctx.store)
-        has_token = self.ctx.store.get(self.profile_id, "TMDB_READ_TOKEN") is not None
-        busy = self.tmdb_worker is not None and self.tmdb_worker.isRunning()
-        self.tmdb_connect.setEnabled(has_token and not connected and not busy)
-        self.tmdb_disconnect.setEnabled(connected and not busy)
-        if connected:
-            text = "Connected. Sync everything on the Dashboard now includes TMDB."
-        elif has_token:
-            text = "Not connected yet."
-        else:
-            text = "Save a TMDB read access token above first."
-        self.tmdb_status.setText(text)
-        self.tmdb_status.setProperty("role", "ok" if connected else "muted")
-        self.tmdb_status.style().unpolish(self.tmdb_status)
-        self.tmdb_status.style().polish(self.tmdb_status)
-
-    def _tmdb_client(self, secrets: list[str]) -> HttpClient:
-        factory = self.ctx.client_factory
-        return factory(secrets) if factory is not None else HttpClient(secrets=secrets)
-
-    def _run_tmdb(self, call, then) -> CallWorker:
-        worker = CallWorker(call)
-        worker.done.connect(then)
-        self.tmdb_worker = self.ctx.track(worker)
-        worker.start()
-        self._refresh_tmdb()
-        return worker
-
-    def connect_tmdb(self, approve=None) -> CallWorker | None:
-        """Ask TMDB for a request token, have it approved in the browser, then swap it for
-        the account's access token. `approve(url)` stands in for the browser and the
-        approval question (tests); it returns whether to go on."""
-        read_token = self.ctx.store.get(self.profile_id, "TMDB_READ_TOKEN")
-        if not read_token:
-            self._refresh_tmdb()
-            return None
-        client = self._tmdb_client([read_token])
-
-        def requested(token, error: str) -> None:
-            self.tmdb_worker.wait()
-            if token is None:
-                self._tmdb_problem(f"TMDB said no: {error}")
-                return
-            url = tmdb.APPROVE_URL.format(token)
-            if not (approve or self._approve_in_browser)(url):
-                self._refresh_tmdb()
-                return
-            self._run_tmdb(lambda: tmdb.access_token(client, read_token, token), connected)
-
-        def connected(result, error: str) -> None:
-            self.tmdb_worker.wait()
-            if result is None:
-                self._tmdb_problem(f"Not connected: {error}")
-                return
-            user_token, account_id = result
-            self.ctx.store.set(self.profile_id, "TMDB_USER_TOKEN", user_token)
-            self.ctx.store.set(self.profile_id, "TMDB_ACCOUNT_ID", account_id)
-            self._refresh_tmdb()
-
-        worker = self._run_tmdb(lambda: tmdb.request_token(client, read_token), requested)
-        self._message(self.tmdb_status, "Asking TMDB…", ok=True)
-        return worker
-
-    def _tmdb_problem(self, text: str) -> None:
-        self._refresh_tmdb()
-        self._message(self.tmdb_status, text, ok=False)
-
-    def _approve_in_browser(self, url: str) -> bool:
-        QDesktopServices.openUrl(QUrl(url))
-        answer = QMessageBox.question(
-            self,
-            "Approve Taste Engine on TMDB",
-            "TMDB opened in your browser. Approve Taste Engine there, then click Yes here. "
-            "Click No to stop.",
-        )
-        return answer == QMessageBox.StandardButton.Yes
-
-    def disconnect_tmdb(self) -> CallWorker | None:
-        """Forget the account's token here, and ask TMDB to forget it too."""
-        read_token = self.ctx.store.get(self.profile_id, "TMDB_READ_TOKEN")
-        user_token = self.ctx.store.get(self.profile_id, "TMDB_USER_TOKEN")
-        for name in ("TMDB_USER_TOKEN", "TMDB_ACCOUNT_ID"):
-            self.ctx.store.delete(self.profile_id, name)
-        self._refresh_tmdb()
-        if not (read_token and user_token):
-            return None
-        client = self._tmdb_client([read_token, user_token])
-
-        def revoked(_result, _error: str) -> None:
-            # Forgotten here either way; TMDB forgetting it too is a courtesy.
-            self.tmdb_worker.wait()
-            self._refresh_tmdb()
-
-        return self._run_tmdb(lambda: tmdb.revoke(client, read_token, user_token), revoked)
-
-    # -- Hardcover ------------------------------------------------------------
-
-    def _refresh_hardcover(self) -> None:
-        if not self.profile_id:
-            return
-        connected = credentials.hardcover_connected(self.profile_id, self.ctx.store)
-        waiting = self.sign_in is not None
-        busy = self.hardcover_worker is not None and self.hardcover_worker.isRunning()
-        self.hardcover_connect.setEnabled(not connected and not busy)
-        self.hardcover_disconnect.setEnabled(connected and not busy)
-        self.hardcover_stop.setVisible(waiting)
-        self.hardcover_copy.setVisible(waiting)
-        if waiting:
-            return  # the waiting message stays until the browser comes back
-        if connected:
-            conn = self.ctx.connect(self.profile_id)
-            try:
-                last = hardcover.last_sync(conn)
-                tz_name = settings.get(conn, "timezone")
-            finally:
-                conn.close()
-            when = (
-                f" Books last synced {local_time.describe(last, tz_name, self.ctx.now())}."
-                if last
-                else ""
-            )
-            text = f"Connected. Sync everything on the Dashboard now includes Hardcover.{when}"
-        else:
-            text = "Not connected yet."
-        self._message(self.hardcover_status, text, ok=True)
-        self.hardcover_status.setProperty("role", "ok" if connected else "muted")
-        self.hardcover_status.style().unpolish(self.hardcover_status)
-        self.hardcover_status.style().polish(self.hardcover_status)
-
-    def _run_hardcover(self, call, then) -> CallWorker:
-        worker = CallWorker(call)
-        worker.done.connect(then)
-        self.hardcover_worker = self.ctx.track(worker)
-        worker.start()
-        self._refresh_hardcover()
-        return worker
-
-    def connect_hardcover(self, browser=None) -> CallWorker | None:
-        """Sign in to Hardcover: open its approval page in the browser, wait for it to send
-        you back to the app, then swap the code for tokens. `browser(url)` stands in for
-        opening the browser (tests)."""
-        if not self.profile_id or self.sign_in is not None:
-            return None
-        try:
-            sign_in = hardcover.SignIn()
-        except OSError:
-            self._message(
-                self.hardcover_status, "Couldn't listen for Hardcover's reply here.", ok=False
-            )
-            return None
-        self.sign_in = sign_in
-        client = hardcover.client_for(self._tmdb_client([]))
-        profile_id = self.profile_id
-        now = self.ctx.now()
-
-        def sign_in_and_swap():
-            code = sign_in.wait()
-            tokens = hardcover.exchange(client, sign_in, code, now)
-            client.secrets += [tokens.access, tokens.refresh]
-            return tokens, hardcover.me(client, tokens.access)[1]
-
-        def done(result, error: str) -> None:
-            self.hardcover_worker.wait()
-            self.sign_in = None
-            if result is None:
-                self._refresh_hardcover()
-                if error != "Stopped.":
-                    self._message(self.hardcover_status, f"Not connected: {error}", ok=False)
-                return
-            tokens, username = result
-            credentials.save_hardcover(profile_id, self.ctx.store, tokens)
-            self._refresh_hardcover()
-            if username:
-                self._message(
-                    self.hardcover_status,
-                    f"Connected as {username}. Bringing in your books now.",
-                    ok=True,
-                )
-            self.hardcover_connected.emit()
-
-        worker = self._run_hardcover(sign_in_and_swap, done)
-        (browser or (lambda url: QDesktopServices.openUrl(QUrl(url))))(sign_in.url)
-        self._message(
-            self.hardcover_status,
-            "Approve Taste Engine on Hardcover in your browser. This page carries on by itself "
-            "once you're sent back.",
-            ok=True,
-        )
-        return worker
-
-    def stop_hardcover(self) -> None:
-        if self.sign_in is not None:
-            self.sign_in.cancel()
-
-    def copy_hardcover_link(self) -> None:
-        if self.sign_in is not None:
-            QApplication.clipboard().setText(self.sign_in.url)
-            self._message(
-                self.hardcover_status,
-                "Link copied. Paste it into your browser, approve, and come back here.",
-                ok=True,
-            )
-
-    def disconnect_hardcover(self) -> CallWorker | None:
-        """Forget the tokens here, and sign out on Hardcover too."""
-        if not self.profile_id:
-            return None
-        refresh = self.ctx.store.get(self.profile_id, "HARDCOVER_REFRESH_TOKEN")
-        credentials.forget_hardcover(self.profile_id, self.ctx.store)
-        self._refresh_hardcover()
-        if not refresh:
-            return None
-        client = self._tmdb_client([refresh])
-
-        def revoked(_result, _error: str) -> None:
-            # Forgotten here either way; Hardcover forgetting it too is a courtesy.
-            self.hardcover_worker.wait()
-            self._refresh_hardcover()
-
-        return self._run_hardcover(lambda: hardcover.revoke(client, refresh), revoked)
 
     def open_data_folder(self) -> None:
         folder = data_dir()
@@ -885,19 +543,55 @@ class SettingsPage(QWidget):
 
 
 class ChoiceBoxes(QWidget):
-    """A checkbox per choice, four to a row. The value is the ticked keys, in order."""
+    """A checkbox per choice, up to four to a row: as many as fit the width it gets, so
+    long names (the Dashboard's cards) wrap instead of widening the page. Its minimum
+    is one box wide. The value is the ticked keys, in order."""
+
+    MOST = 4
+    SPACING = 18
 
     def __init__(self, choices: dict[str, str]) -> None:
         super().__init__()
-        grid = QGridLayout(self)
-        grid.setContentsMargins(0, 4, 0, 4)
-        grid.setHorizontalSpacing(18)
-        self.boxes: dict[str, QCheckBox] = {}
-        for i, (key, text) in enumerate(choices.items()):
-            box = QCheckBox(text)
-            self.boxes[key] = box
-            grid.addWidget(box, i // 4, i % 4)
-        grid.setColumnStretch(4, 1)
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 4, 0, 4)
+        self.grid.setHorizontalSpacing(self.SPACING)
+        # The widget's own minimum (one box), not the grid's (a full row).
+        self.grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.boxes = {key: QCheckBox(text) for key, text in choices.items()}
+        self.per_row = 0
+        self._place(self.MOST)
+
+    def _widest(self) -> int:
+        return max((box.sizeHint().width() for box in self.boxes.values()), default=0)
+
+    def fits(self, width: int) -> int:
+        """The most boxes to a row that fit in `width`, each column as wide as its own
+        widest box (short names sit closer than long ones)."""
+        widths = [box.sizeHint().width() for box in self.boxes.values()]
+        for per_row in range(self.MOST, 1, -1):
+            columns = [max(widths[j::per_row], default=0) for j in range(per_row)]
+            if sum(columns) + self.SPACING * (per_row - 1) <= width:
+                return per_row
+        return 1
+
+    def _place(self, per_row: int) -> None:
+        if per_row == self.per_row:
+            return
+        self.grid.setColumnStretch(self.per_row, 0)
+        self.per_row = per_row
+        for box in self.boxes.values():
+            self.grid.removeWidget(box)
+        for i, box in enumerate(self.boxes.values()):
+            self.grid.addWidget(box, i // per_row, i % per_row)
+        self.grid.setColumnStretch(per_row, 1)
+        self.updateGeometry()
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self._widest(), self.grid.minimumSize().height())
+
+    def resizeEvent(self, event) -> None:
+        self._place(self.fits(event.size().width()))
+        super().resizeEvent(event)
 
     def set_value(self, stored: str) -> None:
         picked = {part.strip().lower() for part in stored.split(",")}

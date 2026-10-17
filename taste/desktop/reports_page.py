@@ -29,6 +29,7 @@ from taste.desktop.music_view import MusicView
 from taste.desktop.screen_view import ScreenView
 from taste.desktop.widgets import (
     Card,
+    LazyPage,
     heading,
     label,
 )
@@ -105,7 +106,7 @@ def section_page(layout_parent: QWidget) -> tuple[QScrollArea, QGridLayout]:
     return scroll, grid
 
 
-class ReportsPage(QWidget):
+class ReportsPage(LazyPage, QWidget):
     """Reports, one page per medium. The sidebar's Reports group picks the page."""
 
     def __init__(self, ctx: AppContext) -> None:
@@ -113,6 +114,7 @@ class ReportsPage(QWidget):
         self.ctx = ctx
         self.profile_id: str | None = None
         self.current = "anime"
+        self.sections_stale: set[str] = set()  # sections to redraw when next opened
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 20, 28, 20)
@@ -126,6 +128,7 @@ class ReportsPage(QWidget):
         self.export_button.setObjectName("ExportButton")
         self.export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.export_menu = QMenu(self.export_button)
+        self.export_menu.aboutToShow.connect(motion.menu_effects)
         self.export_menu.addAction("All reports…", lambda: self.export_all())
         self.export_menu.addSeparator()
         for report in reports.REPORTS:
@@ -189,8 +192,13 @@ class ReportsPage(QWidget):
         """One medium's page. The sidebar calls this."""
         key = key if key in SECTIONS else "anime"
         if key == self.current and self.stack.currentWidget() is self.pages[key]:
+            self.refresh_if_stale()
             return
         self.current = key
+        if self.stale:
+            self.refresh_if_stale()  # fresh data, drawn straight into this section
+        else:
+            self._refresh_section(key)
         self.title.setText(SECTIONS[key])
 
         def switch() -> None:
@@ -218,28 +226,37 @@ class ReportsPage(QWidget):
             conn.close()
 
         self.data = data
-        for view in (self.anime, self.music):
+        # Only the section on screen now; each other one when it's next opened.
+        self.sections_stale = set(SECTIONS)
+        self._refresh_section(self.current)
+
+    def _refresh_section(self, key: str) -> None:
+        if key not in self.sections_stale or self.data is None:
+            return
+        self.sections_stale.discard(key)
+        data = self.data
+        if key in ("anime", "music"):
+            view = self.anime if key == "anime" else self.music
             if view.profile_id != self.profile_id:
                 view.set_profile(self.profile_id)
-        self.anime.refresh(data)
-        self.music.refresh(data)
-        self._show_plays()
-        self._show_media(data)
+            view.refresh(data)
+            if key == "music":
+                self._show_plays()
+            return
+        section, view, has = (
+            (self.books_section, self.books, data.has_books)
+            if key == "books"
+            else (self.screen_section, self.screen, data.has_screen)
+        )
+        section.show_data(has)  # or what fills it before there's data
+        if has:
+            if view.profile_id != self.profile_id:
+                view.set_profile(self.profile_id)
+            else:
+                view.refresh()
 
-    def _show_media(self, data: charts.ReportData) -> None:
-        """The Books and Films and TV pages, or what fills them before there's data."""
-        self.books_section.show_data(data.has_books)
-        if data.has_books:
-            if self.books.profile_id != self.profile_id:
-                self.books.set_profile(self.profile_id)
-            else:
-                self.books.refresh()
-        self.screen_section.show_data(data.has_screen)
-        if data.has_screen:
-            if self.screen.profile_id != self.profile_id:
-                self.screen.set_profile(self.profile_id)
-            else:
-                self.screen.refresh()
+    def lazy_refresh(self) -> None:  # LazyPage: after a sync, when shown
+        self.refresh()
 
     def set_period(self, period: str, remember: bool = True) -> None:
         """Plays per week, month, or year. The choice is kept for every profile."""

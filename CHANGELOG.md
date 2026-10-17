@@ -2,6 +2,59 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [2.1.0]
+
+Cleanup, consistency, and speed: one place for every source, steadier motion, fewer empty corners, and more settings.
+
+Syncing and sources
+- One Sync everything button on the Dashboard, with an arrow that lists each connected source to sync just one
+- Syncing shows on the status line, with the progress bar beside the step, so the cards never move; Show log has the details, and a sync with problems turns the line red
+- When every source synced together, the status line says so once instead of once per source
+- Settings has one Sources card, a row per source in the same columns: whether it's connected, when it last synced and how much it holds, the username and key (or Connect), Test, Sync now, and Remove or Disconnect
+- Hardcover gets Test connection, and asks only for the books that changed since the last sync, with a full read once a week
+- Music hours keep improving: track lengths are looked up for the rest of the history too, a few hundred a sync, until most plays have one; until then a period shows the hours it knows of ("112+") instead of a dash
+
+New settings
+- Clock: 12-hour or 24-hour, everywhere in the app and on Rev's cards
+- Weeks start on Sunday or Monday, for plays per week, plays by day, and Rev's calendar
+- Sync when the app opens: off, every time, or once a day
+- Advanced: which cards the Dashboard shows (the rest widen to fill the room), whether report pages open on all time or the latest year, how many votes a TMDB average needs before film picks trust it, and how big the picture cache can grow (100 MB, 300 MB, or 1 GB, with a Clear button)
+
+Pages
+- Your taste folds critic traits that agree into one, like "Tough critic" with a number for MAL, TMDB, and Hardcover
+- You vs the crowd replaces How critical you are: my average against MAL's, TMDB's, and Hardcover's for the same titles, and how much of my listening goes beyond my ten most played artists
+- This month hides zero counts
+- Books: Your stars vs Hardcover replaces Length, and Kind, format, and stars adds how many books I gave stars
+- Films and TV: Your rating vs TMDB replaces Rated each year, following the Films | TV switch
+- Every Reports tile has a number and a second line, never a dash
+- Studios, artists, authors, and directors cards grow their covers with the card
+- Music suggestions show how closely they match as a number ("95%, Strong match"), and For You's notes all look the same
+- Rev: thumbnails of every card beside the deck to jump to one, no zero tiles on the cover, and About these numbers folds away
+- Settings balances its columns on wide windows, and Advanced never scrolls sideways
+
+Film picks
+- Films that aren't out yet are left out
+- A TMDB average built on few votes counts for less, pulled toward TMDB's typical average, so a new film's early hype doesn't top the list; the card still shows TMDB's own average and the hover says how it was weighed
+
+Motion and speed
+- Page changes fade the new page in without grabbing the old one, so switching is quick and smooth; a second switch finishes the first
+- For You fades in only the picks it hadn't shown, and Rev's deck continues a slide from where it is instead of jumping
+- Pages off screen catch up when they're opened instead of all redrawing after every sync, and Reports redraws only the page in front
+- Faster albums on repeat, and the Dashboard skips rebuilding shelves that didn't change
+
+Fixes
+- Settings' sources show the latest sync right after one ends
+- "1 reread", not "1 rereads"
+- An audiobook without a length on Hardcover no longer counts as 0 hours
+- The "so far" label on a chart's last bar no longer covers a number
+- The Dashboard no longer scrolls during a sync or when a recap is ready
+- Hardcover's "not connected" message no longer says "Hardcover:" twice
+- The picture cache holds 300 MB by default, up from 100 MB, so big walls don't download their covers again
+
+Upkeep
+- CI and releases run on Ubuntu 24.04 with the Node 24 versions of GitHub's actions
+- README screenshots of every page, drawn from a made-up library
+
 ## [2.0.0]
 
 Books and films join anime and music, every month and year gets a recap, and the whole app was reworked to fill the window and move smoothly.

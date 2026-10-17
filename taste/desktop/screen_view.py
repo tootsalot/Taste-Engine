@@ -11,11 +11,19 @@ from __future__ import annotations
 from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
 
-from taste import charts, screenstats
+from taste import charts, screenstats, settings
 from taste.desktop import motion, theme
 from taste.desktop.books_view import CoverWall, PersonCard, ShareList, SpanBar, WallItem
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import BarChart, Segmented, StatTile, chart_card, label, tile_row
+from taste.desktop.widgets import (
+    BandChart,
+    BarChart,
+    Segmented,
+    StatTile,
+    chart_card,
+    label,
+    tile_row,
+)
 from taste.screenstats import Rated, ScreenStats
 
 POSTER = QSize(84, 126)
@@ -68,14 +76,21 @@ class ScreenView(QWidget):
         grid.addWidget(self.spread_card, 2, 4, 1, 2)
 
         self.genres = ShareList("No genres yet", theme.TEAL)
-        self.genres_card = chart_card("Genres", self.genres, " ")
+        self.genres_card = chart_card("Genres you rate most", self.genres, " ")
         grid.addWidget(self.genres_card, 3, 0, 1, 2)
         self.decades = BarChart(theme.TEAL, empty_text="No release years yet", value_labels=True)
         self.decades_card = chart_card("Decades", self.decades, " ")
         grid.addWidget(self.decades_card, 3, 2, 1, 2)
-        self.per_year = BarChart(theme.TEAL, empty_text="Nothing rated yet", value_labels=True)
-        self.year_card = chart_card("Rated each year", self.per_year, " ")
-        grid.addWidget(self.year_card, 3, 4, 1, 2)
+        # The chart Anime has against MAL (approved 2026-10-16; it took "Rated each year"'s
+        # place, which was one bar when everything was rated the same year). It follows
+        # the Films | TV switch.
+        self.vs_crowd = BandChart(
+            theme.TEAL, "Nothing rated with a TMDB average yet", crowd="TMDB", noun="film",
+            scores="ratings",
+        )  # fmt: skip
+        self.vs_crowd.setMinimumHeight(140)
+        self.vs_crowd_card = chart_card("Your rating vs TMDB", self.vs_crowd, " ")
+        grid.addWidget(self.vs_crowd_card, 3, 4, 1, 2)
 
         people_box = QWidget()
         self.people_grid = QGridLayout(people_box)
@@ -99,7 +114,7 @@ class ScreenView(QWidget):
 
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
-        self.span = "all"
+        self.span = None  # "Report pages open on", once its years are known
         self.refresh()
 
     def refresh(self) -> None:
@@ -108,6 +123,9 @@ class ScreenView(QWidget):
         conn = self.ctx.connect(self.profile_id)
         try:
             years = screenstats.years(conn)
+            if self.span is None:
+                latest = settings.get(conn, "report_span") == "year" and years
+                self.span = years[0] if latest else "all"
             if self.span != "all" and self.span not in years:
                 self.span = "all"
             stats = screenstats.load(conn, self.span)
@@ -139,6 +157,12 @@ class ScreenView(QWidget):
     def _show_spread(self, s: ScreenStats) -> None:
         spread = s.film_spread if self.kind == "movie" else s.tv_spread
         noun = "films" if self.kind == "movie" else "shows"
+        self.vs_crowd.noun = noun[:-1]
+        self.vs_crowd.set_bands(s.film_bands if self.kind == "movie" else s.tv_bands)
+        self.vs_crowd_card.note.setText(
+            f"Your average for {noun} TMDB rates about the same. Bars cover the middle half "
+            "of your ratings."
+        )
         tips = [f"{(i + 1) / 2:g}: {n:,} {noun}" for i, n in enumerate(spread)]
         self.spread.set_data(spread if any(spread) else [], RATING_LABELS, tips=tips)
         average, diff = (
@@ -158,9 +182,10 @@ class ScreenView(QWidget):
         def tile(value: str, caption: str, detail: str = "") -> charts.Tile:
             return charts.Tile(value, caption, "screen", detail=detail)
 
+        when = "all time" if s.span == "all" else f"in {s.span}"  # like Music's plays
         values = [
-            tile(f"{s.films:,}", "films rated"),
-            tile(f"{s.shows:,}", "TV shows rated"),
+            tile(f"{s.films:,}", "films rated", when),
+            tile(f"{s.shows:,}", "TV shows rated", when),
             tile(
                 f"~{s.film_hours:,.0f}" if s.film_hours else "0",
                 "hours of film",
@@ -202,10 +227,6 @@ class ScreenView(QWidget):
         self.decades_card.note.setText(
             f"Mostly the {s.top_decade}" if s.top_decade else "By release year"
         )
-        self.per_year.set_data(
-            [n for _, n in s.per_year], [y for y, _ in s.per_year], unit="titles"
-        )
-        self.year_card.note.setText("Films and TV together.")
 
         for i, card in enumerate(self.people):
             person = s.people[i] if i < len(s.people) else None

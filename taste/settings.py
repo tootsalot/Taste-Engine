@@ -43,6 +43,24 @@ STANDARD_SCOPE_NOTES = {
 }
 
 
+CLOCK_FORMATS = {"12h": "12-hour (10:52 PM)", "24h": "24-hour (22:52)"}
+WEEK_STARTS = {"sunday": "Sunday", "monday": "Monday"}
+SYNC_ON_LAUNCH = {"off": "Off", "launch": "Every time the app opens", "daily": "Once a day"}
+REPORT_SPANS = {"all": "All time", "year": "The latest year"}
+DASHBOARD_CARDS = {
+    "taste": "Your taste",
+    "crowd": "You vs the crowd",
+    "scores": "Your scores",
+    "month": "This month",
+    "recent": "Recently finished",
+    "repeat": "On repeat",
+    "weeks": "Plays per week",
+    "genres": "Genres vs MAL",
+    "books": "Recently read",
+    "films": "Films rated",
+    "tv": "TV rated",
+}
+
 ANIME_TYPES = {
     "tv": "TV",
     "movie": "Movie",
@@ -53,8 +71,18 @@ ANIME_TYPES = {
     "music": "Music",
 }
 
-# Headings on the Settings page, in order. Every setting names one.
-GROUPS = ["Profile", "Last.fm", "Reports", "Recommendations", "Recaps", "Syncing and storage"]
+# Headings on the Settings page, in order. Every setting names one. "Sources" settings
+# sit in the Sources card's rows; the rest are the Profile settings form.
+GROUPS = [
+    "Sources",
+    "Profile",
+    "Last.fm",
+    "Reports",
+    "Recommendations",
+    "Recaps",
+    "Syncing and storage",
+]
+FORM_GROUPS = GROUPS[1:]
 
 
 @dataclass(frozen=True)
@@ -74,20 +102,28 @@ class Setting:
 
 SETTINGS: list[Setting] = [
     Setting(
+        "mal_username",
+        "MyAnimeList username",
+        "text",
+        "",
+        "Your MyAnimeList username. Your anime list has to be public.",
+        group="Sources",
+    ),
+    Setting(
+        "lastfm_username",
+        "Last.fm username",
+        "text",
+        "",
+        "Your Last.fm username.",
+        group="Sources",
+    ),
+    Setting(
         "display_name",
         "Display name",
         "text",
         "",
         "The name at the top of the Dashboard. Leave it blank to use the profile ID.",
     ),
-    Setting(
-        "mal_username",
-        "MyAnimeList username",
-        "text",
-        "",
-        "Your MyAnimeList username. Your anime list has to be public.",
-    ),
-    Setting("lastfm_username", "Last.fm username", "text", "", "Your Last.fm username."),
     Setting(
         "timezone",
         "Time zone",
@@ -103,6 +139,31 @@ SETTINGS: list[Setting] = [
         True,
         "Include shows MyAnimeList marks as adult, in your synced list and in suggestions. "
         "Their posters stay hidden on the Dashboard either way.",
+    ),
+    Setting(
+        "clock_format",
+        "Clock",
+        "choice",
+        "12h",
+        "How times read everywhere in the app, from when you last synced to Rev's cards.",
+        choices=CLOCK_FORMATS,
+    ),
+    Setting(
+        "week_start",
+        "Weeks start on",
+        "choice",
+        "sunday",
+        "The first day of the week for plays per week, plays by day, and Rev's calendar.",
+        choices=WEEK_STARTS,
+    ),
+    Setting(
+        "dashboard_cards",
+        "Dashboard cards",
+        "multichoice",
+        ",".join(DASHBOARD_CARDS),
+        "Which cards the Dashboard shows. The ones left share the room.",
+        choices=DASHBOARD_CARDS,
+        advanced=True,
     ),
     Setting(
         "lastfm_capture_scope",
@@ -182,6 +243,16 @@ SETTINGS: list[Setting] = [
         advanced=True,
     ),
     Setting(
+        "report_span",
+        "Report pages open on",
+        "choice",
+        "all",
+        "What each Reports page shows when you open a profile: all time, or its latest year.",
+        choices=REPORT_SPANS,
+        group="Reports",
+        advanced=True,
+    ),
+    Setting(
         "rec_count",
         "Recommendations per list",
         "int",
@@ -219,6 +290,19 @@ SETTINGS: list[Setting] = [
         True,
         "Also suggest shows already on your Plan to Watch, with a label.",
         group="Recommendations",
+    ),
+    Setting(
+        "film_prior_votes",
+        "Votes before a TMDB average is trusted",
+        "int",
+        1000,
+        "Film suggestions trust a TMDB average from this many votes halfway, the rest being "
+        "TMDB's typical average, so a new film's early hype counts for less. 0 trusts every "
+        "average as it is.",
+        minimum=0,
+        maximum=1_000_000,
+        group="Recommendations",
+        advanced=True,
     ),
     Setting(
         "rec_seed_artists",
@@ -273,6 +357,16 @@ SETTINGS: list[Setting] = [
         maximum=3650,
         group="Syncing and storage",
         advanced=True,
+    ),
+    Setting(
+        "sync_on_launch",
+        "Sync when the app opens",
+        "choice",
+        "off",
+        "Sync everything in the background when the app opens: every time, or only when "
+        "the last sync was a day ago or more.",
+        choices=SYNC_ON_LAUNCH,
+        group="Syncing and storage",
     ),
 ]
 BY_KEY = {s.key: s for s in SETTINGS}
@@ -338,7 +432,7 @@ def _validate_multichoice(setting: Setting, raw: Any) -> str:
     choices = setting.choices or {}
     unknown = sorted(picked - set(choices))
     if unknown:
-        raise SettingError(f"Unknown anime type: {', '.join(unknown)}.")
+        raise SettingError(f"{setting.label}: no choice called {', '.join(unknown)}.")
     if not picked:
         raise SettingError(f"{setting.label}: pick at least one.")
     return ",".join(key for key in choices if key in picked)

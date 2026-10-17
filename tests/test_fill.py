@@ -3,20 +3,32 @@
 A made-up profile the size of a real library (tests/fill_world.py) goes in through
 the real sync code, then each page is drawn offscreen at 2560 x 1380 (full screen
 on a 2560 x 1440 monitor, after the title bar and taskbar) and 1920 x 1040, and
-the share of bare background is measured in 40 px squares.
+the share of bare background is measured in 40 px squares. Since 2.1 empty space
+inside cards counts too (a card stretched over nothing used to pass), outside the
+charts, whose open plot area is part of reading them.
 """
 
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer
 
+from taste.desktop.books_view import CoverWall
+from taste.desktop.dashboard import SyncStrip
 from taste.desktop.main_window import PAGES
+from taste.desktop.widgets import BandChart, BarChart, LeanBar, RankList
 from tests.fake_images import FakeImageSession
-from tests.fill_world import World, bare_share
+from tests.fill_world import World, bare_share, empty_share
 from tests.test_desktop import set_up_profile
 
 SIZES = ((2560, 1380), (1920, 1040))
 LIMITS = {"For You": 0.10, "Anime": 0.12, "Music": 0.12, "Books": 0.12, "Films and TV": 0.12}
 LIMIT = 0.15
+# Bare background or empty card surface, outside charts (2.1). Set just above what the
+# made-up library measures after the cleanup (2026-10-16), so no page quietly gets
+# emptier. For You's 30 picks fill three rows at full screen and can't grow without a
+# fourth; Settings in Simple mode has less to show than a full screen holds.
+EMPTY_LIMITS = {"For You": 0.33, "Rev": 0.30, "Settings": 0.55, "Dashboard": 0.13}
+EMPTY_LIMIT = 0.25  # the four Reports pages
+CHARTS = (BarChart, BandChart, LeanBar, RankList, CoverWall)
 
 
 def pump(ms: int = 300) -> None:
@@ -59,14 +71,21 @@ def anime_and_music(qtbot, monkeypatch, tmp_path):
 
 def test_every_page_fills_the_window(library):
     win = library
-    found, scrolls = {}, {}
+    found, empty, scrolls = {}, {}, {}
     for width, height in SIZES:
         win.resize(width, height)
         pump()
         for row, page in enumerate(PAGES):
             win.sidebar.setCurrentRow(row)
             pump()
+            if page == "Rev":
+                for _ in range(60):  # the cards draw in the background
+                    if win.recap.deck.cards:
+                        break
+                    pump(100)
+                pump()
             found[(page, width)] = bare_share(win.stack.currentWidget())
+            empty[(page, width)] = empty_share(win.stack.currentWidget(), ignore=CHARTS)
             if page == "Dashboard" and width >= 2560:
                 # A full-screen Dashboard fits without scrolling, all four media and Your
                 # taste included. (1920 x 1040 can't hold every shelf at its smallest.)
@@ -75,7 +94,41 @@ def test_every_page_fills_the_window(library):
         key: f"{share:.0%}" for key, share in found.items() if share > LIMITS.get(key[0], LIMIT)
     }
     assert not too_bare, f"pages with too much bare background: {too_bare}"
+    too_empty = {
+        key: f"{share:.0%}"
+        for key, share in empty.items()
+        if share > EMPTY_LIMITS.get(key[0], EMPTY_LIMIT)
+    }
+    assert not too_empty, f"pages with too much empty space, cards included: {too_empty}"
     assert not any(scrolls.values()), f"the Dashboard scrolls by {scrolls} px"
+
+
+def test_a_sync_never_makes_the_dashboard_scroll(library):
+    win = library
+    dash = win.dashboard
+    win.sidebar.setCurrentRow(PAGES.index("Dashboard"))
+    win.resize(2560, 1380)
+    pump()
+    dash.strip.start()  # a sync running: the status line and its progress bar
+    dash.strip.message("Last.fm: page 3 of 40")
+    pump()
+    running = dash.scroll.verticalScrollBar().maximum()
+    dash.strip.finish(False)  # it had problems
+    pump()
+    problems = dash.scroll.verticalScrollBar().maximum()
+    dash.banner.show_text("Your October recap is ready.")  # made in the background
+    pump()
+    banner = dash.scroll.verticalScrollBar().maximum()
+    assert dash.strip.log.isHidden() and not dash.banner.isHidden()
+    assert (running, problems, banner) == (0, 0, 0), "the Dashboard scrolls during a sync"
+    dash.banner.hide_banner()
+    # Asked for, the log opens at full height in the page, even if that scrolls a little.
+    dash.strip.show_log(True)
+    pump()
+    assert dash.strip.log.isVisible() and dash.strip.log.height() == SyncStrip.LOG_HEIGHT
+    dash.strip.show_log(False)
+    pump()
+    assert dash.scroll.verticalScrollBar().maximum() == 0
 
 
 def test_a_big_window_gets_bigger_art_and_more_genres(anime_and_music):
@@ -107,9 +160,13 @@ def test_settings_flow_into_columns(library):
     win.resize(1280, 860)
     pump()
     assert page.layout_key == (1, 1)
+    # One column: the cards take the page's whole width (the empty right column had a share).
+    assert page.sources_card.width() >= page.scroll.viewport().width() - 2 * 28 - 2
     win.resize(2560, 1380)
     pump()
-    assert page.layout_key == (2, 1)  # keys and data left, settings right
+    assert page.layout_key == (2, 1)  # sources and data left, settings right
+    # Appearance sits under the profile settings, so Simple mode's right side isn't bare.
+    assert page.right.indexOf(page.appearance_card) > page.right.indexOf(page.form_card) >= 0
     page.set_mode("advanced")
     pump()
     assert page.layout_key == (2, 2)  # and Advanced splits the settings in two
@@ -119,6 +176,25 @@ def test_settings_flow_into_columns(library):
     page.set_mode("simple")
     pump()
     assert page.layout_key == (2, 1)
+
+
+@pytest.mark.parametrize("size", [(1920, 1040), (1280, 860)])
+def test_advanced_settings_never_scroll_sideways(library, size):
+    # Dashboard cards' eleven long names, four to a row, once pushed the form wider than
+    # a 1920 window and the Simple | Advanced switch off the edge.
+    win = library
+    page = win.settings
+    win.sidebar.setCurrentRow(PAGES.index("Settings"))
+    win.resize(*size)
+    page.set_mode("advanced")
+    pump()
+    assert page.scroll.horizontalScrollBar().maximum() == 0
+    boxes = page.inputs["dashboard_cards"]
+    assert boxes.width() <= 600
+    edge = page.scroll.viewport().width()
+    for box in boxes.boxes.values():  # every checkbox fully inside the page, none clipped
+        assert box.mapTo(page.scroll.viewport(), box.rect().topRight()).x() < edge
+        assert box.width() >= box.sizeHint().width()
 
 
 def test_each_medium_has_its_own_report_page(library):
@@ -143,6 +219,8 @@ def test_each_medium_has_its_own_report_page(library):
 def test_books_films_and_tv_show_up_everywhere(library):
     win = library
     dash = win.dashboard
+    # The sync ran while Settings was in front: each page caught up when opened.
+    win.sidebar.setCurrentRow(PAGES.index("Dashboard"))
     assert dash.extra_shown == [dash.books, dash.films, dash.tv]
     # Your taste, across the top: a headline and traits that each carry a number.
     assert not dash.taste.isHidden() and dash.taste.headline.text().startswith("The ")
@@ -152,15 +230,20 @@ def test_books_films_and_tv_show_up_everywhere(library):
     assert dash.books.items and "Hardcover" in dash.books.items[0].caption.text()
     assert int(dash.month.numbers["books"][0].text()) >= 3  # at least three read this month
     assert not dash.month.numbers["films"][0].isHidden()
-    assert "TMDB synced" in dash.strip.text.text()
-    assert "Hardcover synced" in dash.strip.text.text()
+    # One Sync everything: the four sources are named once, and each on hover.
+    assert dash.strip.text.text().startswith("Everything synced ")
+    assert "TMDB synced" in dash.strip.text.toolTip()
+    assert "Hardcover synced" in dash.strip.text.toolTip()
     reports = win.reports
-    assert reports.books_section.isVisible() and reports.screen_section.isVisible()
+    win.sidebar.setCurrentRow(PAGES.index("Books"))
+    assert reports.books_section.isVisible()
     books = reports.books.stats
     assert books.unique == 130 and books.reads == 136  # six read twice
     assert sum(reports.books.stars.values) == 130
     assert books.audiobooks > 0 and books.genres and books.moods
     assert len(books.top_authors) == 6
+    win.sidebar.setCurrentRow(PAGES.index("Films and TV"))
+    assert reports.screen_section.isVisible()
     screen = reports.screen.stats
     assert (screen.films, screen.shows) == (120, 30)
     assert sum(reports.screen.spread.values) == 120  # Films first
@@ -169,6 +252,7 @@ def test_books_films_and_tv_show_up_everywhere(library):
     # Directors grouped by name, each with two or more films, most first.
     names = [p.name for p in screen.people]
     assert len(names) == len(set(names)) and all(p.films >= 2 for p in screen.people)
+    win.sidebar.setCurrentRow(PAGES.index("For You"))
     assert len(win.for_you.lists["film"].recs) > 0  # film suggestions from the TMDB account
     conn = win.ctx.connect(win.current_profile())
     try:
@@ -182,3 +266,28 @@ def test_books_films_and_tv_show_up_everywhere(library):
     assert dict((c, n) for n, c in october.cover_numbers)["books read"] == (
         dash.month.numbers["books"][0].text()
     )
+
+
+def test_dashboard_cards_can_be_hidden_and_the_rest_share_the_room(library):
+    from taste import settings as registry
+
+    win = library
+    dash = win.dashboard
+    win.sidebar.setCurrentRow(PAGES.index("Dashboard"))
+    win.resize(2560, 1380)
+    pump()
+    conn = win.ctx.connect(win.current_profile())
+    keep = [k for k in registry.DASHBOARD_CARDS if k not in ("genres", "scores", "tv")]
+    registry.set_value(conn, "dashboard_cards", keep)
+    conn.close()
+    dash.refresh()
+    pump()
+    assert dash.genres.isHidden() and dash.scores.isHidden() and dash.tv.isHidden()
+    assert not dash.crowd.isHidden() and not dash.recent.isHidden()
+    page = dash.scroll.viewport().width()
+    # Without the genres down the right, Recently finished takes the whole width.
+    assert dash.recent.width() > page * 0.9
+    # Crowd and This month share the first row between them.
+    assert dash.crowd.width() + dash.month.width() > page * 0.9
+    assert dash.films.width() > page * 0.4  # books and films share their row
+    assert bare_share(win.stack.currentWidget()) < LIMIT

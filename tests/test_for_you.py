@@ -160,7 +160,7 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
         page.start_refresh()
         # While it runs: the button and the sync buttons wait, the progress bar shows.
         assert not page.refresh_button.isEnabled()
-        assert not window.dashboard.sync_buttons["all"].isEnabled()
+        assert not window.dashboard.sync_button.isEnabled()
         assert not page.progress.isHidden()
         assert not window.profile_picker.isEnabled()
     assert blocker.args[0] == {
@@ -171,7 +171,7 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
         "book": 0,
     }
     assert page.refresh_button.isEnabled()
-    assert window.dashboard.sync_buttons["all"].isEnabled()
+    assert window.dashboard.sync_button.isEnabled()
     assert page.progress.isHidden()
     assert "Recommendations ready" in page.status.text()
     assert not page.status.isHidden()
@@ -234,8 +234,9 @@ def test_music_tabs_build_when_shown_and_carry_the_scope_note(window, qtbot):
     assert discover.dirty and discover.tiles == []  # not built until someone looks
     page.tabs.setCurrentWidget(discover)
     assert [t.rec.title for t in discover.tiles][:2] == ["Example New X", "Example Dismissed Z"]
-    assert discover.tiles[0].score.text() == "Strong match"
-    assert discover.detail.score.text() == "Strong match"
+    assert discover.tiles[0].score.text() == "95%"  # a number, like every other tab
+    assert discover.detail.score.text() == "95%"
+    assert discover.detail.caption.text() == "Strong match"
     assert "Match strength 0.95" in discover.detail.toolTip()
     assert discover.detail.open_button.text() == "Open on Last.fm"
     assert "Desktop listening only" in discover.note.text()
@@ -312,7 +313,7 @@ def test_changing_a_rec_setting_recomputes_without_the_network(window, qtbot):
 def test_rec_settings_sit_under_their_own_heading(window):
     window.new_profile(("me", "Me"))
     page = window.settings
-    assert page.headings == settings.GROUPS
+    assert page.headings == settings.FORM_GROUPS
     assert all(key in page.inputs for key in recommend.REC_SETTINGS)
     rec_keys = [k for k in recommend.REC_SETTINGS if k.startswith("rec_")]
     assert {page.group_of[k] for k in rec_keys} == {"Recommendations"}
@@ -382,11 +383,12 @@ def test_helpers():
     assert score_text("anime", older) == ("8", "predicted for you (7.7)")
     assert score_text("anime", Rec("anime", "1", "T", score=7.44))[0] == "7"
     label = {"match_label": "Strong match"}
+    # A number on top like every other tab, with the match words under it.
     assert score_text("music_discover", Rec("artist", "x", "X", score=0.95, facts=label)) == (
+        "95%",
         "Strong match",
-        "",
     )
-    assert score_text("music_discover", Rec("artist", "x", "X", score=0.95)) == ("0.95", "match")
+    assert score_text("music_discover", Rec("artist", "x", "X", score=0.95)) == ("95%", "match")
     assert score_text("music_rediscover", Rec("artist", "x", "X", score=1234.0)) == (
         "1,234",
         "plays",
@@ -415,6 +417,7 @@ def test_sync_everything_also_refreshes_recommendations(window, qtbot):
     assert (
         "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover, 0 films, 0 books." in log
     )
+    window.sidebar.setCurrentRow(PAGES.index("For You"))  # it catches up when shown
     assert window.for_you.tabs.tabText(0) == "Anime (4)"  # For You picked them up
     assert len(tiles(window, "anime")) == 4
     assert progress  # the bar followed the recommendation steps too

@@ -62,6 +62,33 @@ def refresh(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+# The profile's clock setting ("12h" or "24h"). The desktop app sets it from the profile
+# (use_clock) so every time on screen and on Rev's cards reads the same way; the CLI
+# and anything else see the 12-hour default.
+_clock = {"format": "12h"}
+
+
+def use_clock(fmt: str) -> None:
+    _clock["format"] = "24h" if fmt == "24h" else "12h"
+
+
+def hour_text(hour: int, short: bool = False) -> str:
+    """An hour on its own: "10 PM" or "22:00"; `short` for chart axes: "10p" or "22"."""
+    if _clock["format"] == "24h":
+        return f"{hour:02d}" if short else f"{hour:02d}:00"
+    twelve = hour % 12 or 12
+    if short:
+        return f"{twelve}{'a' if hour < 12 else 'p'}"
+    return f"{twelve} {'AM' if hour < 12 else 'PM'}"
+
+
+def time_text(hour: int, minute: int) -> str:
+    """A time of day: "10:52 PM" or "22:52"."""
+    if _clock["format"] == "24h":
+        return f"{hour:02d}:{minute:02d}"
+    return f"{hour % 12 or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}"
+
+
 def describe(utc_text: str, tz_name: str, now: datetime | None = None) -> str:
     """A stored UTC time in plain words, in the profile's time zone.
 
@@ -72,7 +99,7 @@ def describe(utc_text: str, tz_name: str, now: datetime | None = None) -> str:
     moment = datetime.strptime(utc_text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     local = moment.astimezone(zone)
     today = (now or datetime.now(timezone.utc)).astimezone(zone).date()
-    clock = f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+    clock = time_text(local.hour, local.minute)
     day = f"{local.strftime('%b')} {local.day}"
     if local.date() == today:
         return f"today at {clock}"

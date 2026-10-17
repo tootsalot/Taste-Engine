@@ -6,20 +6,17 @@ which the page exports as CSV (taste.reports).
 
 from __future__ import annotations
 
-import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from statistics import mean, quantiles
 from zoneinfo import ZoneInfo
 
-from taste import activity, overview, settings
+from taste import activity, local_time, overview, settings
+from taste.bands import BAND_WIDTH, MIDDLE_MIN_SHOWS, Band, score_bands  # noqa: F401
 
 PERIODS = ("week", "month", "year")
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 TOP_SHOWN = 10
-BAND_WIDTH = 0.5  # MAL mean points per band of the score chart
-MIDDLE_MIN_SHOWS = 4  # fewer than this and a band's middle half says nothing
 
 
 @dataclass(frozen=True)
@@ -30,17 +27,6 @@ class Tile:
     detail: str = ""  # a second, smaller line: "+4 this month"
     trend: tuple[float, ...] = ()  # a tiny line beside the number, oldest first
     trend_tip: str = ""  # what the tiny line shows, on hover
-
-
-@dataclass(frozen=True)
-class Band:
-    """My scores for shows whose MAL mean falls in [mal_from, mal_to)."""
-
-    mal_from: float
-    mal_to: float
-    shows: int
-    average: float
-    middle: tuple[float, float] | None  # 25th to 75th percentile of my scores
 
 
 @dataclass
@@ -56,23 +42,6 @@ class ReportData:
     tz_name: str = ""
     has_books: bool = False  # the Books page loads its own numbers (taste.bookstats)
     has_screen: bool = False  # the Films and TV page loads its own (taste.screenstats)
-
-
-def score_bands(points: list[tuple[float, float]]) -> list[Band]:
-    """(MAL mean, my score) pairs, averaged per BAND_WIDTH of the MAL mean."""
-    groups: dict[float, list[float]] = {}
-    for community, mine in points:
-        start = math.floor(community / BAND_WIDTH) * BAND_WIDTH
-        groups.setdefault(start, []).append(mine)
-    bands = []
-    for start in sorted(groups):
-        scores = groups[start]
-        middle = None
-        if len(scores) >= MIDDLE_MIN_SHOWS:
-            q1, _, q3 = quantiles(scores, n=4, method="inclusive")
-            middle = (round(q1, 2), round(q3, 2))
-        bands.append(Band(start, start + BAND_WIDTH, len(scores), round(mean(scores), 2), middle))
-    return bands
 
 
 def load(conn: sqlite3.Connection, now: datetime | None = None) -> ReportData:
@@ -130,12 +99,12 @@ def diff_by_year(conn: sqlite3.Connection) -> list[tuple[str, float]]:
 
 def hour_name(hour: int) -> str:
     """ "10 PM", "12 AM"."""
-    return f"{hour % 12 or 12} {'AM' if hour < 12 else 'PM'}"
+    return local_time.hour_text(hour)
 
 
-def week_start(day: date) -> date:
-    """The Sunday a week starts on, like the weekday chart."""
-    return day - timedelta(days=(day.weekday() + 1) % 7)
+def week_start(day: date, monday: bool = False) -> date:
+    """The day a week starts on: Sunday, or Monday with the "Weeks start on" setting."""
+    return day - timedelta(days=(day.weekday() + (0 if monday else 1)) % 7)
 
 
 def _next(period: str, key: str) -> str:
@@ -156,6 +125,7 @@ def plays_by_period(
     whether each series ends in the period still in progress. The page shows as many
     of the latest periods as fit its width.
     """
+    monday = settings.get(conn, "week_start") == "monday"
     counts: dict[str, dict[str, int]] = {p: {} for p in PERIODS}
     for day_text, plays in conn.execute(
         "SELECT substr(occurred_at_local, 1, 10), COUNT(*) FROM rpt_lastfm_plays_local "
@@ -163,13 +133,13 @@ def plays_by_period(
     ):
         day = date.fromisoformat(day_text)
         for period, key in (
-            ("week", week_start(day).isoformat()),
+            ("week", week_start(day, monday).isoformat()),
             ("month", day_text[:7]),
             ("year", day_text[:4]),
         ):
             counts[period][key] = counts[period].get(key, 0) + plays
     current = {
-        "week": week_start(today).isoformat(),
+        "week": week_start(today, monday).isoformat(),
         "month": f"{today:%Y-%m}",
         "year": str(today.year),
     }

@@ -67,6 +67,41 @@ def test_hovering_a_bar_shows_only_that_bar(qtbot):
     assert chart.toolTip() == ""  # never one list of every bar for the whole chart
 
 
+@pytest.mark.parametrize("width", [420, 120])
+def test_so_far_never_overlaps_the_numbers_above_the_bars(qtbot, width):
+    chart = BarChart(value_labels=True)
+    qtbot.addWidget(chart)
+    chart.resize(width, 160)
+    chart.set_data([3, 12, 9, 4], ["2023", "2024", "2025", "2026"], partial_last=True)
+    metrics = QFontMetrics(small_font(chart))
+    drawn = [
+        metrics.boundingRect(box.toRect(), int(align), text)
+        for box, align, text in chart.top_texts()
+    ]
+    for i, a in enumerate(drawn):
+        assert a.left() >= 0 and a.right() <= width, chart.top_texts()[i][2]
+        for b in drawn[i + 1 :]:
+            assert not a.intersects(b), chart.top_texts()
+    last = chart.top_texts()[-1][2]
+    # "so far" joins the number when the bar has room for both; the dashed bar and its
+    # hover text say it otherwise.
+    assert last == ("4 so far" if width == 420 else "4")
+
+
+def test_so_far_sits_above_the_taller_bars_beside_it(qtbot):
+    chart = BarChart(scale=True, min_bar=18)  # the Dashboard's plays per week
+    qtbot.addWidget(chart)
+    chart.resize(300, 160)
+    weeks = [150, 140, 160, 120, 150, 140, 160, 120, 150, 140, 160, 40]
+    chart.set_data(weeks, [str(i) for i in range(len(weeks))], partial_last=True)
+    assert chart.first_shown() == 0 and chart.bar_rects()[0].width() < 24  # narrow bars
+    (box, _, text), *_ = chart.top_texts()
+    assert text == "so far"
+    spanned = [r for r in chart.bar_rects() if r.right() >= box.left() and r.left() <= box.right()]
+    assert len(spanned) > 1  # wider than its own bar
+    assert box.bottom() <= min(r.top() for r in spanned)  # over the bars, not on them
+
+
 def test_a_long_series_shows_as_many_recent_bars_as_fit(qtbot):
     chart = BarChart(min_bar=20)
     qtbot.addWidget(chart)
@@ -230,3 +265,39 @@ def test_deleting_a_widget_mid_fade_warns_about_nothing(qtbot, monkeypatch):
     finally:
         qInstallMessageHandler(previous)
     assert not [m for m in messages if "animation" in m]
+
+
+def test_band_chart_speaks_any_crowd_and_scale(qtbot):
+    chart = BandChart(crowd="Hardcover", top=5, noun="book", scores="stars")
+    qtbot.addWidget(chart)
+    chart.resize(320, 260)
+    chart.set_bands([Band(3.75, 4.0, 9, 3.61, (3.0, 4.0)), Band(4.25, 4.5, 1, 4.5, None)])
+    x, _ = chart.point(3.875, 3.61)
+    assert chart.tip_at(x) == (
+        "Hardcover 3.75 to 4.00: 9 books. You average 3.61, and the middle half of your "
+        "stars is 3 to 4."
+    )
+    assert chart.y_ticks() == [1, 2, 3, 4, 5]
+    chart.setMinimumHeight(140)  # as on the Books page
+    chart.resize(320, 140)  # short: every other number, so they never touch
+    assert chart.y_ticks() == [1, 3, 5]
+    chart.resize(320, 260)
+    assert chart.point(4.0, 5)[1] > chart.TOP  # 5 stars sits inside the plot, not cut off
+    assert BandChart().y_ticks() == [2, 4, 6, 8, 10]
+
+
+def test_checkboxes_fit_as_many_to_a_row_as_their_width_holds(qtbot):
+    from taste.desktop.settings_page import ChoiceBoxes
+
+    boxes = ChoiceBoxes(
+        {"a": "TV", "b": "Movie", "c": "ONA", "d": "OVA", "e": "A much longer name"}
+    )
+    qtbot.addWidget(boxes)
+    widths = [b.sizeHint().width() for b in boxes.boxes.values()]
+    spacing = ChoiceBoxes.SPACING
+    # Four across: the long name shares column 0 with TV, so column 0 is the long one.
+    four = max(widths[0], widths[4]) + sum(widths[1:4]) + 3 * spacing
+    assert boxes.fits(four) == 4
+    assert boxes.fits(four - 1) < 4
+    assert boxes.fits(1) == 1
+    assert boxes.minimumSizeHint().width() == max(widths)  # one box wide, never a full row

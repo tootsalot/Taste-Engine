@@ -120,6 +120,23 @@ def delete_windows_after():
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def app_theme(qapp):
+    """The app's own fonts, palette, and stylesheet, as `python -m taste.desktop` sets
+    them. Sizes depend on them (the fill tests measure the page), and the smoke test
+    applies them anyway, so without this a test measured differently run alone than
+    after the smoke test."""
+    from taste.desktop import theme
+
+    theme.apply(qapp)
+
+
+@pytest.fixture(autouse=True)
+def twelve_hour_clock(monkeypatch):
+    """The clock setting is app-wide (local_time.use_clock): every test starts at 12-hour."""
+    monkeypatch.setattr("taste.local_time._clock", {"format": "12h"})
+
+
 @pytest.fixture(autouse=True)
 def no_motion(monkeypatch):
     """Animations off, so no test waits on one or sees a half-faded widget. Tests of

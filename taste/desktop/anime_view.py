@@ -11,7 +11,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
 
-from taste import animestats, charts
+from taste import animestats, charts, settings
 from taste.activity import Finished
 from taste.animestats import AnimeStats
 from taste.desktop import motion, theme
@@ -114,7 +114,7 @@ class AnimeView(QWidget):
 
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
-        self.span = "all"
+        self.span = None  # "Report pages open on", once its years are known
 
     def refresh(self, report: charts.ReportData) -> None:
         """Redraw. `report` brings the all-time parts (genre leans, drops)."""
@@ -133,6 +133,9 @@ class AnimeView(QWidget):
         conn = self.ctx.connect(self.profile_id)
         try:
             years = animestats.years(conn)
+            if self.span is None:
+                latest = settings.get(conn, "report_span") == "year" and years
+                self.span = years[0] if latest else "all"
             if self.span != "all" and self.span not in years:
                 self.span = "all"
             stats = animestats.load(conn, self.span)
@@ -169,11 +172,10 @@ class AnimeView(QWidget):
                 "shows finished",
                 "every completed show" if s.span == "all" else f"in {s.span}",
             ),  # fmt: skip
-            tile(
-                f"~{s.hours:,.0f}" if s.hours else ("-" if count else "0"),
-                "hours watched",
-                "episodes x their length" if s.hours or not count else "episode lengths unknown",
-            ),  # fmt: skip
+            tile(f"~{s.hours:,.0f}", "hours watched", "episodes x their length")
+            if s.hours or not count
+            # MAL hasn't said how long the episodes are: count them instead of a dash.
+            else tile(f"{s.episodes:,}", "episodes watched", "episode lengths unknown"),
             tile(
                 f"{s.average:.1f}" if s.average is not None else "-", "your average", "out of 10"
             ),  # fmt: skip
@@ -187,7 +189,11 @@ class AnimeView(QWidget):
                 trend=tuple(v for _, v in s.trend) if len(s.trend) > 1 else (),
                 trend_tip="Your average against MAL by the year you finished the show.",
             ),
-            tile(s.top_genre or "-", "most watched genre"),
+            tile(
+                s.top_genre or "-",
+                "most watched genre",
+                f"{s.top_genre_shows:,} of your shows" if s.top_genre else "",
+            ),  # fmt: skip
             tile(s.top_decade or "-", "favorite decade", "by first season"),
         ]
         for widget, value in zip(self.tiles, values, strict=True):

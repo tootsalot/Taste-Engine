@@ -19,8 +19,8 @@ jobs:
     needs: checks
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -39,7 +39,7 @@ jobs:
         run: python scripts/build_release.py --skip-checks
       - name: Install, repair, and uninstall it
         run: python scripts/test_installer.py (Resolve-Path dist/*-setup.exe)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: taste-engine-windows
           path: dist/*
@@ -49,12 +49,12 @@ jobs:
     name: Publish GitHub Release
     needs: build-windows
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: taste-engine-windows
           path: dist

@@ -13,7 +13,7 @@ from taste.overview import FinishedShow
 from tests import test_for_you
 from tests.fake_images import image_bytes
 from tests.fake_recs import MAL_CDN
-from tests.test_desktop import set_up_profile
+from tests.test_desktop import MAL_KEY, set_up_profile
 from tests.test_for_you import synced
 
 # The For You world (fake MAL, Last.fm, and images), shared as fixtures.
@@ -29,19 +29,17 @@ def test_before_a_sync_every_card_says_what_fills_it(window):
     window.new_profile(("me", "Me"))
     window.sidebar.setCurrentRow(PAGES.index("Dashboard"))
     dash = window.dashboard
-    assert [b.text() for b in dash.sync_buttons.values()] == [
-        "Sync MyAnimeList",
-        "Sync Last.fm",
-        "Sync everything",
-    ]
+    assert dash.sync_button.text() == "Sync everything"
+    # Nothing connected yet: the arrow's menu points to Settings instead.
+    assert [a.text() for a in dash.sync_menu.actions()] == ["Add your sources in Settings"]
     # No dash rendered as a giant bar: the number hides until there's a score.
-    assert dash.critic_value.isHidden()
-    assert "Sync MyAnimeList" in dash.critic_text.text()
+    assert dash.crowd.shown() == {}  # no number until a source has data
+    assert "Sync a source" in dash.crowd.empty.text() and not dash.crowd.empty.isHidden()
     assert dash.score_chart.values == [] and dash.score_chart.empty_text == "No scores yet"
     assert dash.recent.items == [] and "Sync MyAnimeList" in dash.recent.empty.text()
     assert dash.repeat.items == [] and "Sync Last.fm" in dash.repeat.empty.text()
     assert "Sync MyAnimeList" in dash.genres.empty.text()
-    assert dash.strip.text.text() == "MyAnimeList: never synced. Last.fm: never synced."
+    assert dash.strip.text.text() == "Nothing synced yet. Add your sources in Settings."
     assert dash.log.isHidden() and dash.strip.toggle.isHidden()
     # With nothing synced, a getting-started panel fills the page instead of empty cards.
     assert not dash.welcome.isHidden() and dash.recent.isHidden()
@@ -56,20 +54,22 @@ def test_a_sync_fills_the_cards(window, qtbot, images):
     window.sidebar.setCurrentRow(PAGES.index("Dashboard"))
     dash = window.dashboard
 
-    assert dash.critic_value.text() == "-0.28"
+    shown = dash.crowd.shown()
+    assert list(shown) == ["anime", "music"]  # no films or books in this world
+    assert shown["anime"] == ("-0.28", "vs MAL · 4 shows")
+    assert shown["music"][1] == "of plays outside your top 10 artists"
     assert dash.welcome.isHidden() and not dash.recent.isHidden()
     # This month so far: the ten plays at "now"; the one ten days earlier was in September.
     assert dash.month.numbers["plays"][0].text() == "10"
     assert dash.month.top_artist.text() == "Top artist: Example Seed One, 10 plays"
     # No finish dates on the fake list, and its last edits came before the first sync,
     # so no show counts as finished this month.
-    assert dash.month.numbers["shows"][0].text() == "0"
+    assert dash.month.numbers["shows"][0].isHidden()  # a zero is left out, not shown
     # Ten four-minute plays: 40 minutes, from the track lengths the sync looked up.
     assert dash.month.numbers["hours"][0].text() == "<1"
     assert dash.week_chart.values[-1] == 10 and dash.week_chart.partial_last
-    assert "lower than MAL on" in dash.critic_text.text()
-    assert "rounded to a whole number" in dash.critic_text.toolTip()
-    assert dash.counts.text() == "6 on your list · 4 scored · 69 Last.fm plays"
+    tip = dash.crowd.cells["anime"].toolTip()
+    assert "lower than MAL on" in tip and "rounded to a whole number" in tip
     assert dash.score_chart.values == [0, 0, 0, 0, 1, 0, 1, 1, 1, 0]
     assert dash.score_chart.value_labels  # each bar shows its count
     eight = dash.score_chart.bar_rects()[7]
@@ -138,18 +138,21 @@ def test_long_titles_end_in_an_ellipsis_under_a_poster(window):
     assert long_title in item.toolTip()  # the whole title is still a hover away
 
 
-def test_the_log_opens_while_syncing_and_folds_away_after(window, qtbot):
+def test_the_log_stays_folded_and_opens_when_asked(window, qtbot):
     set_up_profile(window)
     dash = window.dashboard
     with qtbot.waitSignal(dash.sync_finished, timeout=15000):
         dash.start_sync("all")
-        assert not dash.log.isHidden()
-        assert not dash.progress.isHidden()
+        # The status line and progress bar show the sync; the log waits to be asked.
+        assert dash.log.isHidden() and not dash.progress.isHidden()
+        assert not dash.strip.toggle.isHidden()
     assert dash.log.isHidden() and dash.progress.isHidden()
     assert dash.strip.dot.property("state") == "ok"
+    # Synced together, so said once; hovering names each source.
     text = dash.strip.text.text()
-    assert "MyAnimeList synced " in text and "Last.fm synced " in text
-    assert "UTC" not in text
+    assert text.startswith("Everything synced ") and "UTC" not in text
+    tip = dash.strip.text.toolTip()
+    assert "MyAnimeList synced " in tip and "Last.fm synced " in tip
 
     toggle = dash.strip.toggle
     assert not toggle.isHidden() and toggle.text() == "Show log"
@@ -159,17 +162,38 @@ def test_the_log_opens_while_syncing_and_folds_away_after(window, qtbot):
     assert dash.log.isHidden()
 
 
-def test_the_log_stays_open_when_a_sync_has_problems(window, qtbot):
+def test_a_sync_with_problems_says_so_on_the_status_line(window, qtbot):
     set_up_profile(window)
-    window.settings.remove_key("MAL_CLIENT_ID")
+    window.settings.sources.remove_source("mal")
     dash = window.dashboard
     with qtbot.waitSignal(dash.sync_finished, timeout=15000) as blocker:
         dash.start_sync("mal")
     assert blocker.args[0] == {"mal": False}
-    assert not dash.log.isHidden()
+    assert dash.log.isHidden()  # folded; Show log has what happened
     assert "MyAnimeList:" in dash.log.toPlainText()
+    assert dash.strip.toggle.text() == "Show log" and not dash.strip.toggle.isHidden()
     assert dash.strip.dot.property("state") == "error"
+    assert dash.strip.text.property("role") == "error"  # the line itself turns red
     assert "problems" in dash.strip.text.text()
+    with qtbot.waitSignal(dash.sync_finished, timeout=15000):
+        window.settings.sources.rows["mal"].key.setText(MAL_KEY)
+        window.settings.sources.save_source("mal")
+        dash.start_sync("mal")
+    assert dash.strip.text.property("role") == "muted"  # back to normal once it works
+
+
+def test_the_sync_menu_lists_each_connected_source(window, qtbot):
+    set_up_profile(window)  # MyAnimeList and Last.fm
+    dash = window.dashboard
+    menu = {a.text(): a for a in dash.sync_menu.actions()}
+    assert list(menu) == ["MyAnimeList", "Last.fm"]  # TMDB and Hardcover aren't connected
+    with qtbot.waitSignal(dash.sync_finished, timeout=15000) as blocker:
+        menu["Last.fm"].trigger()
+        assert not dash.sync_button.isEnabled()
+    assert blocker.args[0] == {"lastfm": True}  # that one source only
+    assert dash.sync_button.isEnabled()
+    text = dash.strip.text.text()
+    assert text.startswith("Last.fm synced ") and text.endswith("MyAnimeList: never synced.")
 
 
 def test_poster_tooltips_name_the_main_title_when_the_card_shows_english():

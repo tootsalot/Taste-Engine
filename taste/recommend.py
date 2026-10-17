@@ -25,7 +25,7 @@ import json
 import math
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from statistics import mean
 from typing import Any
 from urllib.parse import quote_plus
@@ -459,6 +459,29 @@ def chance_at_least(predicted: float, residuals: list[float], at_least: int) -> 
 # ---------------------------------------------------------------------------
 
 FILM_MIN_VOTES = 200  # TMDB averages from fewer votes than this are too unsettled
+# How much a TMDB average is trusted: from this many votes it counts half, the other half
+# being TMDB's typical average; fewer votes, less (approved 2026-10-15: brand-new films
+# with a high average from few votes led the list on early hype).
+FILM_PRIOR_VOTES = 1000  # the default of the film_prior_votes setting
+TYPICAL_FALLBACK = 6.5  # before any film with FILM_MIN_VOTES is known
+
+
+def shrunk(average: float, votes: int, typical: float, prior: int = FILM_PRIOR_VOTES) -> float:
+    """A TMDB average pulled toward the typical one, by how few votes it rests on."""
+    votes = max(votes or 0, 0)
+    if votes + prior == 0:
+        return average
+    return (votes * average + prior * typical) / (votes + prior)
+
+
+def typical_film_average(conn: sqlite3.Connection) -> float:
+    """TMDB's typical average: the mean over the films known here with settled averages."""
+    row = conn.execute(
+        "SELECT AVG(vote_average) FROM stg_tmdb_movies "
+        "WHERE vote_average IS NOT NULL AND vote_count >= ?",
+        (FILM_MIN_VOTES,),
+    ).fetchone()
+    return row[0] if row and row[0] is not None else TYPICAL_FALLBACK
 
 
 def _film_facts(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
@@ -474,15 +497,35 @@ def _film_facts(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
     return facts
 
 
-def _film_scored(conn: sqlite3.Connection) -> list[tuple[int, float, float]]:
+def _film_scored(
+    conn: sqlite3.Connection, typical: float, prior: int = FILM_PRIOR_VOTES
+) -> list[tuple[int, float, float]]:
+    """(film, my rating, its shrunk TMDB average): the model learns on the same numbers
+    it predicts from."""
     return [
-        (r[0], r[1], r[2])
+        (r[0], r[1], shrunk(r[2], r[3], typical, prior))
         for r in conn.execute(
-            "SELECT a.tmdb_id, a.rating, m.vote_average FROM stg_tmdb_account_ratings a "
+            "SELECT a.tmdb_id, a.rating, m.vote_average, m.vote_count "
+            "FROM stg_tmdb_account_ratings a "
             "JOIN stg_tmdb_movies m ON m.tmdb_id = a.tmdb_id WHERE a.media_type = 'movie' "
             "AND a.removed_at IS NULL AND m.vote_average IS NOT NULL AND m.vote_count > 0"
         )
     ]
+
+
+def holdout_check(scored: list[tuple[int, float, float]], residuals: list[float],
+                  raw: dict[int, float]) -> dict[str, Any]:  # fmt: skip
+    """How far predictions landed from my real ratings on films they never saw, next to
+    TMDB's own average alone (both mean absolute errors)."""
+    if not residuals:
+        return {}
+    return {
+        "holdout_mae": round(sum(abs(r) for r in residuals) / len(residuals), 3),
+        "holdout_count": len(residuals),
+        "tmdb_alone_mae": round(
+            sum(abs(score - raw[tmdb_id]) for tmdb_id, score, _ in scored) / len(scored), 3
+        ),
+    }
 
 
 def _runtime(minutes: int | None) -> str:
@@ -491,14 +534,21 @@ def _runtime(minutes: int | None) -> str:
     return f"{minutes // 60}h {minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m"
 
 
-def film_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str, Any]]:
+def film_recommendations(
+    conn: sqlite3.Connection, today: date | None = None, prior: int | None = None
+) -> tuple[list[Rec], dict[str, Any]]:
     """Films I haven't rated, predicted the anime way: the TMDB average shifted (or, with
     enough ratings, scaled) by how I usually differ from it, plus shrunk genre and
     director leans. Candidates come from TMDB's recommendations for films I liked,
-    plus my watchlist."""
+    plus my watchlist. Films not out yet are left out, and an average from few votes is
+    pulled toward TMDB's typical one (`shrunk`)."""
     cfg = settings.get_all(conn)
+    prior = cfg["film_prior_votes"] if prior is None else prior  # the profile's setting
+    today_text = (today or date.today()).isoformat()
     facts = _film_facts(conn)
-    scored = _film_scored(conn)
+    typical = typical_film_average(conn)
+    scored = _film_scored(conn, typical, prior)
+    raw = {tmdb_id: facts[tmdb_id]["vote_average"] for tmdb_id, _, _ in scored}
     model = build_model(scored, facts)
     mine = tmdb.my_film_mean(conn)
     support = tmdb.candidate_support(conn)
@@ -536,7 +586,10 @@ def film_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str,
             continue
         if (f["vote_count"] or 0) < FILM_MIN_VOTES or not f["fetched_at"]:
             continue  # unsettled, or only known from a list so far (no genres yet)
-        predicted = model.predict(f["vote_average"], f["genres"], f["studios"])
+        if (f["release_date"] or "") > today_text:
+            continue  # not out yet: its average is anticipation, not a verdict
+        crowd = shrunk(f["vote_average"], f["vote_count"], typical, prior)
+        predicted = model.predict(crowd, f["genres"], f["studios"])
         rec = Rec(
             kind="film",
             item_key=str(tmdb_id),
@@ -565,12 +618,22 @@ def film_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str,
         liked, harsh = _genre_leans(model, f["genres"])
         rec.reasons.extend(_because(seeds, liked, harsh, noun="films"))
         details = [f"TMDB recommends it alongside {t}, which you rated {r:g}." for t, r in seeds]
+        if abs(crowd - f["vote_average"]) >= 0.1:
+            details.append(
+                f"TMDB's {f['vote_average']:.1f} rests on {short_count(f['vote_count'])} votes, "
+                f"so it counts as {crowd:.1f} here."
+            )
         for genre in filter(None, (liked, harsh)):
             details.append(f"You rate {genre} films {model.genre[genre]:+.2f} vs your usual.")
         rec.facts["details"] = details
         recs.append(rec)
     recs.sort(key=lambda r: (-(r.score + 0.15 * math.log1p(r.support)), r.title))
-    metrics = {"model_overall_bias": round(model.overall, 3), "rated": len(scored)}
+    metrics = {
+        "model_overall_bias": round(model.overall, 3),
+        "rated": len(scored),
+        "typical_tmdb_average": round(typical, 2),
+        **holdout_check(scored, residuals, raw),
+    }
     return recs[: cfg["rec_count"]], metrics
 
 
@@ -969,6 +1032,7 @@ REC_SETTINGS = [
     "rec_include_plan_to_watch",
     "rec_seed_artists",
     "include_nsfw",
+    "film_prior_votes",
 ]
 
 
@@ -990,7 +1054,7 @@ def compute_all(
         save_run(conn, "music_discover", discover)
         save_run(conn, "music_rediscover", rediscover)
     if "film" in kinds:
-        films, metrics = film_recommendations(conn)
+        films, metrics = film_recommendations(conn, now.date() if now else None)
         save_run(conn, "film", films, metrics)
     if "book" in kinds:
         books, metrics = book_recommendations(conn)
