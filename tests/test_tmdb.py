@@ -147,6 +147,20 @@ def test_a_sync_fetches_details_only_for_titles_on_my_account(conn, make_client)
     assert ("GET", "/3/movie/22") not in fake.calls  # that's the refresh's job, not a sync's
 
 
+def test_a_title_gone_from_tmdb_isnt_asked_for_again_every_sync(conn, make_client):
+    fake = FakeTmdb()
+    client, _ = client_for(make_client, fake)
+    tmdb.sync(conn, client, CFG, out=lambda m: None)
+    # Its details are due again, but TMDB has removed it (404).
+    conn.execute("UPDATE stg_tmdb_movies SET fetched_at = '' WHERE tmdb_id = 12")
+    fake.gone = {("movie", 12)}
+    assert tmdb.sync(conn, client, CFG, out=lambda m: None).status == "success"
+    assert ("GET", "/3/movie/12") in fake.calls
+    fake.calls.clear()
+    tmdb.sync(conn, client, CFG, out=lambda m: None)
+    assert ("GET", "/3/movie/12") not in fake.calls  # noted, like MAL's removed shows
+
+
 def test_film_picks_skip_unreleased_films_and_doubt_thin_averages(conn, make_client):
     from datetime import date
 

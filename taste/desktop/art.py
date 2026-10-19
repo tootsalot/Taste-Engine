@@ -12,6 +12,7 @@ first letter) until its picture arrives, and keeps it if the picture can't be ha
 from __future__ import annotations
 
 import contextlib
+import time
 import traceback
 
 from PySide6.QtCore import QObject, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal
@@ -84,7 +85,8 @@ class ArtLoader(QObject):
         self.pool = QThreadPool()
         self.pool.setMaxThreadCount(THREADS)
         self.pending: set[str] = set()
-        self.failed: set[str] = set()
+        self.failed: dict[str, float] = {}  # cache key -> when it failed
+        self.clock = time.monotonic
         QPixmapCache.setCacheLimit(MEMORY_CACHE_KB)
         self._finished.connect(self._on_finished)
 
@@ -96,7 +98,14 @@ class ArtLoader(QObject):
         found = QPixmapCache.find(key)
         if found is not None and not found.isNull():
             return found
-        if key not in self.pending and key not in self.failed:
+        failed_at = self.failed.get(key)
+        if failed_at is not None and self.clock() - failed_at >= images.RETRY_TRANSIENT_SECONDS:
+            if self.cache.failed_for_good(url):
+                self.failed[key] = self.clock()  # a 404 or not an image: not this session
+            else:
+                del self.failed[key]  # a timeout or a server error: worth another try
+                failed_at = None
+        if key not in self.pending and failed_at is None:
             self.pending.add(key)
             self.pool.start(_Job(self, url, QSize(size), key))
         return None
@@ -104,7 +113,7 @@ class ArtLoader(QObject):
     def _on_finished(self, key: str, image: QImage) -> None:
         self.pending.discard(key)
         if image.isNull():
-            self.failed.add(key)
+            self.failed[key] = self.clock()
             self.failed_key.emit(key)
             return
         QPixmapCache.insert(key, QPixmap.fromImage(image))
@@ -112,6 +121,12 @@ class ArtLoader(QObject):
 
     def is_idle(self) -> bool:
         return not self.pending
+
+    def clear(self) -> None:
+        """Delete the saved pictures and forget which ones failed, so all get a fresh try."""
+        self.cache.clear()
+        self.cache.clear_failures()
+        self.failed.clear()
 
     def shutdown(self, wait_ms: int = 3000) -> None:
         """Drop queued downloads and give running ones a moment to finish."""

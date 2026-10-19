@@ -657,6 +657,7 @@ CREATE TABLE IF NOT EXISTS recap_runs (
     cards       INTEGER NOT NULL,
     final       INTEGER NOT NULL DEFAULT 0,
     announced   INTEGER NOT NULL DEFAULT 0,
+    pictures_missing INTEGER NOT NULL DEFAULT 0,  -- drawn with placeholders: draw again
     PRIMARY KEY (period_kind, period_key)
 );
 

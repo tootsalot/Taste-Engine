@@ -8,6 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from taste import activity
+
 
 @dataclass(frozen=True)
 class Report:
@@ -65,12 +67,27 @@ def write_csv(conn: sqlite3.Connection, report: Report, path: Path) -> int:
     cursor = conn.execute(f"SELECT * FROM {report.view} ORDER BY {report.order_by}")
     columns = [d[0] for d in cursor.description]
     rows = cursor.fetchall()
+    if "item_id" in columns and report.view.startswith("rpt_mal_"):
+        hidden = activity.hidden_items(conn)  # adult shows: counted, never named
+        at = columns.index("item_id")
+        rows = [row for row in rows if row[at] not in hidden]
     # utf-8-sig so Excel on Windows shows Japanese titles correctly.
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.writer(handle)
         writer.writerow(columns)
-        writer.writerows(tuple(row) for row in rows)
+        writer.writerows(tuple(safe_cell(value) for value in row) for row in rows)
     return len(rows)
+
+
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def safe_cell(value):
+    """Text that Excel would run as a formula (a title from an API starting with =, say)
+    gets a leading quote, so it's shown as text. Numbers are left alone."""
+    if isinstance(value, str) and value.startswith(FORMULA_START):
+        return "'" + value
+    return value
 
 
 def write_csvs(conn: sqlite3.Connection, out_dir: Path) -> list[tuple[Path, int]]:

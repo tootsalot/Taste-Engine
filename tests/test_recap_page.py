@@ -7,6 +7,7 @@ from taste import recap
 from taste.activity import Period
 from taste.desktop.main_window import PAGES
 from tests import test_for_you
+from tests.fake_images import image_bytes
 from tests.test_for_you import synced
 
 images = test_for_you.images
@@ -137,3 +138,110 @@ def test_a_month_without_data_says_so(window, qtbot):
     qtbot.waitUntil(lambda: "Nothing to recap" in page.empty.text(), timeout=15000)
     assert page.cards == [] and not page.save_button.isEnabled()
     assert page.deck.isHidden()
+
+
+def test_rebuild_redraws_missing_pictures_and_replaces_saved_cards(window, qtbot, images, tmp_path):
+    """What the user saw after Rebuild (2026-10-19): a picture that failed once stayed the
+    placeholder on the deck, the thumbnails, and the cards already saved."""
+    synced(window, qtbot)
+    qtbot.waitUntil(lambda: not window.auto_recap.isRunning(), timeout=15000)
+    page = window.recap
+    cover = "https://lastfm.freetls.fastly.net/i/u/300x300/olddays.png"  # on 2025's music card
+    page.show_period(Period("year", "2025"))
+    wait_for_cards(qtbot, page)
+    assert cover in images.urls()  # asked for, and Last.fm didn't have it (404)
+    names = [name for name, _ in page.cards]
+    music = names.index("music")
+    before = page.cards[music][1].copy()
+    thumb_before = page.thumbs[music].icon().pixmap(page.thumbs[music].iconSize()).toImage()
+    page.show_card(music)
+    folder = tmp_path / "saved"
+    folder.mkdir()
+    saved = page.save_all(str(folder))
+    assert len(saved) == len(names)
+    saved_bytes = {p.name: p.read_bytes() for p in saved}
+    # Which deck the saved cards came from, for a later Rebuild to match them by card.
+    app_folder = recap.folder("me", Period("year", "2025"))
+    assert recap.saved_card_names(app_folder) == names
+
+    images.add(cover, image_bytes(color="#FF7A6B"))  # the cover turns up
+    images.calls.clear()
+    page.rebuild()
+    qtbot.waitUntil(lambda: page.status.text().startswith("Rebuilt"), timeout=15000)
+
+    assert images.urls() == [cover]  # tried again, not skipped as failed for the session
+    assert [name for name, _ in page.cards] == names and page.deck.index == music
+    assert page.cards[music][1] != before
+    assert page.deck.cards[music] == page.cards[music][1]
+    thumb_after = page.thumbs[music].icon().pixmap(page.thumbs[music].iconSize()).toImage()
+    assert thumb_after != thumb_before
+    # The saved cards are replaced, the same files, and the status line says so.
+    assert sorted(p.name for p in folder.iterdir()) == sorted(saved_bytes)
+    music_file = folder / page.data.save_name(music)
+    assert music_file.read_bytes() != saved_bytes[music_file.name]
+    assert "saved cards" in page.status.text()
+
+
+def test_rebuild_replaces_only_this_recaps_saved_cards(qapp, tmp_path):
+    """Only the cards saved before are written again. When the number of cards changed,
+    each saved card is found by which card it is (from the recap's recap.json), replaced,
+    and renamed to the new count; nothing else is saved (the user's call, 2026-10-19)."""
+    from PySide6.QtGui import QImage
+
+    from taste.desktop.workers import RecapWorker
+
+    def deck(names):
+        image = QImage(9, 16, QImage.Format.Format_RGB32)
+        image.fill(0)
+        return [(name, image) for name in names]
+
+    class Data:
+        period = Period("month", "2026-09")
+
+        def __init__(self, cards):
+            self.cards = cards
+
+        def save_name(self, i):
+            return f"Taste Engine recap September 2026 ({i + 1} of {len(self.cards)}).png"
+
+    def september():
+        return sorted(p.name for p in tmp_path.iterdir() if "September" in p.name)
+
+    before = ["cover", "music", "when", "anime", "wrap"]
+    other = tmp_path / "Taste Engine recap August 2026 (1 of 4).png"
+    other.write_bytes(b"old")
+    for name in ("(2 of 5).png", "(4 of 5).png"):  # music and anime
+        (tmp_path / f"Taste Engine recap September 2026 {name}").write_bytes(b"old")
+    cards = deck(before)
+    assert RecapWorker._replace_saved(Data(cards), cards, tmp_path, before) == 2
+    assert september() == [
+        "Taste Engine recap September 2026 (2 of 5).png",
+        "Taste Engine recap September 2026 (4 of 5).png",
+    ]
+    assert all(p.read_bytes() != b"old" for p in tmp_path.glob("*September*"))
+
+    # A books card arrives: music is still 2nd, anime moves from 4th to 4th of 6, and
+    # nothing that wasn't saved before is saved now.
+    after = ["cover", "music", "when", "books", "anime", "wrap"]
+    cards = deck(after)
+    assert RecapWorker._replace_saved(Data(cards), cards, tmp_path, before) == 2
+    assert september() == [
+        "Taste Engine recap September 2026 (2 of 6).png",
+        "Taste Engine recap September 2026 (5 of 6).png",
+    ]
+    # Which card was which can't be told: the saved ones are left alone.
+    assert RecapWorker._replace_saved(Data(deck(before)), deck(before), tmp_path, None) == 0
+    assert len(september()) == 2
+    assert other.read_bytes() == b"old"  # another month's card is never touched
+    assert RecapWorker._replace_saved(Data(cards), cards, tmp_path / "missing", after) == 0
+
+
+def test_saved_card_names_prefer_the_deck_they_were_saved_from(tmp_path):
+    """recap.json holds the last automatic or rebuilt drawing; the page's own drawing (the
+    one Save writes) can differ, so Save notes its card names and they come first."""
+    import json
+
+    (tmp_path / "recap.json").write_text(json.dumps({"cards": ["cover", "music", "closing"]}))
+    assert recap.saved_card_names(tmp_path) == ["cover", "music", "wrap"]
+    recap.remember_saved_names(tmp_path, ["cover", "music", "books", "wrap"])
+    assert recap.saved_card_names(tmp_path) == ["cover", "music", "books", "wrap"]

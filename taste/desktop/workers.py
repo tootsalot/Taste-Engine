@@ -6,6 +6,7 @@ the thread that made them.
 
 from __future__ import annotations
 
+import re
 import traceback
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,9 @@ class SyncWorker(QThread):
     def run(self) -> None:
         results: dict[str, bool] = {}
         conn = None
+        if not self.path.is_file():  # deleted meanwhile: connecting would make an empty one
+            self.done.emit({self.source: False})
+            return
         try:
             conn = db.connect(self.path)
             kwargs: dict[str, Any] = dict(self.sync_kwargs)
@@ -141,6 +145,9 @@ class RecsWorker(QThread):
     def run(self) -> None:
         counts: dict[str, int] = {}
         conn = None
+        if not self.path.is_file():  # deleted meanwhile: connecting would make an empty one
+            self.done.emit(counts)
+            return
         try:
             conn = db.connect(self.path)
             kwargs: dict[str, Any] = dict(self.recs_kwargs)
@@ -191,7 +198,8 @@ class RecapWorker(QThread):
     `period` None: the automatic check (recap.due), which saves any recap that's new
     or whose numbers changed, and reports the new ones in `made`. With a period: draw
     it for the page (`ready`), and also save it to `save_to` when given (with
-    `record` set when that's the recap's own folder).
+    `record` set when that's the recap's own folder). `retry` asks again for pictures
+    that failed earlier in the session.
     """
 
     ready = Signal(str, str, object, list)  # kind, key, RecapData, [(card name, QImage)]
@@ -206,6 +214,8 @@ class RecapWorker(QThread):
         period: Any = None,
         save_to: Any = None,
         record: bool = False,
+        retry: bool = False,
+        replace_in: Any = None,
     ) -> None:
         super().__init__()
         self.profile_id = profile_id
@@ -215,10 +225,18 @@ class RecapWorker(QThread):
         self.period = period
         self.save_to = save_to
         self.record = record
+        self.retry = retry
+        self.replace_in = replace_in  # Rebuild: the save folder, whose saved cards are redone
+        self.replaced = 0  # how many saved cards that replaced, read once `ready` arrives
+        self.missing = 0  # pictures drawn as placeholders in the latest drawing
+        self.old_names: list[str] | None = None  # card names in save_to before this drawing
 
     def pictures(self, url: str | None):
-        path = self.cache.get(url) if url else None
-        return decode(str(path), QSize(700, 700)) if path is not None else None
+        path = self.cache.get(url, retry=self.retry) if url else None
+        image = decode(str(path), QSize(700, 700)) if path is not None else None
+        if url and (image is None or image.isNull()) and not self.cache.failed_for_good(url):
+            self.missing += 1  # a placeholder that may load later: worth drawing again
+        return image
 
     def run(self) -> None:
         conn = None
@@ -232,21 +250,34 @@ class RecapWorker(QThread):
                     data = recap.build(conn, period, self.now)
                     if not recap.has_data(data):
                         continue
-                    if data.fingerprint == recap.stored_fingerprint(conn, period):
+                    same = data.fingerprint == recap.stored_fingerprint(conn, period)
+                    if same and not recap.pictures_missing(conn, period):
                         recap.record(conn, data, self.now)  # may turn it final
                         continue
+                    # New numbers, or the same ones last drawn with placeholders.
+                    self.missing = 0
                     cards = recap_cards.render(data, self.pictures)
                     self._write(data, cards, recap.folder(self.profile_id, period))
-                    if recap.record(conn, data, self.now):
+                    if recap.record(conn, data, self.now, missing=self.missing):
                         made.append((period.kind, period.key))
                 self.made.emit(made)
                 return
             data = recap.build(conn, self.period, self.now)
+            if self.save_to is not None:
+                # Which card was which when it was last made: read before it's rewritten.
+                self.old_names = recap.saved_card_names(Path(self.save_to))
+            self.missing = 0
             cards = recap_cards.render(data, self.pictures)
             if self.save_to is not None:
                 self._write(data, cards, self.save_to)
-                if self.record:
-                    recap.record(conn, data, self.now, announced=True)  # made by hand
+                if self.record:  # made by hand
+                    recap.record(conn, data, self.now, announced=True, missing=self.missing)
+            if self.replace_in is not None and recap.has_data(data):
+                self.replaced = self._replace_saved(
+                    data, cards, Path(self.replace_in), self.old_names
+                )
+                if self.replaced and self.save_to is not None:
+                    recap.remember_saved_names(Path(self.save_to), [n for n, _ in cards])
             self.ready.emit(self.period.kind, self.period.key, data, cards)
         except Exception as exc:
             self.failed.emit(f"The recap stopped on an unexpected error ({type(exc).__name__}).")
@@ -269,6 +300,41 @@ class RecapWorker(QThread):
         recap.write_json(data, folder)
         return folder
 
+    @staticmethod
+    def _replace_saved(data, cards, folder: Path, old_names: list[str] | None) -> int:
+        """The cards of this recap already saved in `folder` (by Save this card or Save
+        all), replaced with the ones just drawn; cards never saved stay unsaved (the
+        user's call, 2026-10-19). A saved "(2 of 5)" is found by which card it was:
+        `old_names` are the card names when it was made (from its recap.json), so after a
+        new card arrives it's replaced and renamed "(3 of 6)". Without them, only a deck
+        of the same size can be matched, by position; otherwise saved cards are left as
+        they are. Returns how many files were written."""
+        label = re.escape(data.period.label)
+        pattern = re.compile(rf"Taste Engine recap {label} \((\d+) of (\d+)\)\.png")
+        new_names = [name for name, _ in cards]
+        targets: dict[Path, int] = {}  # saved file -> the new card that replaces it
+        if folder.is_dir():
+            for path in folder.glob("Taste Engine recap *.png"):
+                match = pattern.fullmatch(path.name)
+                if not match:
+                    continue
+                number, total = int(match[1]), int(match[2])
+                names = old_names if old_names and len(old_names) == total else None
+                if names is None and total == len(cards):
+                    names = new_names  # same size, nothing better to go on: by position
+                if names is None or not 1 <= number <= total or names[number - 1] not in new_names:
+                    continue  # can't tell which card it was, or that card is gone
+                targets[path] = new_names.index(names[number - 1])
+        # Old names first, then the new files, so a rename never removes a new card.
+        new_paths = {folder / data.save_name(i) for i in targets.values()}
+        for path in targets:
+            if path not in new_paths:
+                path.unlink(missing_ok=True)
+        written = 0
+        for i in sorted(set(targets.values())):
+            written += bool(cards[i][1].save(str(folder / data.save_name(i))))
+        return written
+
 
 class ConnectionTestWorker(QThread):
     done = Signal(bool, str)
@@ -285,6 +351,9 @@ class ConnectionTestWorker(QThread):
 
     def run(self) -> None:
         conn = None
+        if not self.path.is_file():  # deleted meanwhile: connecting would make an empty one
+            self.done.emit(False, "The profile was deleted.")
+            return
         try:
             conn = db.connect(self.path, setup=False)
             kwargs = {"client_factory": self.client_factory} if self.client_factory else {}

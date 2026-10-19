@@ -96,6 +96,7 @@ class FakeTmdb:
         self.page_size = page_size
         self.approved = True
         self.calls: list[tuple[str, str]] = []
+        self.gone: set[tuple[str, int]] = set()  # titles whose details answer 404
 
     def __call__(self, url: str, params: dict[str, Any]) -> FakeResponse:
         method = params.get("_method", "GET")
@@ -143,7 +144,7 @@ class FakeTmdb:
         match = re.match(r"/3/(movie|tv)/(\d+)$", path)
         if match:
             found = self.catalog.get((match.group(1), int(match.group(2))))
-            if found is None:
+            if found is None or (match.group(1), int(match.group(2))) in self.gone:
                 return FakeResponse(404, {"success": False, "status_message": "Not found."})
             return FakeResponse(200, {k: v for k, v in found.items() if not k.startswith("_")})
         return FakeResponse(404, {"success": False, "status_message": f"No route {path}"})

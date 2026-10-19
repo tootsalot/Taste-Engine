@@ -185,8 +185,8 @@ def _books(
     if full_years and max(full_years) >= 24:
         traits.append(Trait("Bookworm", f"up to {max(full_years)} books a year",
                             "books", max(full_years) / 24, "bookish"))  # fmt: skip
-    if stats.my_average is not None and stats.hardcover_average is not None:
-        diff = stats.my_average - stats.hardcover_average
+    if stats.vs_hardcover is not None:
+        diff = stats.vs_hardcover  # over the same books on both sides
         if diff <= -LEAN / 2:
             traits.append(critic("Hard to impress on the page", diff, "Hardcover", "books",
                                  unit="★", strength=abs(diff) * 2))  # fmt: skip
@@ -225,6 +225,12 @@ def _films(conn: sqlite3.Connection) -> tuple[list[Trait], int]:
 NOUNS = {"anime": "anime fan", "music": "listener", "books": "reader", "screen": "film buff"}
 
 
+def soft_spot_for(noun: str, anime_genre: str | None, book_genre: str | None) -> str | None:
+    """The genre the headline names, from the same medium as its noun: a listener's or a
+    film buff's headline used to name a book genre with nothing saying so."""
+    return {"anime fan": anime_genre, "reader": book_genre}.get(noun)
+
+
 def load(
     conn: sqlite3.Connection,
     *,
@@ -247,7 +253,7 @@ def load(
     weights = {"anime": shows, "music": plays / 40, "books": read, "screen": rated}
     noun = NOUNS[max(weights, key=lambda k: weights[k])]
     adjectives = [t.adjective for t in traits if t.adjective][:2]
-    soft_spot = anime_genre if noun == "anime fan" else book_genre or anime_genre
+    soft_spot = soft_spot_for(noun, anime_genre, book_genre)
     headline = "The " + " ".join(filter(None, [", ".join(adjectives), noun]))
     if soft_spot:
         headline += f" with a soft spot for {soft_spot.lower()}"

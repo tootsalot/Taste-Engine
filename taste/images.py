@@ -20,6 +20,7 @@ import contextlib
 import hashlib
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -50,6 +51,10 @@ REDIRECTS = {301, 302, 303, 307, 308}
 MAX_CACHE_BYTES = 300 * 1024 * 1024
 MAX_FILE_BYTES = 5 * 1024 * 1024
 TIMEOUT_SECONDS = (5, 10)  # connect, read: short, so quitting the app never waits long
+# A timeout or a server error is usually passing: tried again after this long. A 404, a
+# file that isn't an image, or one over the cap stays failed for the session.
+RETRY_TRANSIENT_SECONDS = 600
+TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
 PARTIAL = ".part"
 
 
@@ -82,6 +87,10 @@ def file_name(url: str) -> str:
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:32] + ext
 
 
+class TransientError(ValueError):
+    """A server error or rate limit: worth asking again later."""
+
+
 class ImageCache:
     """Disk cache shared by every profile. Safe to call from several threads."""
 
@@ -91,12 +100,15 @@ class ImageCache:
         *,
         max_bytes: int = MAX_CACHE_BYTES,
         session: Any = None,
+        clock: Any = time.monotonic,
     ) -> None:
         self.root = root or default_root()
         self.max_bytes = max_bytes
         self.session = session if session is not None else requests.Session()
+        self.clock = clock
         self._lock = threading.Lock()
-        self._failed: set[str] = set()  # URLs that failed this session; not retried
+        # URLs that failed: when to try again (None: not this session).
+        self._failed: dict[str, float | None] = {}
         # Bytes on disk: counted once, then kept up to date, so storing an image doesn't
         # list the whole folder unless the cache may be over its cap.
         self._total: int | None = None
@@ -115,20 +127,36 @@ class ImageCache:
             return None
         return path
 
-    def get(self, url: str) -> Path | None:
-        """The cached file, downloading it first if needed. None if it can't be had."""
-        if not allowed(url) or url in self._failed:
+    def get(self, url: str, retry: bool = False) -> Path | None:
+        """The cached file, downloading it first if needed. None if it can't be had.
+
+        A URL that failed is skipped for the rest of the session, unless `retry` (Rev's
+        Rebuild: a cover that failed once used to stay a placeholder until a restart)."""
+        if not allowed(url) or (self._still_failed(url) and not retry):
             return None
+        self._failed.pop(url, None)
         path = self.cached(url)
         if path is not None:
             return path
         try:
             data = self._download(url)
-        except (requests.RequestException, ValueError, OSError):
+        except (requests.RequestException, ValueError, OSError) as exc:
             # The message isn't kept: nothing here is worth more than "no picture".
-            self._failed.add(url)
+            passing = isinstance(exc, (requests.RequestException, TransientError))
+            self._failed[url] = self.clock() + RETRY_TRANSIENT_SECONDS if passing else None
             return None
         return self._store(url, data)
+
+    def failed_for_good(self, url: str) -> bool:
+        """A 404, a file that isn't an image, or one over the cap: not worth asking again
+        this session (a timeout or a server error is)."""
+        return url in self._failed and self._failed[url] is None
+
+    def _still_failed(self, url: str) -> bool:
+        if url not in self._failed:
+            return False
+        retry_at = self._failed[url]
+        return retry_at is None or self.clock() < retry_at
 
     def _download(self, url: str, hops: int = 1) -> bytes:
         response = self.session.get(
@@ -143,6 +171,8 @@ class ImageCache:
                 same_host = urlsplit(target).hostname == urlsplit(url).hostname
                 if target != url and allowed(target) and same_host:
                     return self._download(target, hops - 1)
+            if response.status_code in TRANSIENT_STATUSES:
+                raise TransientError(f"HTTP {response.status_code}")
             if response.status_code != 200:
                 raise ValueError(f"HTTP {response.status_code}")
             kind = (response.headers.get("Content-Type") or "").lower()

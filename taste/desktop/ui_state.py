@@ -8,6 +8,7 @@ broken file just means the defaults.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from taste.config import data_dir
@@ -27,8 +28,12 @@ def save(**changes: Any) -> None:
     state = load()
     state.update(changes)
     path = data_dir() / FILE_NAME
+    partial = path.with_name(FILE_NAME + ".part")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        # Written aside and swapped in, so a save cut short never leaves a broken file
+        # (which reads as empty, losing every preference).
+        partial.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        os.replace(partial, path)
     except OSError:
         pass  # a preference that can't be saved isn't worth an error dialog

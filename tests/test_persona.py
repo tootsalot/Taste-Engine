@@ -47,3 +47,15 @@ def test_one_critical_medium_keeps_its_own_trait():
         "0.9 below MAL on average",
         "0.6 above TMDB on average",
     ]
+
+
+def test_the_soft_spot_comes_from_the_headline_s_own_medium():
+    """'The night owl listener with a soft spot for fantasy' named a book genre on a
+    music headline. The soft spot is now the anime genre for an anime fan, the book
+    genre for a reader, and left out for a listener or film buff."""
+    from taste.persona import soft_spot_for
+
+    assert soft_spot_for("anime fan", "Drama", "Fantasy") == "Drama"
+    assert soft_spot_for("reader", "Drama", "Fantasy") == "Fantasy"
+    assert soft_spot_for("listener", "Drama", "Fantasy") is None
+    assert soft_spot_for("film buff", "Drama", None) is None

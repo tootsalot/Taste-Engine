@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
-from taste.db import utc_now
+from taste.db import TIMESTAMP_FORMAT, utc_now
 
 INTERRUPTED_MESSAGE = "interrupted (process ended before the run finished)"
+# Longer than any sync takes (the slowest, a first MAL enrichment, is about 13 minutes).
+STALE_RUN = timedelta(hours=6)
 
 
 class SyncRun:
@@ -25,11 +28,14 @@ class SyncRun:
         self.rows_fetched = 0
         self.rows_inserted = 0
         self.rows_updated = 0
-        # A run still marked 'running' means the process died mid-run last time.
+        # A run still marked 'running' long after it started means its process died
+        # mid-run. A recent one may still be going in another process (the CLI next to
+        # the app), so it's left alone.
+        stale = (datetime.now(timezone.utc) - STALE_RUN).strftime(TIMESTAMP_FORMAT)
         conn.execute(
             "UPDATE sync_runs SET status = 'failed', ended_at = ?, error_message = ? "
-            "WHERE source = ? AND status = 'running'",
-            (utc_now(), INTERRUPTED_MESSAGE, source),
+            "WHERE source = ? AND status = 'running' AND started_at < ?",
+            (utc_now(), INTERRUPTED_MESSAGE, source, stale),
         )
         cursor = conn.execute(
             "INSERT INTO sync_runs (source, mode, started_at, status) VALUES (?, ?, ?, 'running')",

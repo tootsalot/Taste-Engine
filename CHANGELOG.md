@@ -2,6 +2,45 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [2.2.0]
+
+An audit of the whole app: Rev's Rebuild really rebuilds, adult anime is hidden without losing any history, and about thirty fixes for wrong numbers, crashes at exit, and wasted requests.
+
+Rev
+- Rebuild asks again for pictures that couldn't be downloaded before, instead of keeping the placeholder until the app restarts
+- Rebuild also replaces the cards of that recap I'd already saved, found by which card they are and renamed if the deck grew; cards I never saved stay unsaved
+- A recap made while a picture couldn't load is drawn again by itself once it can
+- The year card never calls a later show the first or last finish of the year
+
+Adult anime
+- Every sync now brings in adult shows, so turning off "Include NSFW anime" never removes their scores or episode history
+- With it off they still count in every number, but they're never named or pictured: not on the Dashboard, Rev, the Reports wall, CSV exports, or in a suggestion's reasons
+
+Numbers that were wrong
+- A rewatch years later no longer changes how many episodes count in the month I first finished the show
+- Books vs Hardcover compares the same books on both sides
+- Films and TV count by my local day, like everything else, so an evening rating on New Year's Eve lands in the right year
+- A read-through deleted on Hardcover stops counting on the next sync, not a week later
+- A MAL list longer than one page is read again before an entry is treated as removed, so an edit during a sync can't delete a show's history
+- The Your taste headline names a genre only from its own medium
+
+Crashes and quitting
+- Closing the app during a sync, a Test connection, or a recap drawing waits for it in the background instead of crashing
+- Ctrl+C in the terminal closes the app cleanly when it's run from source
+- A locked or broken credential store says "Couldn't read the saved keys" instead of failing, and Sync everything goes on with the other sources
+- Deleting a profile that's in use leaves its keys alone
+- A sync running in another window is no longer marked interrupted
+
+Fixes
+- Not interested on a suggested book sticks
+- Pictures that failed on a timeout or a server error get another try after ten minutes, and Clear in Settings gives every failed picture another try
+- The artist picture is found whatever the capitals in the name
+- A stray request to the sign-in page no longer ends a Hardcover sign-in, and saying no on Hardcover still ends it at once
+- Titles in CSV exports that start like a spreadsheet formula are written as text
+- Window preferences are saved so a crash mid-save can't wipe them
+- The sidebar's arrow keys and the status dot's tooltip follow the app's own rules for safe widgets and plain text
+- Music suggestions look up each artist's details once, a TMDB title that's gone isn't asked for on every sync, and a Hardcover book that's gone waits a month before it's asked for again
+
 ## [2.1.0]
 
 Cleanup, consistency, and speed: one place for every source, steadier motion, fewer empty corners, and more settings.

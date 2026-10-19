@@ -139,3 +139,27 @@ def test_a_lone_source_or_one_never_synced_is_named(conn):
         "mal",
         "lastfm",
     ]
+
+
+class LockedKeyring(FakeKeyring):
+    """A credential store that refuses every read (a locked session, a policy)."""
+
+    def get_password(self, service, entry):
+        raise OSError("locked")
+
+
+def test_a_credential_store_that_fails_reads_as_not_connected(conn):
+    store = SecretStore(backend=LockedKeyring())
+    found = {s.source: s for s in source_status.load(conn, "me", store)}
+    assert not any(s.connected for s in found.values())  # used to raise on the UI thread
+    assert found["hardcover"].needs == "Couldn't read the saved keys"
+
+
+def test_sync_everything_goes_on_past_a_credential_store_error(conn):
+    from taste import runner
+
+    lines = []
+    store = SecretStore(backend=LockedKeyring())
+    results = runner.sync_sources(conn, "me", "mal", store=store, out=lines.append)
+    assert results == {"mal": False}
+    assert any("credential store" in line for line in lines)

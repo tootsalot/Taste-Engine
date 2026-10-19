@@ -155,6 +155,8 @@ def test_test_connection_reports_under_the_card(window, qtbot):
     set_up_profile(window)
     card = window.settings.sources
     worker = card.test_connection("mal")
+    # Closing the app mid-test waits for it: short jobs go through ctx.track.
+    assert worker in window.ctx.threads
     with qtbot.waitSignal(worker.done, timeout=5000):
         pass
     qtbot.waitUntil(lambda: "connected as example_user" in card.message.text())

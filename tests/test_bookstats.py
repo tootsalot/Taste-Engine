@@ -110,3 +110,30 @@ def test_your_stars_against_hardcover_by_band(conn, make_client):
     # Five rated books, each with a Hardcover average: grouped by quarter star.
     assert sum(b.shows for b in s.bands) == 5
     assert all(b.mal_to - b.mal_from == 0.25 for b in s.bands)
+
+
+def test_you_vs_hardcover_compares_the_same_books(conn, make_client):
+    """A rated book Hardcover has no average for used to count in my side of the
+    difference only, so "vs Hardcover" mixed two sets of books."""
+    from statistics import mean
+
+    from taste import overview
+
+    synced(conn, make_client)
+    conn.execute(
+        "UPDATE stg_hardcover_books SET rating = NULL WHERE title = 'Example Quiet Harbor'"
+    )
+    s = bookstats.load(conn)
+    pairs = [
+        (r[0], r[1])
+        for r in conn.execute(
+            "SELECT DISTINCT ub.user_book_id, ub.rating, b.rating FROM stg_hardcover_user_books ub "
+            "JOIN stg_hardcover_books b ON b.book_id = ub.book_id "
+            "WHERE ub.rating IS NOT NULL AND b.rating IS NOT NULL AND ub.removed_at IS NULL "
+            "AND ub.status_id = 3"
+        ).fetchall()
+        for r in [r[1:]]
+    ]
+    assert s.vs_hardcover == round(mean(mine - crowd for mine, crowd in pairs), 2)
+    books = next(n for n in overview.vs_crowd(conn) if n.kind == "books")
+    assert books.value == f"{s.vs_hardcover:+.1f}★"

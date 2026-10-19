@@ -7,6 +7,7 @@ August, September, and October 2026. Times are in the default zone, Phoenix.
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -159,6 +160,27 @@ def test_episodes_are_recorded_when_progress_goes_up(world):
     world["mal"].entries.pop()  # removed from the list: its episodes go too
     world["sync_mal"]()
     assert episode_keys(conn) == []
+
+
+def test_a_later_rewatch_leaves_the_month_it_was_finished_alone(world):
+    """August counts all 24 episodes of a show finished before episode tracking. A rewatch
+    in October records episode events for it, which used to drop August to 0 for it."""
+    conn = world["conn"]
+    august = ("2026-08-01", "2026-09-01")
+    assert activity.episodes_watched(conn, *august).count == 24
+    entries = list_now()
+    summer = SHOWS[304]
+    entries[3] = entry(summer, "completed", 9, "2026-08-05", episodes=0)
+    entries[3]["list_status"]["is_rewatching"] = True
+    world["mal"].entries = entries
+    world["sync_mal"]()
+    entries[3] = entry(summer, "completed", 9, "2026-08-05", episodes=4,
+                       updated="2026-10-05T03:00:00+00:00")  # fmt: skip
+    entries[3]["list_status"]["is_rewatching"] = True
+    world["sync_mal"]()
+    assert [k for k in episode_keys(conn) if k.startswith("304:")]  # the rewatch is tracked
+    assert activity.episodes_watched(conn, "2026-10-01", "2026-11-01").count == 4
+    assert activity.episodes_watched(conn, *august).count == 24
 
 
 def episode_keys(conn):
@@ -333,6 +355,48 @@ def test_a_late_first_launch_still_gets_last_months_recap(world):
     assert Period("month", "2026-11") not in recap.due(
         conn, datetime(2027, 1, 20, tzinfo=timezone.utc)
     )
+
+
+def test_a_recap_drawn_without_its_pictures_is_drawn_again_once_they_load(world, qapp, tmp_path):
+    """Offline when September was first made: every picture was the placeholder, and with
+    the same numbers it was never drawn again until it turned final."""
+    from taste import images
+    from taste.desktop.workers import RecapWorker
+    from tests.fake_images import FakeImageSession, image_bytes
+    from tests.fake_recs import LASTFM_CDN, MAL_CDN
+
+    conn = world["conn"]
+    db_file = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    cover = LASTFM_CDN.format("lp1")  # First LP, on the music card
+
+    def auto(session, folder="img"):
+        worker = RecapWorker("me", images.ImageCache(tmp_path / folder, session=session), OCT_14)
+        worker.path = db_file
+        worker.run()  # here, not in a thread
+        return worker
+
+    offline = FakeImageSession()
+    for url in (cover, MAL_CDN.format(301), MAL_CDN.format(302)):
+        offline.files[url] = (503, "text/html", b"busy")  # a passing failure
+    auto(offline)
+    row = "SELECT pictures_missing FROM recap_runs WHERE period_key = '2026-09'"
+    assert conn.execute(row).fetchone()[0] >= 1
+    card = recap.folder("me", Period("month", "2026-09")) / "02-music.png"
+    before = card.read_bytes()
+    online = FakeImageSession()
+    online.add(cover, image_bytes(color="#FF7A6B"))
+    for anime_id in (301, 302):  # the anime card's posters
+        online.add(MAL_CDN.format(anime_id), image_bytes(fmt="JPEG"), "image/jpeg")
+    auto(online)  # same numbers, but now the pictures load
+    assert conn.execute(row).fetchone()[0] == 0
+    assert card.read_bytes() != before
+    drawn = card.stat().st_mtime_ns
+    auto(online)  # nothing changed and nothing missing: not drawn again
+    assert card.stat().st_mtime_ns == drawn
+    # A picture that's gone for good (404) isn't worth drawing again for: not counted.
+    conn.execute("UPDATE recap_runs SET fingerprint = 'older' WHERE period_key = '2026-09'")
+    auto(FakeImageSession(), folder="fresh")  # nothing cached: every picture answers 404
+    assert conn.execute(row).fetchone()[0] == 0
 
 
 def test_cards_draw_at_phone_story_size(world, qapp):

@@ -120,6 +120,52 @@ def test_bad_responses_are_not_cached(cache, session, status, content_type, body
     assert cache.get(POSTER) is not None
 
 
+def test_a_timeout_or_server_error_is_tried_again_after_a_while(tmp_path, session):
+    """A brief hiccup used to leave a picture a placeholder until the app restarted."""
+    now = [1000.0]
+    cache = images.ImageCache(tmp_path / "images", session=session, clock=lambda: now[0])
+    session.files[POSTER] = (503, "text/html", b"busy")
+    session.files[COVER] = (404, "text/html", b"not found")
+    assert cache.get(POSTER) is None and cache.get(COVER) is None
+    session.add(POSTER, image_bytes(), "image/jpeg")
+    session.add(COVER, image_bytes(), "image/png")
+    assert cache.get(POSTER) is None  # not straight away
+    now[0] += images.RETRY_TRANSIENT_SECONDS
+    assert cache.get(POSTER) is not None  # the server error was passing
+    assert cache.get(COVER) is None  # a 404 stays failed for the session
+    assert [c["url"] for c in session.calls].count(COVER) == 1
+
+
+def test_the_loader_tries_a_failed_picture_again_after_a_while(qapp, tmp_path, session):
+    now = [1000.0]
+    loader = ArtLoader(images.ImageCache(tmp_path / "images", session=session))
+    loader.clock = lambda: now[0]
+    size = QSize(40, 60)
+    key = "https://cdn.myanimelist.net/images/anime/1/9.jpg"
+    loader.failed[f"{key}@40x60"] = now[0]
+    assert loader.pixmap(key, size) is None and loader.is_idle()  # remembered: not asked
+    now[0] += images.RETRY_TRANSIENT_SECONDS
+    loader.pixmap(key, size)
+    assert not loader.is_idle()  # asked again
+    loader.shutdown()
+    # One the cache knows is gone for good (a 404) isn't asked again this session.
+    gone = "https://cdn.myanimelist.net/images/anime/1/8.jpg"
+    loader.cache._failed[gone] = None
+    loader.failed[f"{gone}@40x60"] = now[0]
+    now[0] += images.RETRY_TRANSIENT_SECONDS
+    loader.pending.clear()
+    assert loader.pixmap(gone, size) is None and f"{gone}@40x60" not in loader.pending
+
+
+def test_retry_asks_again_for_a_picture_that_failed(cache, session):
+    session.files[POSTER] = (404, "text/html", b"not found")
+    assert cache.get(POSTER) is None
+    session.add(POSTER, image_bytes(), "image/jpeg")
+    assert cache.get(POSTER) is None and len(session.calls) == 1  # still marked as failed
+    assert cache.get(POSTER, retry=True) is not None and len(session.calls) == 2
+    assert cache.get(COVER, retry=True) is not None  # a URL that never failed: as usual
+
+
 GIF_COVER = "https://lastfm-img.freetls.fastly.net/i/u/300x300/0123456789abcdef.gif"
 PNG_COVER = "https://lastfm-img.freetls.fastly.net/i/u/300x300/0123456789abcdef.png"
 

@@ -370,6 +370,8 @@ def test_rediscover_window(conn, music_world):
     assert old.subtitle == f"Last played {last:%b} {last.day}, {last.year}"
     # Artist art: the cover of their most-played album.
     assert old.image_url == "https://lastfm.freetls.fastly.net/i/u/300x300/olddays.png"
+    # Found whatever the capitals (Rev asks by the name a chart shows).
+    assert recommend.artist_picture(conn, "EXAMPLE OLD FAVORITE") == old.image_url
 
     # 181 days later, Still Around has been quiet long enough too.
     _, later = recommend.music_recommendations(conn, NOW_DT + timedelta(days=171))

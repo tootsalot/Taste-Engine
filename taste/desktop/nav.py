@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -26,9 +26,24 @@ from taste.desktop.widgets import label, plain_tip
 ICON = QSize(20, 20)
 
 
-def nav_button(icon: str, text: str = "") -> QPushButton:
+class NavButton(QPushButton):
+    """A sidebar row that passes Up and Down on as `step` (-1 or 1). The keys are handled
+    here, not by an event filter on the row: Qt can call a filter on a child widget while
+    a closing window is torn down, after its Python side is gone."""
+
+    step = Signal(int)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        delta = {Qt.Key.Key_Up: -1, Qt.Key.Key_Down: 1}.get(event.key())
+        if delta:
+            self.step.emit(delta)
+        else:
+            super().keyPressEvent(event)
+
+
+def nav_button(icon: str, text: str = "") -> NavButton:
     """A full-width sidebar row: icon 10 px in, then the page name."""
-    button = QPushButton(text)
+    button = NavButton(text)
     button.setProperty("role", "nav")
     button.setIcon(theme.icon(icon))
     button.setIconSize(ICON)
@@ -63,7 +78,7 @@ class NavList(QWidget):
         layout.setSpacing(2)
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
-        self.buttons: list[QPushButton] = []
+        self.buttons: list[NavButton] = []
 
         self.status = QWidget()
         status_row = QHBoxLayout(self.status)
@@ -97,22 +112,20 @@ class NavList(QWidget):
                 self.headings.append((text, line))
             button = nav_button(icon, name)
             button.setCheckable(True)
-            button.installEventFilter(self)
+            button.step.connect(self._step)
             self.group.addButton(button, index)
             layout.addWidget(button)
             self.buttons.append(button)
         self.group.idToggled.connect(self._on_toggled)
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt naming)
+    def _step(self, delta: int) -> None:
         """Up and Down move between pages, like the list this replaced."""
-        if event.type() == QEvent.Type.KeyPress and obj in self.buttons:
-            step = {Qt.Key.Key_Up: -1, Qt.Key.Key_Down: 1}.get(event.key())
-            if step:
-                row = (self.buttons.index(obj) + step) % len(self.buttons)
-                self.setCurrentRow(row)
-                self.buttons[row].setFocus()
-                return True
-        return super().eventFilter(obj, event)
+        button = self.sender()
+        if button not in self.buttons:
+            return
+        row = (self.buttons.index(button) + delta) % len(self.buttons)
+        self.setCurrentRow(row)
+        self.buttons[row].setFocus()
 
     # -- the QListWidget-like part -------------------------------------------
 
@@ -153,7 +166,7 @@ class NavList(QWidget):
     def set_status(self, text: str, state: str, details: str = "") -> None:
         """The last sync, under the pages. Collapsed, only the dot shows; hover for words."""
         self.status_text.setText(text)
-        self.status_dot.setToolTip("\n".join(filter(None, (text, details))))
+        self.status_dot.setToolTip(plain_tip("\n".join(filter(None, (text, details)))))
         self.status_text.setToolTip(plain_tip(details))
         self.status_dot.setProperty("state", state)
         self.status_dot.style().unpolish(self.status_dot)

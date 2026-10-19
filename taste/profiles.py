@@ -130,9 +130,12 @@ def delete(profile_id: str, root: Path | None = None, store: Any = None) -> None
     path = db_path(profile_id, root)
     if not path.exists():
         raise ProfileError(f"No profile named {profile_id!r}.")
-    (store or SecretStore(root)).delete_all(profile_id)
-    for suffix in ("", "-journal", "-wal", "-shm"):
+    # The database first: if it can't go (open elsewhere on Windows), this raises before
+    # the keys are touched, and the profile stays whole instead of losing its keys.
+    path.unlink()
+    for suffix in ("-journal", "-wal", "-shm"):
         Path(f"{path}{suffix}").unlink(missing_ok=True)
+    (store or SecretStore(root)).delete_all(profile_id)
 
 
 # Everything the app keeps in its data folder: profiles (and their fallback key files),

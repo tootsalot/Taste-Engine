@@ -45,12 +45,27 @@ def test_scope_note_survives_reconnect(tmp_path):
 
 def test_stale_running_row_is_marked_failed(conn):
     first = SyncRun(conn, "mal", "full")  # never finished, like a killed process
+    conn.execute(
+        "UPDATE sync_runs SET started_at = '2026-01-01 00:00:00' WHERE sync_run_id = ?",
+        (first.run_id,),
+    )
     SyncRun(conn, "mal", "full")
     row = conn.execute(
         "SELECT status, error_message FROM sync_runs WHERE sync_run_id = ?", (first.run_id,)
     ).fetchone()
     assert row["status"] == "failed"
     assert row["error_message"] == INTERRUPTED_MESSAGE
+
+
+def test_a_run_still_going_elsewhere_is_left_alone(conn):
+    """The CLI and the app at once: a sync starting must not mark the other's live run
+    as interrupted. Only a run that started longer ago than any sync takes is."""
+    other = SyncRun(conn, "lastfm", "enrich")  # running right now, in another process
+    SyncRun(conn, "lastfm", "incremental")
+    status = conn.execute(
+        "SELECT status FROM sync_runs WHERE sync_run_id = ?", (other.run_id,)
+    ).fetchone()[0]
+    assert status == "running"
 
 
 def test_transaction_rolls_back(conn):
@@ -117,3 +132,19 @@ def test_setting_the_same_image_again_writes_nothing(conn):
     assert conn.total_changes == before + 1
     url = conn.execute("SELECT url FROM core_item_images WHERE item_id = ?", (item,)).fetchone()
     assert url[0] == "https://cdn.myanimelist.net/b.jpg"
+
+
+def test_a_transaction_sqlite_already_rolled_back_keeps_the_real_error(conn):
+    """On a full disk or an I/O error SQLite rolls back by itself; the extra ROLLBACK then
+    failed with "no transaction is active" and hid what really went wrong."""
+    import pytest
+
+    from taste.db import transaction
+
+    class DiskFull(Exception):
+        pass
+
+    with pytest.raises(DiskFull), transaction(conn):
+        conn.execute("ROLLBACK")  # what SQLite does by itself on those errors
+        raise DiskFull
+    assert not conn.in_transaction

@@ -156,7 +156,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write((SIGNED_IN_PAGE if good else REFUSED_PAGE).encode())
-        self.server.query = query
+        # Only the answer to this sign-in ends the wait. A stray request (an old tab, a
+        # prefetch) used to end it, and the real redirect then found the listener closed.
+        # A refusal without state ends it too: it carries no code, and some servers leave
+        # state off errors.
+        refused = "error" in query and "state" not in query
+        if query.get("state") == self.server.state or refused:
+            self.server.query = query
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         pass  # the URL carries the one-time code; keep it out of the console
@@ -720,9 +726,11 @@ def _upsert_staging(
         (values["book_id"], *book.values(), raw_id, now),
     )
 
+    seen_reads = []
     for read in row.get("user_book_reads") or []:
         if not isinstance(read, dict) or read.get("id") is None:
             continue
+        seen_reads.append(int(read["id"]))
         conn.execute(
             "INSERT INTO stg_hardcover_reads (read_id, user_book_id, started_at, finished_at, "
             "edition_id, first_seen_at, last_seen_run_id, last_raw_page_id) "
@@ -742,6 +750,17 @@ def _upsert_staging(
                 raw_id,
             ),
         )
+    # The book came back with all its read-throughs, so one missing from it was deleted on
+    # Hardcover. Settled here even on a changes-only read, which can't see removed books.
+    # Only against a reads list that came back: a row without one says nothing about reads.
+    if not isinstance(row.get("user_book_reads"), list):
+        return change
+    marks = ", ".join("?" for _ in seen_reads)
+    conn.execute(
+        "UPDATE stg_hardcover_reads SET removed_at = ? WHERE user_book_id = ? "
+        "AND removed_at IS NULL" + (f" AND read_id NOT IN ({marks})" if seen_reads else ""),
+        (now, user_book_id, *seen_reads),
+    )
     return change
 
 
@@ -1034,10 +1053,14 @@ def enrich_recommendations(
                         save_book(conn, book, raw_id, stamp)
                         found.add(int(book["id"]))
                 # Asked for but not sent back (removed, merged): don't ask again for a month.
+                # Most aren't in staging at all, so a placeholder row (no average, so never
+                # suggested) holds the note; a library sync fills it in if it ever shows up.
                 for missing in set(ids) - found:
                     conn.execute(
-                        "UPDATE stg_hardcover_books SET details_at = ? WHERE book_id = ?",
-                        (stamp, missing),
+                        "INSERT INTO stg_hardcover_books (book_id, title, updated_at, details_at) "
+                        "VALUES (?, ?, ?, ?) ON CONFLICT (book_id) DO UPDATE SET "
+                        "details_at = excluded.details_at",
+                        (missing, f"Hardcover book {missing}", stamp, stamp),
                     )
                 run.pages_fetched += 1
                 run.rows_fetched += len(found)

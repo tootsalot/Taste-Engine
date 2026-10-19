@@ -269,6 +269,31 @@ class Finished:
     episode_seconds: int | None
     genres: list[str] = field(default_factory=list)
     guessed: bool = False  # the date is the last list edit, not a typed finish date
+    hidden: bool = False  # an adult show while "Include NSFW anime" is off: counted, not shown
+
+
+def hide_nsfw(conn: sqlite3.Connection) -> bool:
+    """Whether adult shows (MAL's nsfw "black") are kept off screen. They still count."""
+    return not settings.get(conn, "include_nsfw")
+
+
+def hidden_items(conn: sqlite3.Connection) -> set[int]:
+    """Core ids of the shows kept off screen right now (none while NSFW is included)."""
+    if not hide_nsfw(conn):
+        return set()
+    return {
+        r[0]
+        for r in conn.execute(
+            "SELECT x.item_id FROM core_item_external_ids x JOIN stg_mal_anime s "
+            "ON s.mal_anime_id = CAST(x.external_id AS INTEGER) "
+            "WHERE x.source = 'mal' AND x.id_type = 'mal_anime_id' AND s.nsfw_rating = 'black'"
+        )
+    }
+
+
+def shown(shows: list[Finished]) -> list[Finished]:
+    """The shows that may be named or pictured (adult ones left out while hidden)."""
+    return [f for f in shows if not f.hidden]
 
 
 def first_sync_at(conn: sqlite3.Connection, source: str) -> str | None:
@@ -291,6 +316,7 @@ def finished_shows(
     it happened). Older guesses still count in all-time totals (`every_guess`).
     """
     first_sync = first_sync_at(conn, "mal") or "9999"
+    hide = hide_nsfw(conn)
     rows = conn.execute(
         "SELECT e.item_id, i.title, i.title_alt, e.occurred_at_utc, e.time_basis, l.local_date, "
         "  r.raw_score, cr.mean_score, img.url, s.nsfw_rating, s.num_episodes, "
@@ -326,6 +352,7 @@ def finished_shows(
                 episodes=row[10],
                 episode_seconds=row[11],
                 guessed=guessed,
+                hidden=hide and row[9] == "black",
             )
         )
     if found:
@@ -354,11 +381,12 @@ def episodes_watched(
     """Episodes watched in the period.
 
     From the episode events a MAL sync records when it sees my progress go up, plus,
-    for shows finished in the period with no such events (finished before syncing
-    tracked episodes), all of their episodes.
+    for shows finished in the period with no such events by the period's end (finished
+    before syncing tracked episodes), all of their episodes. Events after the period (a
+    rewatch years later) don't change it.
     """
     count = seconds = 0
-    tracked: set[int] = set()
+    tracked: set[int] = set()  # shows with episode events by the end of the period
     for item_id, local_date, ep_seconds in conn.execute(
         "SELECT e.item_id, l.local_date, s.avg_episode_seconds FROM core_behavior_events e "
         "JOIN core_event_local_times l ON l.event_id = e.event_id "
@@ -367,7 +395,8 @@ def episodes_watched(
         "LEFT JOIN stg_mal_anime s ON s.mal_anime_id = CAST(x.external_id AS INTEGER) "
         "WHERE e.source = 'mal' AND e.event_type = 'episode_watched'"
     ):
-        tracked.add(item_id)
+        if local_date < end:
+            tracked.add(item_id)
         if start <= local_date < end:
             count += 1
             seconds += ep_seconds or 0
@@ -537,7 +566,7 @@ def has_tmdb(conn: sqlite3.Connection) -> bool:
 def glance(conn: sqlite3.Connection, period: Period) -> Glance:
     start, end = period.start, period.end
     finished = finished_shows(conn, start, end)
-    scored = [f for f in finished if f.my_score is not None]
+    scored = [f for f in shown(finished) if f.my_score is not None]
     artists = top_artists(conn, start, end, 1)
     return Glance(
         period=period,

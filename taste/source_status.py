@@ -85,6 +85,13 @@ def _items(conn: sqlite3.Connection, source: str) -> str:
 
 
 def _needs(conn: sqlite3.Connection, profile_id: str, store: SecretStore, source: str) -> str:
+    try:
+        return _missing(conn, profile_id, store, source)
+    except SecretStoreError:  # a locked or broken credential store: say so, don't crash
+        return "Couldn't read the saved keys"
+
+
+def _missing(conn: sqlite3.Connection, profile_id: str, store: SecretStore, source: str) -> str:
     if source in USERNAMES:
         missing = []
         if not credentials.username(conn, *USERNAMES[source]):

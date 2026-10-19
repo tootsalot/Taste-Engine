@@ -106,3 +106,31 @@ def test_the_app_flag_runs_the_cleanup_without_a_window(monkeypatch):
     assert not folder.exists()
     monkeypatch.delenv("TASTE_DATA_DIR")
     assert desktop.main(["taste-engine", "--delete-all-data"]) == 1  # refused from source
+
+
+def test_a_profile_whose_file_is_locked_keeps_its_keys(monkeypatch):
+    """Keys used to go first; when the database couldn't be deleted (open elsewhere on
+    Windows) the profile stayed, with every key and account sign-in gone."""
+    from pathlib import Path
+
+    import pytest
+
+    from taste import profiles
+    from taste.secrets_store import SecretStore
+    from tests.conftest import FakeKeyring
+
+    store = SecretStore(backend=FakeKeyring())
+    profiles.create("locked")
+    store.set("locked", "MAL_CLIENT_ID", "example-client-id")
+    real_unlink = Path.unlink
+
+    def locked(self, missing_ok=False):
+        if self.name == "locked.db":
+            raise PermissionError("in use")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", locked)
+    with pytest.raises(PermissionError):
+        profiles.delete("locked", store=store)
+    assert profiles.exists("locked")
+    assert store.get("locked", "MAL_CLIENT_ID") == "example-client-id"

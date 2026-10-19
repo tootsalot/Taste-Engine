@@ -170,12 +170,7 @@ class RecapData:
     def slides(self) -> list[tuple[str, list[str]]]:
         """The cards to swipe through: (card name, the parts drawn on it), at most seven.
         A card none of whose parts has anything to show is left out."""
-        found = []
-        for name, parts in SLIDES:
-            on_card = [part for part in parts if part in self.cards]
-            if on_card:
-                found.append((name, on_card))
-        return found
+        return slides_for(self.cards)
 
     def file_names(self) -> list[str]:
         """The cards in the recap's own folder: "01-cover.png", "02-music.png", ..."""
@@ -233,10 +228,15 @@ def _anime(conn: sqlite3.Connection, period: Period) -> Anime | None:
     )
     genres = Counter(g for f in finished for g in f.genres)
     top_genre = min(genres.items(), key=lambda g: (-g[1], g[0])) if genres else None
-    best = min(scored, key=lambda f: (-f.my_score, f.title), default=None)
+    # Adult shows count above but are never named or pictured while hidden.
+    visible = activity.shown(finished)
+    best = min(
+        (f for f in visible if f.my_score is not None), key=lambda f: (-f.my_score, f.title),
+        default=None,
+    )  # fmt: skip
     return Anime(
         finished=len(finished),
-        posters=[_show(f) for f in sorted(finished, key=lambda f: (f.day, f.title), reverse=True)][
+        posters=[_show(f) for f in sorted(visible, key=lambda f: (f.day, f.title), reverse=True)][
             :POSTERS_SHOWN
         ],
         episodes=episodes.count,
@@ -375,8 +375,9 @@ def _year(conn: sqlite3.Connection, period: Period) -> YearView | None:
     shows = [sum(1 for f in finished if f.day[:7] == m.key) for m in months]
     read = activity.books_read(conn, period.start, period.end)
     films = activity.rated(conn, "movie", period.start, period.end)
+    visible = activity.shown(finished)  # named on the card; every show is counted
     scored = sorted(
-        (f for f in finished if f.my_score is not None),
+        (f for f in visible if f.my_score is not None),
         key=lambda f: (-f.my_score, f.title),
     )
     busiest = max(range(12), key=lambda i: (plays[i], -i)) if any(plays) else None
@@ -390,8 +391,9 @@ def _year(conn: sqlite3.Connection, period: Period) -> YearView | None:
         busiest_month=(activity.MONTH_NAMES[busiest], plays[busiest])
         if busiest is not None
         else None,
-        first_finish=_show(finished[0]) if finished else None,
-        last_finish=_show(finished[-1]) if finished else None,
+        # The real first and last, or nothing: naming a later show "first" isn't true.
+        first_finish=_show(finished[0]) if finished and not finished[0].hidden else None,
+        last_finish=_show(finished[-1]) if finished and not finished[-1].hidden else None,
     )
 
 
@@ -533,10 +535,13 @@ def record(
     data: RecapData,
     now: datetime | None = None,
     announced: bool = False,
+    missing: int | None = None,
 ) -> bool:
     """Note that a recap was made (or rebuilt). Returns True the first time.
 
     `announced`: made by hand, so the Dashboard banner shouldn't say it's ready later.
+    `missing`: how many pictures were placeholders when it was drawn (None: not drawn
+    now, keep the count from the last drawing).
     """
     period = data.period
     new = (
@@ -549,10 +554,11 @@ def record(
     final = activity.today(conn, now) >= _window_ends(period)
     conn.execute(
         "INSERT INTO recap_runs (period_kind, period_key, built_at, fingerprint, cards, final, "
-        "announced) VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "announced, pictures_missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (period_kind, period_key) DO UPDATE SET "
         "built_at = excluded.built_at, fingerprint = excluded.fingerprint, "
-        "cards = excluded.cards, final = excluded.final",
+        "cards = excluded.cards, final = excluded.final"
+        + ("" if missing is None else ", pictures_missing = excluded.pictures_missing"),
         (
             period.kind,
             period.key,
@@ -561,6 +567,7 @@ def record(
             len(data.cards),
             int(final),
             int(announced),
+            missing or 0,
         ),
     )
     return new
@@ -572,6 +579,15 @@ def stored_fingerprint(conn: sqlite3.Connection, period: Period) -> str | None:
         (period.kind, period.key),
     ).fetchone()
     return row[0] if row else None
+
+
+def pictures_missing(conn: sqlite3.Connection, period: Period) -> int:
+    """How many pictures were placeholders when the recap was last drawn."""
+    row = conn.execute(
+        "SELECT pictures_missing FROM recap_runs WHERE period_kind = ? AND period_key = ?",
+        (period.kind, period.key),
+    ).fetchone()
+    return row[0] if row else 0
 
 
 def mark_final(conn: sqlite3.Connection, period: Period) -> None:
@@ -597,6 +613,45 @@ def mark_announced(conn: sqlite3.Connection, period: Period) -> None:
         "UPDATE recap_runs SET announced = 1 WHERE period_kind = ? AND period_key = ?",
         (period.kind, period.key),
     )
+
+
+def slides_for(parts: list[str]) -> list[tuple[str, list[str]]]:
+    """(card name, its parts) for the parts a recap has, in SLIDES order."""
+    found = []
+    for name, card_parts in SLIDES:
+        on_card = [part for part in card_parts if part in parts]
+        if on_card:
+            found.append((name, on_card))
+    return found
+
+
+SAVED_NAMES = "saved_cards.json"  # in a recap's own folder: the deck its saved cards are from
+
+
+def remember_saved_names(folder: Path, names: list[str]) -> None:
+    """Note the card names of the deck Save wrote from, so a Rebuild can tell which saved
+    card is which (the page's drawing can differ from the one in recap.json)."""
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / SAVED_NAMES).write_text(json.dumps({"cards": names}), encoding="utf-8")
+    except OSError:
+        pass  # only a better guess is lost: Rebuild falls back to recap.json
+
+
+def saved_card_names(folder: Path) -> list[str] | None:
+    """The card names of the deck this recap's saved cards came from: noted at Save, else
+    the drawing last written to `folder` (its recap.json). None if neither can be read."""
+    try:
+        names = json.loads((folder / SAVED_NAMES).read_text(encoding="utf-8"))["cards"]
+        if isinstance(names, list) and all(isinstance(n, str) for n in names):
+            return names
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        parts = json.loads((folder / "recap.json").read_text(encoding="utf-8"))["cards"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return [name for name, _ in slides_for(parts)] if isinstance(parts, list) else None
 
 
 def write_json(data: RecapData, target: Path) -> Path:

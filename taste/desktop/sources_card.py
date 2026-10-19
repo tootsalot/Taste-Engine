@@ -381,6 +381,7 @@ class SourcesCard(Card):
         worker.done.connect(self._tested)
         worker.finished.connect(self._forget_finished_testers)
         self.testers.append(worker)
+        self.ctx.track(worker)  # closing the app mid-test waits for it
         worker.start()
         return worker
 

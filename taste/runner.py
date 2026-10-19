@@ -12,7 +12,7 @@ from taste import activity, credentials, enrich, raw, recommend, settings
 from taste.config import ConfigError
 from taste.db import transaction
 from taste.http_client import ApiError, HttpClient
-from taste.secrets_store import SecretStore
+from taste.secrets_store import SecretStore, SecretStoreError
 from taste.sources import hardcover, lastfm, mal, tmdb
 
 SOURCES = ("mal", "lastfm", "tmdb", "hardcover")
@@ -46,9 +46,9 @@ def sync_sources(
     """
     store = store or SecretStore()
     targets = list(SOURCES) if source == "all" else [source]
-    if source == "all" and not credentials.tmdb_connected(profile_id, store):
+    if source == "all" and not _connected(credentials.tmdb_connected, profile_id, store):
         targets.remove("tmdb")  # never set up: not a failure, just not part of "all" yet
-    if source == "all" and not credentials.hardcover_connected(profile_id, store):
+    if source == "all" and not _connected(credentials.hardcover_connected, profile_id, store):
         targets.remove("hardcover")
     results: dict[str, bool] = {}
     for name in targets:
@@ -86,10 +86,22 @@ def sync_sources(
         except ApiError as exc:  # only Hardcover's sign-in refresh gets here
             out(f"{SOURCE_LABELS[name]}: {exc}")
             results[name] = False
+        except SecretStoreError as exc:  # the credential store failed: the others still run
+            out(f"{SOURCE_LABELS[name]}: {exc}")
+            results[name] = False
     pruned = raw.prune(conn, settings.get(conn, "raw_retention_days"))
     if pruned:
         out(f"Cleaned up {pruned} old raw API pages.")
     return results
+
+
+def _connected(check: Callable[[str, SecretStore], bool], profile_id: str, store) -> bool:
+    """Whether an account is connected. A credential store that can't be read counts as
+    connected, so the sync tries it and says what went wrong instead of leaving it out."""
+    try:
+        return check(profile_id, store)
+    except SecretStoreError:
+        return True
 
 
 def check_connection(

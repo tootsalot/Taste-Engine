@@ -587,13 +587,13 @@ def fetch_artist_info(
             "SELECT artist_key FROM stg_lastfm_artist_info WHERE fetched_at >= ?", (cutoff,)
         )
     }
-    todo = list(dict.fromkeys(n for n in names if artist_key(n) not in fresh))
+    todo = _to_fetch(names, fresh)  # each artist once, whatever the capitals
     if not todo:
         return 0
     run = SyncRun(conn, lastfm.SOURCE, "enrich")
     count = 0
     try:
-        for name in todo:
+        for name in todo.values():
             with transaction(conn):
                 data = _lastfm_call(conn, client, cfg, run, "artist.getinfo", name, {})
                 artist = (data or {}).get("artist") or {}

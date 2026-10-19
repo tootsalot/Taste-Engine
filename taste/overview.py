@@ -10,7 +10,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from taste import bookstats, screenstats
+from taste import activity, bookstats, screenstats
 
 ON_REPEAT_DAYS = 30
 
@@ -29,6 +29,7 @@ RECENTLY_FINISHED_SQL = (
     "  ON x.item_id = e.item_id AND x.source = e.source AND x.id_type = 'mal_anime_id' "
     "LEFT JOIN stg_mal_anime s ON s.mal_anime_id = CAST(x.external_id AS INTEGER) "
     "WHERE e.source = 'mal' AND e.event_type = 'watch_finished' "
+    "  AND (? = 0 OR s.nsfw_rating IS NULL OR s.nsfw_rating <> 'black') "
     "ORDER BY e.occurred_at_utc DESC, i.title LIMIT ?"
 )
 ON_REPEAT_SQL = (
@@ -77,9 +78,11 @@ def recently_finished(conn: sqlite3.Connection, limit: int = 6) -> list[Finished
     """Shows I finished, newest first.
 
     A completed show without a finish date uses its last list edit instead (the
-    fallback the MAL sync already stores on the watch_finished event).
+    fallback the MAL sync already stores on the watch_finished event). Adult shows are
+    left out while "Include NSFW anime" is off.
     """
-    rows = conn.execute(RECENTLY_FINISHED_SQL, (limit,)).fetchall()
+    hide = int(activity.hide_nsfw(conn))
+    rows = conn.execute(RECENTLY_FINISHED_SQL, (hide, limit)).fetchall()
     return [
         FinishedShow(
             title=row[6] or row[0],
@@ -203,11 +206,11 @@ def vs_crowd(
             )
         )
     books = books or bookstats.load(conn)
-    if books.my_average is not None and books.hardcover_average is not None:
+    if books.vs_hardcover is not None:
         found.append(
             CrowdNumber(
                 "books",
-                f"{books.my_average - books.hardcover_average:+.1f}★",
+                f"{books.vs_hardcover:+.1f}★",
                 f"vs Hardcover · {books.unique:,} books",
                 "Your stars against Hardcover's average for the same books, out of 5.",
             )

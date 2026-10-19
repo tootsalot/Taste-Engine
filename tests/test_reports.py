@@ -243,3 +243,29 @@ def test_summary_with_data(conn, make_client):
 def test_genre_label_never_prints_negative_zero():
     row = {"genre": "Music", "avg_diff": -0.0, "shows_scored": 12}
     assert reports._genre_label(row) == "Music (+0.00, n=12)"
+
+
+def test_csv_cells_never_start_a_formula(tmp_path):
+    """The CSVs are made for Excel, so a title from an API that starts with =, +, - or @
+    would run as a formula. Text like that is written with a leading quote."""
+    from taste.db import connect
+
+    conn = connect(tmp_path / "p.db")
+    conn.execute("CREATE TABLE t (title TEXT, score REAL)")
+    conn.executemany(
+        "INSERT INTO t VALUES (?, ?)",
+        [('=HYPERLINK("https://example.com","x")', -1.5), ("+Example", 2.0),
+         ("-Example", 3.0), ("@Example", 4.0), ("Example Plain", 5.0)],
+    )  # fmt: skip
+    path = tmp_path / "t.csv"
+    reports.write_csv(conn, reports.Report("t", "score", "Test"), path)
+    rows = list(csv.reader(path.open(encoding="utf-8-sig")))
+    assert [r[0] for r in rows[1:]] == [
+        '\'=HYPERLINK("https://example.com","x")',
+        "'+Example",
+        "'-Example",
+        "'@Example",
+        "Example Plain",
+    ]
+    assert rows[1][1] == "-1.5"  # numbers stay numbers
+    conn.close()

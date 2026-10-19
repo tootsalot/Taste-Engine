@@ -57,9 +57,12 @@ NAV_COLLAPSED_WIDTH = 60  # icons only
 
 
 class MainWindow(QMainWindow):
+    CLOSE_WAIT_MS = 15000  # how long closing waits for a cancelled sync before hiding
+
     def __init__(self, ctx: AppContext | None = None) -> None:
         super().__init__()
         self.ctx = ctx or AppContext()
+        self._closing = False  # the close was confirmed; it finishes once threads end
         self.setWindowTitle("Taste Engine")
         self.setWindowIcon(theme.app_icon())
         self.resize(1180, 820)
@@ -291,11 +294,16 @@ class MainWindow(QMainWindow):
         if self.auto_recap is not None and self.auto_recap.isRunning():
             return None
         worker = RecapWorker(pid, self.ctx.art.cache, self.ctx.now())
-        worker.made.connect(lambda made, p=pid: self._recaps_made(p))
+        worker.made.connect(self._on_recaps_made)  # a bound method: Qt drops it with the window
         self.auto_recap = worker
         self.ctx.track(worker)
         worker.start()
         return worker
+
+    def _on_recaps_made(self, _made: list) -> None:
+        worker = self.sender()
+        if worker is not None:
+            self._recaps_made(worker.profile_id)
 
     def _recaps_made(self, profile_id: str) -> None:
         """Announce a recap made for the first time, once."""
@@ -427,15 +435,30 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        # Only long work is worth asking about; a recompute from the cache takes a second.
-        long_work = self.dashboard.is_syncing() or self.for_you.is_fetching()
-        if long_work and not self._confirm_quit_during_sync():
+        workers = [w for w in (self.dashboard.worker, self.for_you.worker) if w is not None]
+        if not self._closing:
+            # Only long work is worth asking about; a recompute from the cache takes a second.
+            long_work = self.dashboard.is_syncing() or self.for_you.is_fetching()
+            if long_work and not self._confirm_quit_during_sync():
+                event.ignore()
+                return
+            self._closing = True
+            # Stops after the page in flight; committed pages stay and the next run resumes.
+            for worker in workers:
+                if worker.isRunning():
+                    worker.cancel()
+                    worker.wait(self.CLOSE_WAIT_MS)
+            for thread in self.ctx.threads:  # short jobs: recap drawing, Test connection
+                thread.wait(self.CLOSE_WAIT_MS)
+        stuck = [w for w in [*workers, *self.ctx.threads] if w.isRunning()]
+        if stuck:
+            # Cancel lands at the next progress message, and a request in its timeout or a
+            # Retry-After wait can outlast the wait above. Dropping a running thread makes
+            # Qt abort, so the window goes now and the close finishes when the thread ends.
+            self.hide()
+            for worker in stuck:
+                worker.finished.connect(self.close, Qt.ConnectionType.UniqueConnection)
             event.ignore()
             return
-        # Stops after the page in flight; committed pages stay and the next run resumes.
-        for worker in (self.dashboard.worker, self.for_you.worker):
-            if worker is not None and worker.isRunning():
-                worker.cancel()
-                worker.wait(15000)
         self.ctx.shutdown()
         event.accept()

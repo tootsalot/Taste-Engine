@@ -306,3 +306,13 @@ def test_artist_covers_for_new_artists_are_cached(conn, make_client, music):
     music.calls.clear()
     assert enrich.fetch_artist_covers(conn, client, LASTFM_SETTINGS, names, NOW_DT) == 0
     assert music.calls == []
+
+
+def test_artist_info_is_looked_up_once_per_artist_whatever_the_capitals(conn, make_client, music):
+    client, _ = make_client(music)
+    cfg = LastfmSettings(FAKE_LASTFM_KEY, "example_user")
+    names = ["Example Seed One", "example seed one", "EXAMPLE SEED ONE"]
+    assert enrich.fetch_artist_info(conn, client, cfg, names, NOW_DT) == 1
+    assert [c for c in music.calls if c[0] == "artist.getinfo"] == [
+        ("artist.getinfo", "Example Seed One")
+    ]

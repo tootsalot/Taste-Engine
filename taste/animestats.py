@@ -35,7 +35,7 @@ class Studio:
 class AnimeStats:
     span: str
     years: list[str]
-    finished: list[Finished]  # newest first
+    finished: list[Finished]  # newest first, every show (the tiles count them all)
     hours: float  # episodes x their length, for the shows finished
     average: float | None  # my scores: every scored show for all time, else those finished
     vs_mal: float | None  # against the MAL mean, the same shows
@@ -47,6 +47,7 @@ class AnimeStats:
     scores: list[int]  # 1 to 10
     trend: list[tuple[str, float]] = field(default_factory=list)  # vs MAL by year, all time
     studios: list[Studio] = field(default_factory=list)
+    shown: list[Finished] = field(default_factory=list)  # the wall: hidden adult shows left out
 
 
 def _years_and_studios(
@@ -125,7 +126,9 @@ def load(conn: sqlite3.Connection, span: str = "all") -> AnimeStats:
                 name=name,
                 shows=len(items),
                 average=round(mean(mine), 2) if mine else None,
-                posters=sorted(items, key=lambda f: (-(f.my_score or 0), f.title))[:PERSON_POSTERS],
+                posters=sorted(activity.shown(items), key=lambda f: (-(f.my_score or 0), f.title))[
+                    :PERSON_POSTERS
+                ],
                 scores=[f.my_score for f in sorted(items, key=lambda f: f.day) if f.my_score],
             )
         )
@@ -145,4 +148,5 @@ def load(conn: sqlite3.Connection, span: str = "all") -> AnimeStats:
         scores=score_counts,
         trend=charts.diff_by_year(conn) if span == "all" else [],
         studios=people[:PEOPLE_SHOWN],
+        shown=activity.shown(shows),
     )

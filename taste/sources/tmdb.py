@@ -373,10 +373,16 @@ def _detail_ids(
     found = []
     for kind, table in (("movie", "stg_tmdb_movies"), ("tv", "stg_tmdb_tv")):
         params = (cutoff, kind, kind) if account_only else (cutoff,)
+        # A title that answered 404 lately is gone from TMDB: not asked again for a while.
+        gone = (
+            " AND tmdb_id NOT IN (SELECT tmdb_id FROM stg_tmdb_fetches WHERE method = ? "
+            "AND fetched_at >= ?)"
+        )
         found += [
             (kind, r[0])
             for r in conn.execute(
-                f"SELECT tmdb_id FROM {table} WHERE fetched_at < ?{mine} ORDER BY tmdb_id", params
+                f"SELECT tmdb_id FROM {table} WHERE fetched_at < ?{mine}{gone} ORDER BY tmdb_id",
+                (*params, f"gone_{kind}", cutoff),
             )
         ]
     return found
@@ -403,7 +409,14 @@ def fetch_details(
             )  # fmt: skip
         except ApiError as exc:
             if exc.status == 404:
-                continue  # removed from TMDB; the list's own fields stay
+                # Removed from TMDB; the list's own fields stay. Noted so it isn't asked for
+                # on every sync (fetched_at stays as it was, so it never counts as detailed).
+                conn.execute(
+                    "INSERT INTO stg_tmdb_fetches (tmdb_id, method, fetched_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT (tmdb_id, method) DO UPDATE SET fetched_at = excluded.fetched_at",
+                    (tmdb_id, f"gone_{kind}", now.strftime(TIMESTAMP_FORMAT)),
+                )
+                continue
             raise
         with transaction(conn):
             raw_id = store_page(

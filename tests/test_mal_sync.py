@@ -232,3 +232,54 @@ def test_unknown_user_fails_without_retry(conn, make_client, sleeper):
     )
     assert result.status == "failed"
     assert len(transport.calls) == 1
+
+
+def test_an_entry_skipped_by_paging_is_not_removed(conn, make_client):
+    """MAL pages by offset. An edit between two page requests can shift the list, so one
+    entry is on neither page and the sync used to treat it as removed (deleting its
+    history). A read that misses entries now reads the list again to be sure."""
+    from urllib.parse import parse_qsl, urlparse
+
+    from tests.fake_recs import FakeMal, anime, list_entry
+
+    shows = [list_entry(anime(i, f"Example Show {i}", 7.0, ["Drama"], []), "completed", 7)
+             for i in range(1, 6)]  # fmt: skip
+
+    class Paged(FakeMal):
+        """Two entries a page; the first read loses entry 3 between pages."""
+
+        def __init__(self):
+            super().__init__(entries=shows, details={})
+            self.shift_once = False
+            self.reads = 0
+
+        def __call__(self, url, params):
+            if "/animelist" not in url:
+                return super().__call__(url, params)
+            offset = int(dict(parse_qsl(urlparse(url).query)).get("offset", 0))
+            if offset == 0:
+                self.reads += 1
+            entries = list(self.entries)
+            if self.shift_once and self.reads == 1 and offset > 0:
+                entries = entries[1:] + entries[:1]  # an edit moved show 1 to the end
+            page = entries[offset : offset + 2]
+            more = offset + 2 < len(entries)
+            nxt = f"{mal.API_BASE}/users/example_user/animelist?offset={offset + 2}&limit=2"
+            return FakeResponse(200, {"data": page, "paging": {"next": nxt} if more else {}})
+
+    fake = Paged()
+    client, _ = make_client(fake)
+    cfg = MalSettings(FAKE_MAL_CLIENT_ID, "example_user")
+    assert mal.sync(conn, client, cfg, out=lambda m: None).rows_removed == 0
+    fake.shift_once, fake.reads = True, 0
+    result = mal.sync(conn, client, cfg, out=lambda m: None)
+    assert result.status == "success" and result.rows_removed == 0
+    assert fake.reads == 2  # the list was read again to be sure
+    active = conn.execute(
+        "SELECT COUNT(*) FROM stg_mal_list_entries WHERE removed_at IS NULL"
+    ).fetchone()[0]
+    assert active == 5
+    # Really removed: gone from both reads, so it goes.
+    fake.entries = shows[:4]
+    fake.shift_once, fake.reads = False, 0
+    assert mal.sync(conn, client, cfg, out=lambda m: None).rows_removed == 1

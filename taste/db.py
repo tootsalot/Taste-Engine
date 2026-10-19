@@ -56,6 +56,7 @@ ADDED_COLUMNS = [
     ("stg_hardcover_books", "users_count", "INTEGER"),
     ("stg_hardcover_books", "users_read_count", "INTEGER"),
     ("stg_hardcover_books", "details_at", "TEXT"),
+    ("recap_runs", "pictures_missing", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -146,7 +147,10 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     try:
         yield conn
     except BaseException:
-        conn.execute("ROLLBACK")
+        # SQLite may have rolled back by itself (a full disk, an I/O error); a second
+        # ROLLBACK would fail and hide the real error.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     conn.execute("COMMIT")
 

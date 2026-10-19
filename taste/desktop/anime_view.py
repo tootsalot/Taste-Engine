@@ -199,7 +199,7 @@ class AnimeView(QWidget):
         for widget, value in zip(self.tiles, values, strict=True):
             widget.set(value)
 
-        self.wall.set_items([show_item(f) for f in s.finished])
+        self.wall.set_items([show_item(f) for f in s.shown])
         self.wall_card.title.setText("Finished" if s.span == "all" else f"Finished in {s.span}")
         self.wall_card.note.setText(
             f"{count:,} {'show' if count == 1 else 'shows'}, newest first, with your score."

@@ -488,7 +488,7 @@ class SettingsPage(QWidget):
         self.picture_use.setText("Using under 1 MB" if used < 1 else f"Using {used:,.0f} MB")
 
     def clear_pictures(self) -> None:
-        self.ctx.art.cache.clear()
+        self.ctx.art.clear()
         self.refresh_picture_use()
 
     # -- Motion ---------------------------------------------------------------

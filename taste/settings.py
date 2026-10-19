@@ -137,8 +137,9 @@ SETTINGS: list[Setting] = [
         "Include NSFW anime",
         "bool",
         True,
-        "Include shows MyAnimeList marks as adult, in your synced list and in suggestions. "
-        "Their posters stay hidden on the Dashboard either way.",
+        "Show anime MyAnimeList marks as adult on your pages, recaps, and suggestions. Off, "
+        "they still sync and count in your numbers, but are never named or pictured. Their "
+        "posters stay hidden on the Dashboard either way.",
     ),
     Setting(
         "clock_format",

@@ -156,10 +156,15 @@ class FakeMal:
         self.details = DETAILS if details is None else details
         self.missing = set(missing)  # ids that answer 404
         self.detail_calls: list[int] = []
+        self.list_params: list[dict[str, Any]] = []
 
     def __call__(self, url: str, params: dict[str, Any]) -> FakeResponse:
         if "/animelist" in url:
-            return FakeResponse(200, {"data": self.entries, "paging": {}})
+            self.list_params.append(dict(params or {}))
+            entries = self.entries
+            if (params or {}).get("nsfw") != "true":  # like MAL: adult shows left out unasked
+                entries = [e for e in entries if e["node"].get("nsfw", "white") == "white"]
+            return FakeResponse(200, {"data": entries, "paging": {}})
         match = re.search(r"/anime/(\d+)$", url)
         if match:
             anime_id = int(match.group(1))

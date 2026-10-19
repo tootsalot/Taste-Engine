@@ -35,3 +35,17 @@ def test_your_rating_against_tmdb_by_band(conn, make_client):
     assert sum(b.shows for b in s.film_bands) == len(films) > 0
     assert sum(b.shows for b in s.tv_bands) == len(shows)
     assert all(b.mal_to - b.mal_from == 0.5 for b in s.film_bands)
+
+
+def test_a_rating_counts_on_my_local_day(conn, make_client):
+    """8 PM on New Year's Eve in Phoenix is 03:00 UTC on Jan 1: the Films page counted it
+    in the new year while the Dashboard and Rev (local days) counted it in the old one."""
+    from taste import activity
+
+    ratings = [("movie", 11, 9.0, "2026-01-01T03:00:00.000Z")]
+    client, _ = client_for(make_client, FakeTmdb(ratings=ratings))
+    tmdb.sync(conn, client, CFG, out=lambda m: None)
+    s = screenstats.load(conn)
+    assert s.rated[0].day == "2025-12-31"
+    assert screenstats.years(conn) == ["2025"]
+    assert len(activity.rated(conn, "movie", "2025-01-01", "2026-01-01")) == 1

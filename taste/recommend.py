@@ -289,6 +289,15 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
         if kind in enrich.RELATED_KINDS and rel_id not in related:
             related[rel_id] = (kind, title, score)
 
+    if not cfg["include_nsfw"]:
+        # Adult shows still steer the picks, but are never named on a card.
+        adult = {k for k, f in facts.items() if f.get("nsfw_rating") == "black"}
+        hidden_titles = {facts[k]["title_en"] or facts[k]["title"] for k in adult}
+        sources = {
+            rec_id: [s for s in found if s[1] not in hidden_titles]
+            for rec_id, found in sources.items()
+        }
+        related = {k: v for k, v in related.items() if v[1] not in hidden_titles}
     candidates = set(support)
     if cfg["rec_include_plan_to_watch"]:
         candidates |= plan_to_watch
@@ -649,15 +658,18 @@ def lastfm_artist_url(name: str) -> str:
 def _artist_cover(conn: sqlite3.Connection, name: str) -> str | None:
     """The artist's picture: their most-played album's cover, else their top album's
     cover from Last.fm, else a Deezer photo. Last.fm itself has no artist photos."""
+    # By the artist's key (lowercase, as Last.fm artists are matched everywhere), which is
+    # indexed: matching the display name was case-sensitive and scanned every item.
     row = conn.execute(
-        "SELECT img.url FROM core_creators c "
-        "JOIN core_item_creators ic ON ic.creator_id = c.creator_id AND ic.role = 'artist' "
+        "SELECT img.url FROM core_creator_external_ids x "
+        "JOIN core_item_creators ic ON ic.creator_id = x.creator_id AND ic.role = 'artist' "
         "JOIN core_items al ON al.item_id = ic.item_id AND al.media_type = 'album' "
         "JOIN core_item_images img ON img.item_id = al.item_id AND img.kind = 'cover' "
         "JOIN core_item_links ln ON ln.parent_item_id = al.item_id "
         "JOIN core_behavior_events e ON e.item_id = ln.child_item_id AND e.event_type = 'play' "
-        "WHERE c.name = ? GROUP BY al.item_id, img.url ORDER BY COUNT(*) DESC LIMIT 1",
-        (name,),
+        "WHERE x.source = 'lastfm' AND x.id_type = 'lastfm_artist_key' AND x.external_id = ? "
+        "GROUP BY al.item_id, img.url ORDER BY COUNT(*) DESC LIMIT 1",
+        (enrich.artist_key(name),),
     ).fetchone()
     if row:
         return row[0]
@@ -993,7 +1005,7 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
     ).fetchone()
     if run is None:
         return [], {}, None
-    item_kind = kind if kind in ("anime", "film") else "artist"
+    item_kind = kind if kind in ("anime", "film", "book") else "artist"
     dismissed = _dismissed(conn, item_kind)
     recs = [
         Rec(

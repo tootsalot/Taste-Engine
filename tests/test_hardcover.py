@@ -68,7 +68,6 @@ def test_the_browser_coming_back_gives_the_code(make_client):
 @pytest.mark.parametrize(
     "change, message",
     [
-        ({"state": "someone-else"}, "wasn't the one this app started"),
         ({"iss": "https://evil.example"}, "didn't come from Hardcover"),
         ({"error": "access_denied", "code": ""}, "didn't approve"),
     ],
@@ -81,6 +80,31 @@ def test_a_wrong_or_refused_callback_is_rejected(change, message):
         sign_in.wait(timeout=10)
     thread.join()
     assert "didn't get access" in visit.page  # the browser never says "Signed in"
+
+
+def test_a_stray_callback_is_turned_away_and_the_real_one_still_works():
+    """A request without this sign-in's state (an old tab, a prefetch) used to end the
+    sign-in, so the real redirect a moment later found the listener closed."""
+    import time
+
+    sign_in = hardcover.SignIn()
+    stray, stray_visit = browser_returns(sign_in, code="old", state="someone-else")
+    time.sleep(0.3)  # queued first: the listener answers in order once wait() runs
+    thread, _ = browser_returns(sign_in, code="code-1", state=sign_in.state, iss=hardcover.ISSUER)
+    assert sign_in.wait(timeout=10) == "code-1"
+    stray.join(timeout=5)
+    thread.join()
+    assert "didn't get access" in stray_visit.page
+
+
+def test_a_refusal_without_state_still_ends_the_sign_in():
+    """Some OAuth servers send a refusal without state; it carries no code, so it can end
+    the wait (it used to be ignored after the stray-callback fix, hanging 5 minutes)."""
+    sign_in = hardcover.SignIn()
+    thread, _ = browser_returns(sign_in, error="access_denied")
+    with pytest.raises(hardcover.SignInError, match="didn't approve"):
+        sign_in.wait(timeout=10)
+    thread.join()
 
 
 def test_a_sign_in_can_be_stopped():
@@ -175,6 +199,45 @@ def test_a_sync_reads_only_what_changed_and_everything_weekly(conn, make_client)
     later = datetime.now(timezone.utc) + hardcover.FULL_EVERY
     result, fake, _ = synced(conn, make_client, FakeHardcover(library), now=later)
     assert fake.calls[1] == "library:0" and result.removed == 1
+
+
+def test_a_read_through_deleted_on_hardcover_goes_on_a_changes_only_read(conn, make_client):
+    synced(conn, make_client)
+    library = [dict(e) for e in fake_hardcover.LIBRARY]
+    lantern = library[0]  # read twice: read-throughs 1001 and 1002
+    library[0] = dict(
+        lantern,
+        user_book_reads=[r for r in lantern["user_book_reads"] if r["id"] != 1002],
+        read_count=1,
+        updated_at="2099-01-01T00:00:00+00:00",
+    )
+    result, fake, _ = synced(conn, make_client, FakeHardcover(library))
+    assert fake.calls == ["me", "library-since:0"]  # a changes-only read
+    keys = [
+        r[0]
+        for r in conn.execute(
+            "SELECT source_event_key FROM core_behavior_events WHERE source = 'hardcover' "
+            "AND source_event_key LIKE '101:%'"
+        )
+    ]
+    assert keys == ["101:read:1001"]  # the deleted second read doesn't count for a week
+    gone = conn.execute("SELECT removed_at FROM stg_hardcover_reads WHERE read_id = 1002")
+    assert gone.fetchone()[0] is not None
+
+
+def test_a_book_sent_without_its_reads_list_keeps_its_reads(conn, make_client):
+    """Reads are settled only against a reads list that came back; a row without one
+    (a field error, an API change) used to mark every read of the book removed."""
+    synced(conn, make_client)
+    library = [dict(e) for e in fake_hardcover.LIBRARY]
+    library[0] = dict(library[0], updated_at="2099-01-01T00:00:00+00:00")
+    del library[0]["user_book_reads"]
+    synced(conn, make_client, FakeHardcover(library))
+    keys = conn.execute(
+        "SELECT COUNT(*) FROM core_behavior_events WHERE source = 'hardcover' "
+        "AND source_event_key LIKE '101:read:%'"
+    ).fetchone()[0]
+    assert keys == 2
 
 
 def test_without_a_changes_filter_it_reads_everything(conn, make_client):
@@ -331,6 +394,22 @@ def test_a_refresh_token_that_ran_out_asks_to_connect_again(conn, make_client, t
     assert any("Connect your account again" in line for line in lines)
 
 
+def test_a_suggested_book_hardcover_doesnt_send_back_waits_a_month(conn, make_client):
+    """A similar book that's gone (deleted or merged) was asked for on every refresh,
+    since the note that it was asked for went to a row that didn't exist."""
+    library = [dict(e) for e in fake_hardcover.LIBRARY]
+    old = library[3]  # Example Old Favorite, 5 stars: its similar books are candidates
+    library[3] = dict(old, book=dict(old["book"], cached_similar_book_ids=[202, 203, 999]))
+    fake = FakeHardcover(library)
+    client, _ = make_client(fake)
+    hardcover.sync(conn, client, fake.access, lambda m: None)
+    hardcover.enrich_recommendations(conn, client, fake.access, lambda m: None, now=NOW)
+    assert hardcover.enrich_recommendations(conn, client, fake.access, lambda m: None, now=NOW) == 0
+    from taste import recommend
+
+    assert "999" not in [r.item_key for r in recommend.book_recommendations(conn)[0]]
+
+
 def test_book_suggestions_from_similar_books(conn, make_client):
     from taste import recommend
 
@@ -356,5 +435,11 @@ def test_book_suggestions_from_similar_books(conn, make_client):
     assert any("Example Old Favorite" in reason for reason in salt.reasons)
     assert metrics["rated"] == 6
 
+    recommend.save_run(conn, "book", recs, metrics)
     recommend.dismiss(conn, "book", salt.item_key)
     assert "Example Salt Atlas" not in [r.title for r in recommend.book_recommendations(conn)[0]]
+    # The saved list For You reloads after Not interested leaves it out too (it used to
+    # read the hidden artists instead, so the book came straight back).
+    shown, _, _ = recommend.latest(conn, "book")
+    assert shown and {r.kind for r in shown} == {"book"}
+    assert "Example Salt Atlas" not in [r.title for r in shown]

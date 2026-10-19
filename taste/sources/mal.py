@@ -18,7 +18,6 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlparse
 
 from taste import core, local_time
-from taste import settings as profile_settings
 from taste.config import MalSettings
 from taste.db import iso_to_utc, transaction, utc_now, utc_to_unix
 from taste.http_client import (
@@ -110,6 +109,8 @@ def sync(
     removed = 0
     try:
         pages = _fetch_all_pages(conn, client, settings, run, out)
+        if len(pages) > 1:
+            pages += _confirm_missing(conn, client, settings, run, out, pages)
         with transaction(conn):
             removed = _load(conn, run, pages)
             local_time.refresh(conn)
@@ -154,10 +155,10 @@ def _fetch_all_pages(
     out: Callable[[str], None],
 ) -> list[tuple[int, dict[str, Any]]]:
     url: str | None = f"{API_BASE}/users/{quote(settings.username)}/animelist"
-    params: dict[str, Any] | None = {"limit": PAGE_LIMIT, "fields": FIELDS}
-    if profile_settings.get(conn, "include_nsfw"):
-        # Without this, MAL silently leaves NSFW entries out of the list.
-        params["nsfw"] = "true"
+    # Always with adult shows: without nsfw=true MAL silently leaves them out, and a sync
+    # would then treat them as removed and delete their history. "Include NSFW anime"
+    # only decides whether they're shown (the user's call, 2026-10-19).
+    params: dict[str, Any] | None = {"limit": PAGE_LIMIT, "fields": FIELDS, "nsfw": "true"}
     headers = {"X-MAL-CLIENT-ID": settings.client_id}
     pages: list[tuple[int, dict[str, Any]]] = []
     page_number = 1
@@ -186,6 +187,40 @@ def _fetch_all_pages(
         params = None
         page_number += 1
     return pages
+
+
+def _confirm_missing(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    settings: MalSettings,
+    run: SyncRun,
+    out: Callable[[str], None],
+    pages: list[tuple[int, dict[str, Any]]],
+) -> list[tuple[int, dict[str, Any]]]:
+    """MAL pages by offset, so an edit between two page requests can shift the list and
+    leave an entry on neither page; it would then be treated as removed, history and all.
+    When a read of several pages misses entries that were on the list, the list is read
+    again, and the missing entries it does find are kept (as extra pages). An entry
+    missing from both reads really was removed."""
+    seen = {entry["node"]["id"] for _, payload in pages for entry in payload["data"]}
+    listed = {
+        r[0]
+        for r in conn.execute(
+            "SELECT mal_anime_id FROM stg_mal_list_entries WHERE removed_at IS NULL"
+        )
+    }
+    missing = listed - seen
+    if not missing:
+        return []
+    out(f"MAL: {len(missing)} entries weren't in that read; reading the list again to be sure")
+    fetched = run.rows_fetched
+    again = _fetch_all_pages(conn, client, settings, run, out)
+    found = [
+        (raw_id, {"data": [e for e in payload["data"] if e["node"]["id"] in missing]})
+        for raw_id, payload in again
+    ]
+    run.rows_fetched = fetched + sum(len(p["data"]) for _, p in found)
+    return [(raw_id, payload) for raw_id, payload in found if payload["data"]]
 
 
 # ---------------------------------------------------------------------------

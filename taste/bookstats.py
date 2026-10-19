@@ -67,7 +67,8 @@ class BookStats:
     authors: int
     new_authors: int | None  # authors first read in this year (None for all time)
     my_average: float | None
-    hardcover_average: float | None  # for the same rated books
+    hardcover_average: float | None  # for the rated books Hardcover has an average for
+    vs_hardcover: float | None  # my stars minus Hardcover's, averaged over those same books
     rereads: int  # books read more than once
     most_reread: tuple[str, int] | None
     covers: list[Cover]  # newest first
@@ -231,6 +232,7 @@ def load(conn: sqlite3.Connection, span: str = "all") -> BookStats:
         new_authors=new_authors,
         my_average=round(mean(b.my_rating for b in rated), 2) if rated else None,
         hardcover_average=round(mean(b.average for b in both), 2) if both else None,
+        vs_hardcover=round(mean(b.my_rating - b.average for b in both), 2) if both else None,
         rereads=len(reread),
         most_reread=(books[most[0]].title, most[1]) if most else None,
         covers=[

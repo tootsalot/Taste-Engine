@@ -12,10 +12,14 @@ import json
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from statistics import mean
+from zoneinfo import ZoneInfo
 
+from taste import settings
 from taste.bands import Band, score_bands
 from taste.bookstats import Share
+from taste.db import TIMESTAMP_FORMAT
 from taste.sources import tmdb
 
 TOP_GENRES = 8
@@ -70,8 +74,18 @@ class ScreenStats:
     people: list[Person] = field(default_factory=list)
 
 
+def _local_day(utc_text: str | None, zone: ZoneInfo) -> str:
+    """The day a UTC time falls on in the profile's time zone, as the Dashboard and Rev
+    count it (activity.rated reads the same from core_event_local_times)."""
+    if not utc_text:
+        return ""
+    moment = datetime.strptime(utc_text, TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+    return moment.astimezone(zone).strftime("%Y-%m-%d")
+
+
 def _all(conn: sqlite3.Connection) -> list[Rated]:
     found: list[Rated] = []
+    zone = ZoneInfo(settings.get(conn, "timezone"))
     for row in conn.execute(
         "SELECT a.media_type, a.tmdb_id, a.rating, a.rated_at, a.title, m.title, m.vote_average, "
         "m.release_date, m.runtime, m.genres_json, m.directors_json, m.poster_path, "
@@ -91,7 +105,7 @@ def _all(conn: sqlite3.Connection) -> list[Rated]:
                 title=(row[5] if movie else row[12]) or row[4],
                 rating=row[2],
                 average=row[6] if movie else row[13],
-                day=(row[3] or "")[:10],
+                day=_local_day(row[3], zone),
                 year=int(released[:4]) if released[:4].isdigit() else None,
                 minutes=row[8] if movie else None,
                 genres=tuple(json.loads((row[9] if movie else row[15]) or "[]")),

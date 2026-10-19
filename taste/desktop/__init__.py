@@ -7,9 +7,11 @@ API keys in Windows Credential Manager.
 from __future__ import annotations
 
 import getpass
+import signal
 import sys
 from collections.abc import Callable
 
+from PySide6.QtCore import QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
@@ -74,6 +76,29 @@ def listen_for_others(name: str, on_show: Callable[[], None]) -> QLocalServer:
     return server
 
 
+def quit_on_ctrl_c(window) -> QTimer:
+    """Ctrl+C in the terminal (running from source) closes the window the normal way.
+
+    Python only sees the signal when it gets to run, and an uncaught KeyboardInterrupt
+    then lands in whatever Qt callback is running and prints a traceback. The handler
+    asks Qt to close the window instead; the timer gives Python a moment now and then
+    while Qt's loop is waiting, so the signal is noticed. Keep the timer alive.
+    """
+
+    def stop(*_args) -> None:
+        QTimer.singleShot(0, window.close)
+
+    signal.signal(signal.SIGINT, stop)
+    timer = QTimer(window)
+    timer.timeout.connect(_let_python_run)
+    timer.start(250)
+    return timer
+
+
+def _let_python_run() -> None:
+    """Nothing: a timer tick is enough for Python to handle a pending signal."""
+
+
 def smoke_test(app: QApplication, out_path: str) -> int:
     """Build the real window and report what loaded. Used to check packaged builds."""
     from PySide6.QtGui import QFontDatabase, QImageReader
@@ -135,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     profiles.migrate_legacy()
     window = MainWindow()
     server = listen_for_others(name, window.bring_to_front)
+    keep_alive = quit_on_ctrl_c(window)  # noqa: F841 (held until the app ends)
     window.show()
     code = app.exec()
     server.close()

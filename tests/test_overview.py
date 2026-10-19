@@ -136,7 +136,7 @@ def test_dashboard_queries_use_indexes_not_full_scans(conn):
     # nested scan of every play per artist link.
     assert plan.startswith("SEARCH e "), plan
     assert "SCAN" not in plan, plan
-    plan = query_plan(conn, overview.RECENTLY_FINISHED_SQL, (8,))
+    plan = query_plan(conn, overview.RECENTLY_FINISHED_SQL, (1, 8))
     assert "SCAN s" not in plan, plan
 
 

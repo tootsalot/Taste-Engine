@@ -185,6 +185,13 @@ def test_arrow_keys_move_between_pages(window, qtbot):
     assert nav.currentRow() == 1 and window.stack.currentWidget() is window.for_you
     qtbot.keyClick(nav.item(1), Qt.Key.Key_Up)
     assert nav.currentRow() == 0
+    # Handled by the buttons themselves, not an event filter on a child
+    # widget (one took the app down at exit).
+    from PySide6.QtWidgets import QWidget
+
+    from taste.desktop.nav import NavList
+
+    assert NavList.eventFilter is QWidget.eventFilter
 
 
 def test_settings_sits_at_the_bottom_under_the_last_sync(window, qtbot):
@@ -568,8 +575,149 @@ def test_picture_cache_size_and_clear(window):
     (root / "made-up.png").write_bytes(b"x" * 2048)
     page.refresh_picture_use()
     assert page.picture_use.text().startswith("Using")
+    # Pictures that failed this session get another try after a clear, too.
+    window.ctx.art.cache._failed["https://cdn.myanimelist.net/images/anime/1/9.jpg"] = None
+    window.ctx.art.failed["https://cdn.myanimelist.net/images/anime/1/9.jpg@10x10"] = 0.0
     page.clear_pictures()
     assert window.ctx.art.cache.size() == 0
+    assert not window.ctx.art.cache._failed and not window.ctx.art.failed
     assert page.picture_use.text() == "Using under 1 MB"
     page.set_mode("simple", remember=False)
     assert page.picture_row.isHidden()  # an Advanced setting
+
+
+def test_closing_during_a_stuck_sync_never_drops_the_running_thread(window, qtbot, monkeypatch):
+    """Cancel only lands at the next progress message; a request in its 30 s timeout or a
+    Retry-After wait outlasted the 15 s wait, and Qt aborted on the running thread. Now
+    the window goes away and the app finishes closing once the thread has ended."""
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    class Stuck(QThread):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release = threading.Event()
+            self.cancelled = False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+        def run(self) -> None:
+            self.release.wait(10)
+
+    stuck = Stuck()
+    stuck.start()
+    window.dashboard.worker = stuck
+    window.CLOSE_WAIT_MS = 50
+    monkeypatch.setattr(window, "_confirm_quit_during_sync", lambda: True)
+    shutdowns = []
+    monkeypatch.setattr(window.ctx, "shutdown", lambda: shutdowns.append(1))
+    window.show()
+    qtbot.waitExposed(window)
+    assert window.close() is False  # not yet: the thread is still running
+    assert stuck.cancelled and stuck.isRunning() and window.isHidden() and not shutdowns
+    stuck.release.set()
+    qtbot.waitUntil(lambda: shutdowns == [1], timeout=5000)  # closed once it ended
+    stuck.wait()
+
+
+def test_a_save_cut_short_never_loses_the_other_preferences(monkeypatch):
+    """ui_state.json was written in place: a crash mid-write left a broken file, read as
+    empty, and the save folder and every other preference were gone."""
+    from pathlib import Path
+
+    from taste.desktop import ui_state
+
+    ui_state.save(recap_folder="C:/Example/Recaps", nav_collapsed=False)
+    real_write = Path.write_text
+
+    def cut_short(self, text, *args, **kwargs):
+        real_write(self, text[: len(text) // 2], *args, **kwargs)
+        raise OSError("power cut")
+
+    monkeypatch.setattr(Path, "write_text", cut_short)
+    ui_state.save(nav_collapsed=True)
+    monkeypatch.setattr(Path, "write_text", real_write)
+    assert ui_state.load()["recap_folder"] == "C:/Example/Recaps"
+
+
+def test_the_status_dot_tooltip_is_plain_text(window):
+    """Any tooltip that can hold data goes through plain_tip (Qt guesses rich
+    text). The words beside the dot did; the dot didn't."""
+    from taste.desktop.widgets import plain_tip
+
+    nav = window.sidebar
+    nav.set_status("Last.fm <b>synced</b>", "ok", "Example <i>source</i> synced today")
+    assert nav.status_dot.toolTip() == plain_tip(
+        "Last.fm <b>synced</b>\nExample <i>source</i> synced today"
+    )
+
+
+def test_workers_never_recreate_a_profile_deleted_meanwhile(qapp):
+    """The Rev worker checked; the sync, suggestions, and connection workers didn't, and
+    their connect made a fresh empty database, so a deleted profile came back."""
+    from taste import profiles
+    from taste.desktop.workers import ConnectionTestWorker, RecsWorker, SyncWorker
+    from taste.secrets_store import SecretStore
+    from tests.conftest import FakeKeyring
+
+    store = SecretStore(backend=FakeKeyring())
+    for make in (
+        lambda: SyncWorker("gone", "all", store),
+        lambda: RecsWorker("gone", store),
+        lambda: ConnectionTestWorker("gone", "mal", store),
+    ):
+        profiles.create("gone")
+        worker = make()  # the path is settled here, on the UI thread
+        profiles.delete("gone", store=store)
+        worker.run()  # here, not in a thread
+        assert not profiles.db_path("gone").exists(), type(worker).__name__
+
+
+def test_closing_waits_for_a_tracked_job_too(window, qtbot, monkeypatch):
+    """ctx.shutdown waited 15 s per tracked thread and then let go of it; a Test
+    connection in its 30 s timeout was then destroyed while running (Qt aborts)."""
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    class Slow(QThread):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release = threading.Event()
+
+        def run(self) -> None:
+            self.release.wait(10)
+
+    slow = Slow()
+    window.ctx.track(slow)
+    slow.start()
+    window.CLOSE_WAIT_MS = 50
+    shutdowns = []
+    monkeypatch.setattr(window.ctx, "shutdown", lambda: shutdowns.append(1))
+    window.show()
+    qtbot.waitExposed(window)
+    assert window.close() is False and window.isHidden() and not shutdowns
+    slow.release.set()
+    qtbot.waitUntil(lambda: shutdowns == [1], timeout=5000)
+    slow.wait()
+
+
+def test_ctrl_c_in_the_terminal_closes_the_window(window, qtbot):
+    """Running from source, Ctrl+C raised KeyboardInterrupt inside a Qt callback and
+    printed a traceback (seen 2026-10-19). Now it closes the window the normal way."""
+    import signal
+
+    from taste.desktop import quit_on_ctrl_c
+
+    before = signal.getsignal(signal.SIGINT)
+    try:
+        window.show()
+        qtbot.waitExposed(window)
+        timer = quit_on_ctrl_c(window)
+        assert timer.isActive()  # lets Python see the signal while Qt's loop runs
+        signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+        qtbot.waitUntil(lambda: not window.isVisible(), timeout=2000)
+    finally:
+        signal.signal(signal.SIGINT, before)

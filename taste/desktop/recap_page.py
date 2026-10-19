@@ -56,6 +56,14 @@ NOTES = (
 )
 
 
+def rebuilt_line(label: str, replaced: int, folder: Path | None) -> str:
+    """The status after a Rebuild, saying whether saved cards were replaced too."""
+    if not replaced or folder is None:
+        return f"Rebuilt {label}."
+    cards = "the saved card" if replaced == 1 else f"the {replaced} saved cards"
+    return f"Rebuilt {label} and replaced {cards} in {folder.name}."
+
+
 class Deck(QWidget):
     """The cards as a carousel: the current one at full height, its neighbors smaller and
     dimmed beside it. Changing card slides them across (or just swaps, with motion off)."""
@@ -394,7 +402,7 @@ class RecapPage(LazyPage, QWidget):
             return  # only the latest request is shown; an older one finishing late is ignored
         self._on_ready(kind, key, data, cards)
         if getattr(worker, "rebuild", False):
-            self.status.setText(f"Rebuilt {self.period.label}.")
+            self.status.setText(rebuilt_line(self.period.label, worker.replaced, self.folder()))
 
     def _worker_failed(self, text: str) -> None:
         if self.sender() is self.worker:
@@ -512,6 +520,10 @@ class RecapPage(LazyPage, QWidget):
         if not self.cards[index][1].save(str(path)):
             self.status.setText("Couldn't save there. Try another folder.")
             return None
+        # Which deck this card came from, so a later Rebuild can match it by card.
+        recap.remember_saved_names(
+            recap.folder(self.profile_id, self.period), [name for name, _ in self.cards]
+        )
         return path
 
     def save_card(self, folder: str | None = None) -> Path | None:
@@ -554,7 +566,9 @@ class RecapPage(LazyPage, QWidget):
         self.show_button.setEnabled(target is not None)
 
     def rebuild(self) -> RecapWorker | None:
-        """Make the recap again now and keep it in its own folder."""
+        """Make the recap again now and keep it in its own folder. Pictures that failed
+        earlier are asked for again, and cards of this recap already in the save folder
+        are replaced with the new ones (the user's call, 2026-10-19)."""
         if not self.profile_id:
             return None
         self.status.setText("Rebuilding…")
@@ -565,6 +579,8 @@ class RecapPage(LazyPage, QWidget):
             self.period,
             save_to=recap.folder(self.profile_id, self.period),
             record=self.period != self._current(self.period.kind),
+            retry=True,
+            replace_in=self.folder(),
         )
         worker.rebuild = True
         return self._start(worker)
