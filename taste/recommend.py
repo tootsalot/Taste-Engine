@@ -493,6 +493,15 @@ def _typical_tmdb_average(conn: sqlite3.Connection, kind: str = "movie") -> floa
     return row[0] if row and row[0] is not None else TYPICAL_FALLBACK
 
 
+def is_anime(show: dict[str, Any]) -> bool:
+    """A TMDB show that's anime: animation made in Japan (by language or origin).
+    Animation from elsewhere stays a TV pick."""
+    if "Animation" not in show.get("genres", []):
+        return False
+    countries = json.loads(show.get("origin_country_json") or "[]")
+    return show.get("original_language") == "ja" or "JP" in countries
+
+
 def _screen_facts(conn: sqlite3.Connection, kind: str = "movie") -> dict[int, dict[str, Any]]:
     """Staged titles with genres and directors or creators in the model's slots."""
     facts = {}
@@ -630,6 +639,8 @@ def _screen_recommendations(
             continue  # unsettled, or only known from a list so far (no genres yet)
         if (f["release_date"] or "") > today_text:
             continue  # not out yet: its average is anticipation, not a verdict
+        if kind == "tv" and is_anime(f):
+            continue  # MAL and the Anime tab cover anime
         crowd = shrunk(f["vote_average"], f["vote_count"], typical, prior)
         predicted = model.predict(crowd, f["genres"], f["studios"])
         rec = Rec(

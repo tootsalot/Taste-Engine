@@ -43,6 +43,8 @@ ADDED_COLUMNS = [
     ("stg_mal_anime", "broadcast_day", "TEXT"),
     ("stg_mal_anime", "broadcast_time", "TEXT"),
     ("stg_tmdb_tv", "overview", "TEXT"),
+    ("stg_tmdb_tv", "original_language", "TEXT"),
+    ("stg_tmdb_tv", "origin_country_json", "TEXT"),
     ("stg_mal_anime", "main_picture_url", "TEXT"),
     ("stg_mal_anime", "nsfw_rating", "TEXT"),
     ("stg_lastfm_scrobbles", "image_url", "TEXT"),
@@ -144,6 +146,12 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         cards = settings.get(conn, "dashboard_cards").split(",")
         if "airing" not in cards:
             settings.set_value(conn, "dashboard_cards", [*cards, "airing"])
+    if ("stg_tmdb_tv", "original_language") in added:
+        # TV picks leave out anime by origin; shows synced before 2.3 get theirs
+        # from the stored responses, once (no network).
+        from taste.sources import tmdb
+
+        tmdb.backfill_origins(conn)
     settings.apply_source_notes(conn)
     # One transaction, so another connection reading a report while this one starts
     # sees the old views or the new ones, never a moment with the view missing.

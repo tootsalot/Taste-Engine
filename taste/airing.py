@@ -30,7 +30,9 @@ class AiringShow:
     next_at: datetime | None
     next_episode: int
     final_episode: bool
-    caption: str
+    caption: str  # when and progress together, for tooltips
+    when: str = ""  # "Sat 10:30 AM" or "no set time"
+    progress: str = ""  # "next for you: ep 7"
 
 
 def next_broadcast(
@@ -61,8 +63,8 @@ def load(conn: sqlite3.Connection, now: datetime) -> list[AiringShow]:
     hidden = activity.hidden_items(conn)
     cfg = settings.get_all(conn)
     rows = conn.execute(
-        "SELECT a.mal_anime_id, a.title, a.title_en, a.main_picture_url, a.num_episodes, "
-        "a.broadcast_day, a.broadcast_time, l.num_episodes_watched, x.item_id "
+        "SELECT a.mal_anime_id, a.title, a.title_en, a.main_picture_url, a.nsfw_rating, "
+        "a.num_episodes, a.broadcast_day, a.broadcast_time, l.num_episodes_watched, x.item_id "
         "FROM stg_mal_list_entries l JOIN stg_mal_anime a ON a.mal_anime_id = l.mal_anime_id "
         "JOIN core_item_external_ids x ON x.external_id = CAST(a.mal_anime_id AS TEXT) "
         "AND x.source = 'mal' AND x.id_type = 'mal_anime_id' "
@@ -94,11 +96,15 @@ def load(conn: sqlite3.Connection, now: datetime) -> list[AiringShow]:
             AiringShow(
                 row["mal_anime_id"],
                 row["title_en"] or row["title"],
-                row["main_picture_url"],
+                # Like Recently finished: a poster MAL rates adult is never pictured on
+                # the Dashboard, even when the show itself is shown.
+                None if row["nsfw_rating"] == "black" else row["main_picture_url"],
                 moment,
                 episode,
                 final,
                 f"{when} · {progress}",
+                when,
+                progress,
             )
         )
     shows.sort(

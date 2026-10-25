@@ -93,6 +93,16 @@ def test_hidden_adult_titles_and_posters_never_leave_the_loader(conn, world):
     assert len(shows) == 4
 
 
+def test_adult_posters_stay_off_the_dashboard_even_when_shown(conn, world):
+    """The Dashboard never pictures a poster MAL rates "black", like Recently finished."""
+    from taste import airing
+
+    settings.set_value(conn, "include_nsfw", True)
+    posters = {s.mal_anime_id: s.poster_url for s in airing.load(conn, NOW)}
+    assert posters[504] is None
+    assert all(posters[i] for i in (501, 502, 503))
+
+
 def test_only_currently_airing_watching_entries_are_included(conn, world):
     from taste import airing
 

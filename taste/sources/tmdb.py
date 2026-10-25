@@ -296,8 +296,9 @@ def _seed_details(conn: sqlite3.Connection, kind: str, item: dict, raw_id: int |
     else:
         conn.execute(
             "INSERT INTO stg_tmdb_tv (tmdb_id, name, original_name, first_air_date, "
-            "vote_average, vote_count, poster_path, raw_page_id, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '') ON CONFLICT (tmdb_id) DO NOTHING",
+            "vote_average, vote_count, poster_path, original_language, origin_country_json, "
+            "raw_page_id, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '') ON CONFLICT (tmdb_id) DO NOTHING",
             (
                 item["id"],
                 _title(item),
@@ -306,6 +307,7 @@ def _seed_details(conn: sqlite3.Connection, kind: str, item: dict, raw_id: int |
                 item.get("vote_average"),
                 item.get("vote_count"),
                 item.get("poster_path"),
+                *_origin(item),
                 raw_id,
             ),
         )
@@ -487,8 +489,9 @@ def save_details(
     conn.execute(
         "INSERT INTO stg_tmdb_tv (tmdb_id, name, original_name, first_air_date, last_air_date, "
         "status, seasons, episodes, episode_run_time, vote_average, vote_count, poster_path, "
-        "networks_json, genres_json, creators_json, raw_page_id, fetched_at, overview) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "networks_json, genres_json, creators_json, raw_page_id, fetched_at, overview, "
+        "original_language, origin_country_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (tmdb_id) DO UPDATE SET name = excluded.name, "
         "original_name = excluded.original_name, first_air_date = excluded.first_air_date, "
         "last_air_date = excluded.last_air_date, status = excluded.status, "
@@ -497,6 +500,8 @@ def save_details(
         "vote_count = excluded.vote_count, poster_path = excluded.poster_path, "
         "networks_json = excluded.networks_json, genres_json = excluded.genres_json, "
         "creators_json = excluded.creators_json, overview = excluded.overview, "
+        "original_language = excluded.original_language, "
+        "origin_country_json = excluded.origin_country_json, "
         "raw_page_id = excluded.raw_page_id, "
         "fetched_at = excluded.fetched_at",
         (
@@ -518,6 +523,7 @@ def save_details(
             raw_id,
             fetched_at,
             (data.get("overview") or "").strip() or None,
+            *_origin(data),
         ),
     )
 
@@ -525,6 +531,34 @@ def save_details(
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
+
+
+def _origin(data: dict[str, Any]) -> tuple[str, str]:
+    """A show's original language and countries of origin, '' and '[]' when TMDB has
+    none (so a stored row reads as checked, not as unknown)."""
+    countries = [c for c in data.get("origin_country") or [] if isinstance(c, str)]
+    return data.get("original_language") or "", json.dumps(countries)
+
+
+def backfill_origins(conn: sqlite3.Connection) -> int:
+    """Language and origin for shows fetched before they were kept, read back from the
+    stored details response (no network). Returns how many were filled."""
+    rows = conn.execute(
+        "SELECT t.tmdb_id, p.payload FROM stg_tmdb_tv t "
+        "JOIN raw_api_pages p ON p.raw_page_id = t.raw_page_id "
+        "WHERE t.original_language IS NULL AND t.fetched_at <> ''"
+    ).fetchall()
+    for tmdb_id, payload in rows:
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            continue
+        conn.execute(
+            "UPDATE stg_tmdb_tv SET original_language = ?, origin_country_json = ? "
+            "WHERE tmdb_id = ?",
+            (*_origin(data), tmdb_id),
+        )
+    return len(rows)
 
 
 def backfill_overviews(conn: sqlite3.Connection) -> int:

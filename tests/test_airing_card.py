@@ -40,15 +40,19 @@ def test_airing_card_refreshes_after_sync_and_settings_without_another_sync(wind
         "Example Midnight Crossing",
         "Example No Schedule",
     ]
+    # The list sits on the card's own surface, not a box of window background.
+    assert not dash.airing.scroll.viewport().autoFillBackground()
+    assert not dash.airing.scroll.widget().autoFillBackground()
     row = dash.airing.items[1]
-    assert row.caption.text() == "Sat 8:30 AM · next for you: ep 7"
+    assert (row.when.text(), row.caption.text()) == ("Sat 8:30 AM", "next for you: ep 7")
+    assert row.when.textFormat() == Qt.TextFormat.PlainText
     assert row.title.textFormat() == Qt.TextFormat.PlainText
     assert row.art.loader is window.ctx.art
     conn = window.ctx.connect("me")
     settings.set_value(conn, "clock_format", "24h")
     conn.close()
     window._after_settings_saved(["clock_format"])
-    assert dash.airing.items[1].caption.text() == "Sat 08:30 · next for you: ep 7"
+    assert dash.airing.items[1].when.text() == "Sat 08:30"
     conn = window.ctx.connect("me")
     settings.set_value(conn, "dashboard_cards", "month,recent")
     conn.close()

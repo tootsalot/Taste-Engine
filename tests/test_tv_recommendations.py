@@ -253,3 +253,40 @@ def test_tv_candidates_have_raw_provenance_at_insertion(conn, library):
     ).fetchall()
     assert len(rows) == 5
     assert all(tuple(row) == ("tmdb", "tmdb", "/3/tv/{id}/recommendations") for row in rows)
+
+
+def test_tv_picks_leave_out_anime(conn, library):
+    """MAL covers anime, so TV picks skip Japanese animation; other animation stays."""
+    fake, client = library
+    fake.catalog[("tv", 31)]["_recs"] += [45, 46, 47]
+    for i, name, genres, language, country in (
+        (45, "Example Mecha Saga", ["Animation", "Action"], "ja", ["JP"]),
+        (46, "Example Cartoon Heroes", ["Animation", "Action"], "en", ["US"]),
+        (47, "Example Tokyo Drama", ["Drama"], "ja", ["JP"]),
+    ):
+        fake.catalog[("tv", i)] = tv(i, name, 7.8, genres, "Lu Writer")
+        fake.catalog[("tv", i)].update(original_language=language, origin_country=country)
+    tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None, now=NOW)
+    row = conn.execute(
+        "SELECT original_language, origin_country_json FROM stg_tmdb_tv WHERE tmdb_id = 45"
+    ).fetchone()
+    assert tuple(row) == ("ja", '["JP"]')
+    picks = {r.item_key for r in recommend.tv_recommendations(conn, NOW.date())[0]}
+    assert "45" not in picks
+    assert {"46", "47"} <= picks
+
+
+def test_tv_upgrade_recovers_origin_from_stored_responses(conn, library):
+    fake, client = library
+    fake.catalog[("tv", 31)].update(original_language="ja", origin_country=["JP"])
+    tmdb.sync(conn, client, CFG, out=lambda m: None, now=NOW + timedelta(days=31))
+    # A database from before 2.3 has the raw response but not the columns.
+    conn.execute("ALTER TABLE stg_tmdb_tv DROP COLUMN original_language")
+    conn.execute("ALTER TABLE stg_tmdb_tv DROP COLUMN origin_country_json")
+    from taste.db import apply_schema
+
+    apply_schema(conn)
+    row = conn.execute(
+        "SELECT original_language, origin_country_json FROM stg_tmdb_tv WHERE tmdb_id = 31"
+    ).fetchone()
+    assert tuple(row) == ("ja", '["JP"]')

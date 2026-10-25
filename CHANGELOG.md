@@ -2,7 +2,9 @@
 
 Each release's notes on GitHub come from its section here.
 
-## [2.3.0] (unreleased)
+## [2.3.0]
+
+TV suggestions join For You, the Dashboard shows what's airing this week, and Rev offers to make the recaps for every month and year before I started using it.
 
 Rev
 - On the first launch with past history, or after a new profile's first sync, the Dashboard offers to make my missing monthly and yearly recaps
@@ -12,21 +14,22 @@ Rev
 Dashboard
 - Airing now sits beside This month for currently airing shows on my Watching list, with posters and the next weekly broadcast in my time zone
 - Each row says which episode is next for me, marks the final known episode, and puts shows with no set time last
-- The card follows my clock and time-zone settings without another sync, hides itself when empty, and leaves adult shows out while Include NSFW anime is off
+- The card follows my clock and time-zone settings without another sync, hides itself when empty, and leaves adult shows out while Include NSFW anime is off; like the other shelves, it never pictures an adult poster
 - Dashboard cards can turn it off, and a long airing list scrolls inside the card so the full-screen Dashboard still fits
 - Compact sync-line buttons and equal-height recap notices keep progress and banner changes from moving the page
 
 For You
 - TV has its own tab after Films, with picks from shows I rated above my own TV average and my watchlist
 - TV picks use the film model with my TV ratings, genre and creator leans, and the same caution on averages from few votes
+- Each TV pick gives its reason in one sentence, the way films do, and its subtitle says the episode length
+- TV picks leave out anime (animation from Japan), since the Anime tab covers it; animation from elsewhere stays
 - Shows not out yet stay out, watchlist picks are marked, and Not interested hides a TV pick without hiding a film with the same TMDB id
 - The TMDB vote setting now says it covers both film and TV suggestions
 
-Fixes
-- TV picks explain the reason in one sentence instead of repeating the same lines under Behind the score
-- TV runtimes say episodes; unknown episode lengths stay out, and film runtimes keep their wording
-- Raw-page pruning keeps responses still used by TV recommendations and uses an index to find those references
-- TV candidates get their raw page link in the insert, and film and TV descriptions are backfilled once per refresh
+Under the hood
+- Raw-page pruning knows about the pages TV recommendations point to, with an index to find them
+- Film and TV descriptions missing from older syncs are filled in from stored responses once per refresh
+- Each show's original language and country of origin are kept, and filled in once from stored responses for shows synced before
 
 ## [2.2.0]
 

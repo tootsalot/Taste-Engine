@@ -331,22 +331,29 @@ class Shelf(Card):
         self._fit()
 
 
+AIRING_POSTER = QSize(44, 62)  # MAL's poster shape, big enough to recognize
+
+
 class AiringRow(QWidget):
-    """A poster and two plain-text lines, drawn with the shared background art loader."""
+    """A poster, the title, when it airs (in lilac), and my next episode, all plain text,
+    drawn with the shared background art loader."""
 
     def __init__(self, ctx: AppContext, show: airing.AiringShow) -> None:
         super().__init__()
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(10)
-        self.art = ArtTile(ctx.art, QSize(30, 42), accent=theme.LILAC)
-        row.addWidget(self.art)
+        row.setSpacing(12)
+        self.art = ArtTile(ctx.art, AIRING_POSTER, accent=theme.LILAC)
+        row.addWidget(self.art, 0, Qt.AlignmentFlag.AlignVCenter)
         text = QVBoxLayout()
-        text.setSpacing(2)
-        self.title = label(show.title, wrap=True)
-        self.caption = label(show.caption, role="caption", wrap=True)
-        text.addWidget(self.title)
-        text.addWidget(self.caption)
+        text.setSpacing(1)
+        text.addStretch()
+        self.title = label(show.title, role="strong", wrap=True)
+        self.when = label(show.when, role="airing-time")
+        self.caption = label(show.progress, role="caption", wrap=True)
+        for widget in (self.title, self.when, self.caption):
+            text.addWidget(widget)
+        text.addStretch()
         row.addLayout(text, 1)
         self.setToolTip(plain_tip(f"{show.title}\n{show.caption}"))
         self.art.set_art(show.poster_url, show.title)
@@ -374,9 +381,12 @@ class AiringCard(Card):
         holder = QWidget()
         self.rows = QVBoxLayout(holder)
         self.rows.setContentsMargins(0, 0, 4, 0)
-        self.rows.setSpacing(8)
+        self.rows.setSpacing(10)
         self.rows.addStretch()
         self.scroll.setWidget(holder)
+        # Both would fill with the window background, a dark box inside the card.
+        self.scroll.viewport().setAutoFillBackground(False)
+        holder.setAutoFillBackground(False)
         self.body.addWidget(self.scroll, 1)
 
     def sizeHint(self) -> QSize:  # noqa: N802 (Qt naming)

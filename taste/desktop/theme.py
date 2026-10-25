@@ -306,6 +306,7 @@ QFrame#StatusDot[state="running"] {{ background: {LILAC}; }}
 QFrame#StatusDot[state="ok"] {{ background: {GOOD}; }}
 QFrame#StatusDot[state="error"] {{ background: {DANGER}; }}
 QLabel[role="caption"] {{ color: {MUTED}; font-size: 12px; }}
+QLabel[role="airing-time"] {{ color: {LILAC}; font-size: 12px; font-weight: 700; }}
 
 QProgressBar {{ background: {RAISED}; border: none; border-radius: 4px; height: 8px;
                 text-align: center; color: transparent; }}
