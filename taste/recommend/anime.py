@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from datetime import datetime
 from statistics import mean
 from typing import Any
 
 from taste import enrich, settings
+from taste.recommend import experiments
 from taste.recommend.model import (
     MAX_REASON_SEEDS,
     Rec,
@@ -107,11 +109,14 @@ def evaluate(
     return {"held_out": len(test), **{k: round(mean(v), 3) for k, v in errors.items()}}
 
 
-def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str, Any]]:
+def anime_recommendations(
+    conn: sqlite3.Connection, now: datetime | None = None
+) -> tuple[list[Rec], dict[str, Any]]:
     cfg = settings.get_all(conn)
     facts = _anime_facts(conn)
     scored = _scored(conn)
     model = build_model(scored, facts)
+    model = experiments.apply(conn, "anime", model, scored, facts, now)
     mine = enrich.my_mean_score(conn)
     support = enrich.candidate_support(conn)
     dismissed = _dismissed(conn, "anime")
@@ -163,6 +168,8 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
     if cfg["rec_include_plan_to_watch"]:
         candidates |= plan_to_watch
     residuals = sorted(holdout_residuals(scored, facts))
+    if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"]:
+        residuals = sorted(experiments.residuals(conn, "anime", scored, facts, now))
     recs: list[Rec] = []
     predictions: dict[str, float] = {}
     for anime_id in candidates:
@@ -237,4 +244,5 @@ def anime_recommendations(conn: sqlite3.Connection) -> tuple[list[Rec], dict[str
         if chance is not None:
             rec.facts["chance_8_plus"] = round(chance, 3)
     metrics = {"model_overall_bias": round(model.overall, 3), **evaluate(conn, facts, scored)}
+    metrics.update(experiments.metrics(conn, "anime", scored, facts, now))
     return recs, metrics

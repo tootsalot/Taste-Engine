@@ -89,6 +89,8 @@ def dismiss(conn: sqlite3.Connection, kind: str, item_key: str) -> None:
 
 
 REC_SETTINGS = [
+    "rec_dismissal_signal",
+    "rec_recent_ratings",
     "rec_count",
     "rec_min_raters",
     "rec_media_types",
@@ -110,7 +112,7 @@ def compute_all(
     their latest saved run.
     """
     if "anime" in kinds:
-        anime, metrics = anime_recommendations(conn)
+        anime, metrics = anime_recommendations(conn, now)
         save_run(conn, "anime", anime, metrics)
     if "music" in kinds:
         discover, rediscover = music_recommendations(conn, now)
@@ -123,7 +125,7 @@ def compute_all(
         shows, metrics = tv_recommendations(conn, now.date() if now else None)
         save_run(conn, "tv", shows, metrics)
     if "book" in kinds:
-        books, metrics = book_recommendations(conn)
+        books, metrics = book_recommendations(conn, now)
         save_run(conn, "book", books, metrics)
     return {kind: len(latest(conn, kind)[0]) for kind in LIST_KINDS}
 

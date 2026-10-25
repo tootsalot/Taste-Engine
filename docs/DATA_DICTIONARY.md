@@ -717,3 +717,23 @@ artists first recorded in each year, their shares, both top-five lists, and reta
 No table is added. `drift_min_titles` (default 10) and `drift_min_plays` (default 100) live in
 app_settings, require both years to qualify, and are Advanced settings. Years have at most
 eight slides; months stay at most seven. `drift` follows the combined clock/year slide.
+
+
+## Optional recommendation experiments (3.0)
+
+`rec_dismissal_signal` and `rec_recent_ratings` are Advanced app_settings booleans, both false
+by default and included in rec_runs.params_json. The first subtracts 0.3 times a dismissed
+feature's count divided by count + shrinkage (genres 5, people 3), with the existing half
+weight on people. Studios, directors, creators, and authors use the same feature slot.
+No dismissal becomes a core_rating. The second gives samples with known dates in the last
+two calendar years weight 1.25 in the same slope, shift, and feature fit. Future dates and
+unknown dates keep weight 1. MAL uses its last list edit as a proxy; TMDB uses its rating
+date; Hardcover's core source_updated_at is absent, so it is not assigned a made-up date.
+
+Each rated list's metrics_json has `experiments.dismissal` and `experiments.recency`, each
+with `enabled`, `off`, and `on`. Each check records `count` and `mae` on the existing 1 to 10
+model scale, including doubled book stars. Each experiment is compared independently against
+both off. All use the same five folds by source id, fitting without held-out ratings. Under
+20 ratings, count is 0 and mae is null, rather than an invented accuracy. The ordinary
+accuracy fields describe the usual model. Chance estimates use the active experiment fit.
+Music has no personal rating holdout and keeps its listening model.

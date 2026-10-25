@@ -9,6 +9,10 @@ Profiles
 - Restore makes a new profile, upgrades older databases, and leaves existing profiles and retained recaps alone
 - Archives are checked before anything is installed, with limits on unpacked size and safe file names
 
+For You
+- Two Advanced switches can learn a little from dismissed picks or weight recent dated ratings more, both off to start
+- Saved metrics compare each idea off and on against the same held-out ratings, without treating dismissals or plays as ratings
+
 Rev
 - Year decks compare how my ratings differ from the crowd, which genres grew or faded, and how my recorded listening changed
 - Each comparison carries its numbers and waits for enough data in both years, with the minimums in Advanced settings

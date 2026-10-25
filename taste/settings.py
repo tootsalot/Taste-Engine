@@ -319,6 +319,26 @@ SETTINGS: list[Setting] = [
         advanced=True,
     ),
     Setting(
+        "rec_dismissal_signal",
+        "Learn a little from Not interested (experimental)",
+        "bool",
+        False,
+        "Pull down genres and credited people shared with dismissed picks. "
+        "Off keeps the usual model.",
+        group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
+        "rec_recent_ratings",
+        "Give recent ratings more weight (experimental)",
+        "bool",
+        False,
+        "Weight dated ratings from the last two years 25% more. MAL uses the last list edit. "
+        "Undated ratings keep their usual weight.",
+        group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
         "drift_min_titles",
         "Titles before a yearly comparison",
         "int",

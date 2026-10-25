@@ -9,6 +9,7 @@ from datetime import date
 from typing import Any
 
 from taste import settings
+from taste.recommend import experiments
 from taste.recommend.model import (
     FILM_PRIOR_VOTES,
     MAX_REASON_SEEDS,
@@ -133,6 +134,7 @@ def _screen_recommendations(
     scored = _screen_scored(conn, typical, prior, kind)
     raw = {tmdb_id: facts[tmdb_id]["vote_average"] for tmdb_id, _, _ in scored}
     model = build_model(scored, facts)
+    model = experiments.apply(conn, item_kind, model, scored, facts, today)
     mine = tmdb.my_rating_mean(conn, kind)
     support = tmdb.candidate_support(conn, kind)
     dismissed = _dismissed(conn, item_kind)
@@ -164,6 +166,8 @@ def _screen_recommendations(
         weight = (rating - (mine or 0)) / (1 + position / 10)
         sources.setdefault(rec_id, []).append((weight, title, rating))
     residuals = sorted(holdout_residuals(scored, facts))  # chance_at_least needs them sorted
+    if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"]:
+        residuals = sorted(experiments.residuals(conn, item_kind, scored, facts, today))
     recs: list[Rec] = []
     for tmdb_id in (set(support) | watchlist) - rated:
         f = facts.get(tmdb_id)
@@ -226,4 +230,5 @@ def _screen_recommendations(
         "typical_tmdb_average": round(typical, 2),
         **holdout_check(scored, residuals, raw),
     }
+    metrics.update(experiments.metrics(conn, item_kind, scored, facts, today))
     return recs[: cfg["rec_count"]], metrics

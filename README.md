@@ -30,6 +30,17 @@ pip install -r requirements.txt
 python -m taste.desktop
 ```
 
+## Experimental picks
+
+Advanced settings has two switches, both off to start: learning a little from **Not interested**,
+and giving dated ratings from the last two years 25% more weight. I can compare the separate
+off/on holdout checks in each rated list's saved metrics before deciding whether to use them.
+Off keeps the usual picks exactly. Dismissals still hide the item either way.
+
+MAL's last list edit is only a proxy for a rating date. Hardcover does not supply a rating
+timestamp, so its undated ratings keep their usual weight. Music plays are not ratings.
+The usual accuracy line remains the baseline check; experiment checks are stored separately.
+
 ## Taste over time
 
 Yearly Rev decks can include **How your taste changed**, after the year card. I can compare

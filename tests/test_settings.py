@@ -64,6 +64,8 @@ def test_every_setting_belongs_to_a_group_in_display_order():
         "rec_include_plan_to_watch",
         "film_prior_votes",
         "rec_seed_artists",
+        "rec_dismissal_signal",
+        "rec_recent_ratings",
     ]
     assert by_group["Sources"] == ["mal_username", "lastfm_username"]  # the Sources card
     assert settings.GROUPS == [
