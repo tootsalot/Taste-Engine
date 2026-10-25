@@ -136,8 +136,15 @@ SIGNED_IN_PAGE = "Signed in. You can close this tab and go back to Taste Engine.
 REFUSED_PAGE = "Not signed in. You can close this tab; Taste Engine didn't get access."
 
 
+CALLBACK_READ_SECONDS = 3  # how long the listener waits for a request's first bytes
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     server: _CallbackServer
+    # The listener answers one connection at a time. A connection that opens and sends
+    # nothing (a browser's spare preconnect socket, or any local program) used to hold it
+    # for good, so the real redirect never got an answer and Stop couldn't end the wait.
+    timeout = CALLBACK_READ_SECONDS
 
     def do_GET(self) -> None:  # noqa: N802 (http.server naming)
         parsed = urllib.parse.urlparse(self.path)

@@ -1,5 +1,8 @@
 # Runtime
 requests==2.34.2
+# requests' certificate bundle, pinned: before 2026.10.18 it trusted a root CA whose
+# intermediate keys were compromised (PYSEC-2026-4320).
+certifi==2026.10.19
 python-dotenv==1.2.3
 keyring==25.7.0
 PySide6==6.12.0

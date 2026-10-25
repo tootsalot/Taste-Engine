@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -93,6 +94,12 @@ def poster_url(path: str | None) -> str | None:
 def check_token(client: HttpClient, read_token: str) -> None:
     """One cheap call that fails on a bad read token."""
     client.get_json(f"{API}/3/authentication", headers=bearer(read_token), checker=check_response)
+
+
+def approve_url(token: str) -> str:
+    """The page where I approve a request token. The token is TMDB's own text, so it's
+    encoded: whatever it holds stays one query value on TMDB's site (2.5)."""
+    return APPROVE_URL.format(urllib.parse.quote(token, safe=""))
 
 
 def request_token(client: HttpClient, read_token: str) -> str:

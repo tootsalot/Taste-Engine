@@ -3,6 +3,7 @@
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtWidgets import QLabel
 
 from taste.charts import Band
 from taste.desktop.widgets import (
@@ -314,3 +315,22 @@ def test_one_bar_leads_at_full_color(qtbot):
     assert chart.lead_bar() == 1  # a month still filling up never leads
     chart.set_data([0, 0], ["a", "b"])
     assert chart.lead_bar() == -1
+
+
+def test_an_elided_label_shortens_and_keeps_the_whole_text(qtbot):
+    """2.5: one line that gives up width; the whole text stays readable and returnable."""
+    from taste.desktop.widgets import ElidedLabel
+
+    text = "Make recaps for your past months? 49 months and 4 years, about a minute."
+    tag = ElidedLabel(text, min_width=40)
+    qtbot.addWidget(tag)
+    tag.show()
+    tag.resize(120, 20)
+    assert tag.text() == text and tag.minimumSizeHint().width() == 40
+    shown = QLabel.text(tag)
+    assert shown != text and shown.endswith("…")
+    assert text in tag.toolTip()  # the whole sentence on hover
+    tag.setToolTip("MyAnimeList synced today")
+    assert tag.toolTip() == "MyAnimeList synced today"  # a tooltip from outside wins
+    tag.resize(900, 20)
+    assert QLabel.text(tag) == text

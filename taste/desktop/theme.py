@@ -177,8 +177,14 @@ QToolButton#CardThumb:checked, QToolButton#CardThumb:focus {{ border-color: {LIL
 QPushButton#ProfileSwitcher {{ background: transparent; border: 1px solid transparent;
     border-radius: 12px; padding: 0 28px 0 8px; text-align: left; color: {TEXT};
     font-size: 15px; font-weight: 600; }}
-QPushButton#ProfileSwitcher:hover {{ background: {SURFACE}; }}
+QPushButton#ProfileSwitcher:hover {{ background: {SURFACE}; border-color: transparent; }}
 QPushButton#ProfileSwitcher:focus {{ border-color: {LILAC}; }}
+QPushButton#ProfileSwitcher:pressed {{ background: {RAISED}; }}
+QMenu#ProfileMenu {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: 12px;
+    padding: 6px; }}
+QMenu#ProfileMenu::item {{ padding: 8px 14px 8px 10px; border-radius: 8px; }}
+QMenu#ProfileMenu::item:selected {{ background: {RAISED}; }}
+QMenu#ProfileMenu::separator {{ margin: 4px 6px; }}
 QToolButton#RowMenu {{ background: transparent; border: 1px solid {LINE}; border-radius: 17px;
     padding: 0; }}
 QToolButton#RowMenu:hover {{ background: {RAISED}; }}

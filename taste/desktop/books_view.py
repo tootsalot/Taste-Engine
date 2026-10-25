@@ -371,13 +371,20 @@ class PersonCard(Card):
         self.body.addWidget(self.name)
         self.caption = label("", role="muted")
         self.body.addWidget(self.caption)
-        row = QHBoxLayout()
+        # The covers sit on a strip that gives up width: as many show as fit, so three
+        # cards across never push a narrow window into scrolling sideways (2.5).
+        self.strip = QWidget()
+        self.strip.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.strip.setFixedHeight(cover.height())
+        row = QHBoxLayout(self.strip)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(self.GAP)
         self.covers = [ArtTile(ctx.art, cover, radius=4, accent=accent) for _ in range(self.COVERS)]
         for tile in self.covers:
             row.addWidget(tile)
         row.addStretch()
-        self.body.addLayout(row)
+        self.body.addWidget(self.strip)
+        self.filled = 0  # how many covers this person has
         # Across the card, not a stub on the left (2.1: a wide card was mostly empty).
         self.line = Sparkline(accent)
         self.line.setMinimumSize(120, 40)
@@ -397,6 +404,19 @@ class PersonCard(Card):
             self.cover_size = size
             for tile in self.covers:
                 tile.set_size(size)
+            self.strip.setFixedHeight(size.height())
+        self._fit_covers()
+
+    def fitting(self) -> int:
+        """How many covers fit across the card at their current size."""
+        margins = self.body.contentsMargins()
+        room = self.width() - margins.left() - margins.right()
+        return max(1, (room + self.GAP) // (self.cover_size.width() + self.GAP))
+
+    def _fit_covers(self) -> None:
+        shown = min(self.filled, self.fitting())
+        for i, tile in enumerate(self.covers):
+            tile.setVisible(i < shown)
 
     def set_person(
         self, name: str, caption: str, items: Sequence[WallItem], ratings: Sequence[float],
@@ -409,7 +429,8 @@ class PersonCard(Card):
             if item is not None:
                 tile.set_art(item.url, item.title)
                 tile.setToolTip(plain_tip(item.tip))
-            tile.setVisible(item is not None)
+        self.filled = min(len(items), self.COVERS)
+        self._fit_covers()
         self.line.set_values(ratings)
         self.line.setToolTip(line_tip)
 

@@ -220,3 +220,17 @@ def test_film_caution_is_a_setting(conn, make_client):
     settings.set_value(conn, "film_prior_votes", 0)  # trust every average as it is
     assert pick() > cautious + 0.5
     assert "film_prior_votes" in recommend.REC_SETTINGS  # changing it recomputes the lists
+
+
+def test_the_approval_link_keeps_the_token_one_value_on_tmdb():
+    """2.5: TMDB's token goes into the link encoded, so odd characters can't change it."""
+    import urllib.parse
+
+    url = tmdb.approve_url("abc&next=https://example.com/#x")
+    parts = urllib.parse.urlsplit(url)
+    assert (parts.scheme, parts.hostname) == ("https", "www.themoviedb.org")
+    assert parts.path == "/auth/access"
+    assert urllib.parse.parse_qs(parts.query) == {
+        "request_token": ["abc&next=https://example.com/#x"]
+    }
+    assert parts.fragment == ""

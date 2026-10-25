@@ -97,6 +97,29 @@ def test_a_stray_callback_is_turned_away_and_the_real_one_still_works():
     assert "didn't get access" in stray_visit.page
 
 
+def test_an_idle_connection_never_holds_up_the_real_callback():
+    """2.5: the listener answers one connection at a time, and a connection that opened and
+    sent nothing (a browser's spare preconnect socket, or any local program) blocked it
+    for good, so the real redirect was never answered and Stop couldn't end the wait."""
+    import socket
+
+    sign_in = hardcover.SignIn()
+    idle = socket.create_connection(sign_in.server.server_address)  # opens, says nothing
+    found = []
+    try:
+        waiter = threading.Thread(target=lambda: found.append(sign_in.wait(timeout=20)))
+        waiter.start()
+        thread, _ = browser_returns(
+            sign_in, code="code-1", state=sign_in.state, iss=hardcover.ISSUER
+        )
+        waiter.join(timeout=10)
+        assert not waiter.is_alive() and found == ["code-1"]
+        thread.join(timeout=5)
+    finally:
+        idle.close()
+        sign_in.cancel()
+
+
 def test_a_refusal_without_state_still_ends_the_sign_in():
     """Some OAuth servers send a refusal without state; it carries no code, so it can end
     the wait (it used to be ignored after the stray-callback fix, hanging 5 minutes)."""

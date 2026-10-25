@@ -47,6 +47,7 @@ from taste.desktop.context import AppContext
 from taste.desktop.widgets import (
     BarChart,
     Card,
+    ElidedLabel,
     GenreCard,
     LazyPage,
     ScrollArea,
@@ -105,7 +106,9 @@ class SyncStrip(QFrame):
         self.dot.setFixedSize(8, 8)
         self.dot.setProperty("state", "idle")
         row.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.text = label("", role="muted", wrap=True)
+        # One line, shortened with "..." when the notices beside it need the room (2.5:
+        # wrapped, it stood four lines tall in an 1180 px window).
+        self.text = ElidedLabel(role="muted", min_width=80)
         row.addWidget(self.text, 1)
         # On the status line rather than a row of its own, so it costs the cards nothing.
         self.progress = QProgressBar()
@@ -855,9 +858,11 @@ class DashboardPage(LazyPage, QWidget):
             rows = [
                 ([(self.crowd, 6), (self.scores, 6)], 2, COLUMNS),
                 (
-                    [(self.month, 6), (self.airing, 6)]
+                    # This month's five numbers need about 530 px: 7 of 12 columns keeps
+                    # them from pushing the page wider than an 1180 px window (2.5).
+                    [(self.month, 7), (self.airing, 5)]
                     if self.airing_shown
-                    else [(self.month, 6), (self.weeks, 6)],
+                    else [(self.month, 7), (self.weeks, 5)],
                     2,
                     COLUMNS,
                 ),
@@ -1160,7 +1165,8 @@ class Banner(QFrame):
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 2, 6, 2)
         row.setSpacing(4)
-        self.text = label("")
+        # Keeps its short sentence whole; the longer past-recaps offer shortens first.
+        self.text = ElidedLabel(min_width=210)
         row.addWidget(self.text)
         self.open_button = QPushButton("Open")
         self.open_button.setProperty("role", "link")
@@ -1203,7 +1209,7 @@ class PastRecaps(QFrame):
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 2, 6, 2)
         row.setSpacing(8)
-        self.text = label("")
+        self.text = ElidedLabel()  # gives up width before the page scrolls sideways
         row.addWidget(self.text)
         self.progress = QProgressBar()
         self.progress.setObjectName("RecapProgress")

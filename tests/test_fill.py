@@ -9,7 +9,8 @@ charts, whose open plot area is part of reading them.
 """
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtCore import QEventLoop, Qt, QTimer
+from PySide6.QtWidgets import QScrollBar
 
 from taste.desktop.books_view import CoverWall
 from taste.desktop.dashboard import SyncStrip
@@ -375,3 +376,25 @@ def test_airing_card_fits_beside_this_month_without_moving_the_page(library):
         assert dash.scroll.horizontalScrollBar().maximum() == 0
         if width == 2560:
             assert dash.scroll.verticalScrollBar().maximum() == 0
+
+
+def test_a_small_window_never_scrolls_sideways(library):
+    """2.5: at the app's opening size the status line's notices used to push the
+    Dashboard wider than the window, cutting off every card's right edge."""
+    win = library
+    win.sidebar.setCurrentRow(PAGES.index("Dashboard"))
+    dash = win.dashboard
+    dash.banner.show_text("Your September recap is ready.")
+    dash.past.offer("Make recaps for your past months? 49 months and 4 years, about a minute.")
+    for size in ((1180, 820), (1280, 800)):
+        win.resize(*size)
+        pump()
+        assert dash.scroll.horizontalScrollBar().maximum() == 0, size
+        for row in range(len(PAGES)):
+            win.sidebar.setCurrentRow(row)
+            pump(150)
+            page = win.stack.currentWidget()
+            for bar in page.findChildren(QScrollBar):
+                if bar.orientation() == Qt.Orientation.Horizontal and bar.isVisible():
+                    assert bar.maximum() == 0, (PAGES[row], size)
+        win.sidebar.setCurrentRow(PAGES.index("Dashboard"))

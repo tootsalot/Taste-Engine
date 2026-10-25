@@ -29,7 +29,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPixmap,
 )
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy
+from PySide6.QtWidgets import QMenu, QPushButton, QSizePolicy
 
 from taste import profiles
 from taste.desktop import theme
@@ -133,25 +133,70 @@ class ProfileSwitcher(QPushButton):
         self.collapsed = False
         self.setIconSize(AVATAR)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setFixedHeight(48)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAccessibleName("Profile")
-        # The chevron sits on the button's right edge, in a layout of its own.
-        edge = QHBoxLayout(self)
-        edge.setContentsMargins(0, 0, 10, 0)
-        edge.addStretch()
-        self.chevron = QLabel()
-        self.chevron.setPixmap(QIcon(theme.CHEVRON_DOWN).pixmap(QSize(10, 10)))
-        self.chevron.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        edge.addWidget(self.chevron)
+        # Tab reaches it, with its focus ring; a click doesn't leave the ring behind.
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        # Painted, not a label in a layout: a layout inside the button overrode its
+        # fixed height (it drew 32 px tall, not 48).
+        self.chevron = QIcon(theme.CHEVRON_DOWN).pixmap(QSize(10, 10))
         self.menu_ = QMenu(self)
+        self.menu_.setObjectName("ProfileMenu")
+        # Rounded corners need the menu's window to be see-through outside them.
+        self.menu_.setWindowFlags(
+            self.menu_.windowFlags()
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+        self.menu_.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.menu_.aboutToHide.connect(self._menu_closed)
+        self.by_keyboard = False  # how the menu was last opened
         self.group = QActionGroup(self)
         self.group.setExclusive(True)
         self.clicked.connect(self.open_menu)
         self._rebuild()
 
+    HEIGHT = 48
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt naming)
+        # Its own height, not the theme's button height: a fixed height set here lost to
+        # the stylesheet's min-height, and the switcher drew 32 px tall.
+        return QSize(super().sizeHint().width(), self.HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 (Qt naming)
+        return QSize(super().minimumSizeHint().width(), self.HEIGHT)
+
     def open_menu(self) -> None:
+        self.menu_.setMinimumWidth(self.width())  # as wide as the button it drops from
         self.menu_.popup(self.mapToGlobal(QPoint(0, self.height() + 4)))
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        self.by_keyboard = True
+        super().keyPressEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        self.by_keyboard = False
+        super().mousePressEvent(event)
+
+    def _menu_closed(self) -> None:
+        # A ring left around the switcher after choosing with the mouse looked like a
+        # pending action; from the keyboard it shows where you are, so it stays.
+        if not self.by_keyboard and self.hasFocus():
+            self.clearFocus()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().paintEvent(event)
+        if self.collapsed:
+            return
+        painter = QPainter(self)
+        try:
+            size = self.chevron.deviceIndependentSize()
+            x = self.width() - 10 - size.width()
+            painter.drawPixmap(
+                QPoint(round(x), round((self.height() - size.height()) / 2)), self.chevron
+            )
+        finally:
+            painter.end()
 
     # -- the QComboBox-like part ---------------------------------------------
 
@@ -223,7 +268,6 @@ class ProfileSwitcher(QPushButton):
         self.setText(shown.replace("&", "&&"))  # "&" would mark a shortcut key
         picture = self._picture(self.currentData())
         self.setIcon(avatar(name or "?", picture))
-        self.chevron.setVisible(not self.collapsed)
         self.setToolTip(f"Profile: {name}. Click to switch or add one." if name else "")
         self.menu_.clear()
         for action in self.group.actions():
@@ -233,6 +277,10 @@ class ProfileSwitcher(QPushButton):
                              text.replace("&", "&&"), self.menu_)  # fmt: skip
             action.setCheckable(True)
             action.setChecked(i == self.index)
+            if i == self.index:
+                bold = QFont(action.font())
+                bold.setBold(True)
+                action.setFont(bold)  # the profile in use stands out in the list
             action.setData(i)
             self.group.addAction(action)
             self.menu_.addAction(action)

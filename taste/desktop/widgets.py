@@ -6,9 +6,10 @@ import html
 import math
 from collections.abc import Sequence
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QButtonGroup,
     QFrame,
     QGridLayout,
@@ -78,6 +79,58 @@ def section(text: str) -> QLabel:
 def elided(text: str, font: QFont, width: int) -> str:
     """`text` on one line of `width` pixels, ending in an ellipsis if it had to be cut."""
     return QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, width)
+
+
+class ElidedLabel(QLabel):
+    """One line of plain text that gives up width when the row is tight, ending in "…"
+    with the whole text in its tooltip, instead of pushing its row (and the page) wider.
+    `text()` is always the whole text."""
+
+    MIN_WIDTH = 60
+
+    def __init__(self, text: str = "", role: str | None = None, min_width: int = MIN_WIDTH) -> None:
+        """`min_width`: what it keeps however tight the row gets (a short notice keeps
+        its whole sentence while a longer one beside it shortens)."""
+        super().__init__()
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        if role:
+            self.setProperty("role", role)
+        self.min_width = min_width
+        self.setMinimumWidth(min_width)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.full = ""
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt naming)
+        self.full = text
+        self.updateGeometry()
+        self._fit()
+
+    def text(self) -> str:
+        return self.full
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt naming)
+        hint = super().sizeHint()
+        return QSize(self.fontMetrics().horizontalAdvance(self.full) + 4, hint.height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 (Qt naming)
+        return QSize(self.min_width, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().resizeEvent(event)
+        self._fit()
+
+    def setToolTip(self, tip: str) -> None:  # noqa: N802 (Qt naming)
+        """A tooltip set from outside (the status line's per-source times) wins; without
+        one, the whole text shows on hover while it's shortened."""
+        self.own_tip = tip
+        self._fit()
+
+    def _fit(self) -> None:
+        shown = elided(self.full, self.font(), max(self.width(), 1))
+        QLabel.setText(self, shown)
+        tip = getattr(self, "own_tip", "")
+        QLabel.setToolTip(self, tip or (plain_tip(self.full) if shown != self.full else ""))
 
 
 def elided_lines(text: str, font: QFont, width: int, lines: int) -> str:
@@ -601,7 +654,13 @@ class Sparkline(QWidget):
         super().__init__()
         self.color = QColor(color)
         self.values: list[float] = []
-        self.setFixedSize(84, 30)
+        # 84 px wide where there's room, down to 48 in a narrow tile (2.5).
+        self.setMinimumSize(48, 30)
+        self.setMaximumSize(84, 30)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt naming)
+        return QSize(84, 30)
 
     def set_values(self, values: Sequence[float]) -> None:
         self.values = list(values)
@@ -1127,7 +1186,7 @@ class BandChart(QWidget):
 
 def tile_row(tiles: list[QWidget]) -> QHBoxLayout:
     row = QHBoxLayout()
-    row.setSpacing(12)
+    row.setSpacing(theme.GAP)
     for tile in tiles:
         row.addWidget(tile, 1)
     return row
@@ -1146,9 +1205,11 @@ class StatTile(Card):
         self.trend = Sparkline()
         top.addWidget(self.trend, 0, Qt.AlignmentFlag.AlignVCenter)
         self.body.addLayout(top)
-        self.caption = label("", role="muted")
+        # The two lines under the number shorten with "..." in a narrow window rather than
+        # push six tiles (and the page) wider than it (2.5).
+        self.caption = ElidedLabel(role="muted")
         self.body.addWidget(self.caption)
-        self.detail = label("", role="caption")
+        self.detail = ElidedLabel(role="caption")
         self.body.addWidget(self.detail)
         self.trend.setVisible(False)
 
@@ -1165,6 +1226,39 @@ class StatTile(Card):
         self.trend.setToolTip(tile.trend_tip)
 
 
+class HeaderRow(QWidget):
+    """A card's title with a control (a switch) beside it, or under it when the card is
+    too narrow for both on one line, so the control never makes the card, and the page,
+    wider than the window (2.5)."""
+
+    def __init__(self, title: QWidget, side: QWidget) -> None:
+        super().__init__()
+        self.title, self.side = title, side
+        self.box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self.box.setContentsMargins(0, 0, 0, 0)
+        self.box.setSpacing(8)
+        # The title takes the free width: its size hint leaves out the theme's letter
+        # spacing, so held to it the last letter or two were cut off.
+        self.box.addWidget(title, 1)
+        self.box.addWidget(side, 0, Qt.AlignmentFlag.AlignLeft)
+
+    def needed(self) -> int:
+        return self.title.sizeHint().width() + self.side.sizeHint().width() + 8
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 (Qt naming)
+        width = max(self.title.minimumSizeHint().width(), self.side.minimumSizeHint().width())
+        return QSize(width, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().resizeEvent(event)
+        stacked = self.width() < self.needed()
+        direction = (
+            QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
+        )
+        if self.box.direction() != direction:
+            self.box.setDirection(direction)
+
+
 def chart_card(title: str, chart: QWidget, note: str = "", side: QWidget | None = None) -> Card:
     """A small title (with `side`, such as a switch, at the right), a note, and a chart."""
     card = Card()
@@ -1172,12 +1266,8 @@ def chart_card(title: str, chart: QWidget, note: str = "", side: QWidget | None 
     if side is None:
         card.body.addWidget(card.title)
     else:
-        row = QHBoxLayout()
-        # The title takes the free width: its size hint leaves out the theme's letter
-        # spacing, so held to it the last letter or two were cut off.
-        row.addWidget(card.title, 1)
-        row.addWidget(side)
-        card.body.addLayout(row)
+        card.header = HeaderRow(card.title, side)
+        card.body.addWidget(card.header)
     card.note = label(note, role="muted", wrap=True)
     card.body.addWidget(card.note)
     card.note.setVisible(bool(note))  # after it has a parent, or it opens as its own window

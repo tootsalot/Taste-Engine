@@ -470,7 +470,7 @@ class SourcesCard(Card):
             if token is None:
                 self._tmdb_problem(f"TMDB said no: {error}")
                 return
-            url = tmdb.APPROVE_URL.format(token)
+            url = tmdb.approve_url(token)
             if not (approve or self._approve_in_browser)(url):
                 self.say("")
                 self.refresh_status()

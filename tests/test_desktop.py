@@ -745,3 +745,23 @@ def test_ctrl_c_in_the_terminal_closes_the_window(window, qtbot):
         qtbot.waitUntil(lambda: not window.isVisible(), timeout=2000)
     finally:
         signal.signal(signal.SIGINT, before)
+
+
+def test_clicking_the_profile_switcher_leaves_no_ring(window, qtbot):
+    """2.5: it drew 32 px tall (the theme's min-height won over a fixed height), its menu
+    was narrower than it, and a click left a focus ring around it after the menu closed."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    set_up_profile(window)
+    window.show()
+    qtbot.waitExposed(window)
+    picker = window.profile_picker
+    assert picker.height() == picker.HEIGHT == 48
+    picker.setFocus()
+    QTest.mouseClick(picker, Qt.MouseButton.LeftButton, pos=QPoint(40, 20))
+    qtbot.waitUntil(picker.menu_.isVisible, timeout=2000)
+    assert picker.menu_.minimumWidth() == picker.width()
+    picker.menu_.hide()
+    assert not picker.hasFocus()
+    assert picker.focusPolicy() == Qt.FocusPolicy.TabFocus  # still reachable with Tab

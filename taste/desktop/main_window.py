@@ -256,6 +256,10 @@ class MainWindow(QMainWindow):
             self.sidebar.setCurrentRow(0)
         else:
             self._on_page_changed(self.sidebar.currentRow())
+        if self.focusWidget() is self.profile_picker and not self.profile_picker.by_keyboard:
+            # Without a profile the page list was disabled, so focus fell to the switcher
+            # and would sit ringed there; the page list takes it back.
+            self.sidebar.focus_current()
 
     def _on_page_changed(self, row: int) -> None:
         if self.current_profile() is None or row < 0:

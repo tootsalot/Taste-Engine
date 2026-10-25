@@ -2,6 +2,23 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [2.5.0]
+
+An audit for bugs, glitches, and security problems before 3.0.
+
+Security
+- The bundled certificate list is updated: the older one still trusted an authority whose keys were compromised, which could let someone on the network pose as MyAnimeList, Last.fm, TMDB, or Hardcover
+- Hardcover sign-in can't be held up by a connection that opens and never speaks (a browser's spare connection, or any program on the computer); it used to wait on it for good, and Stop couldn't end it
+- TMDB's approval link carries its token encoded, so nothing in it can change where the link goes
+
+Glitches
+- At the size the app opens at (and up to about 1300 px wide), the Dashboard and the four Reports pages no longer scroll sideways with their right edges cut off: notices and tile lines shorten with "…" (the whole text is a hover away), person cards show as many covers as fit, a card's switch drops under its title when the card is narrow, and This month gets more of its row
+- The Dashboard's status line stays one line in a narrow window, and the recap-ready notice keeps its whole sentence while the longer messages beside it shorten
+- The profile switcher is its full height again, clicking it no longer leaves an outline around it, and its menu has rounded corners, matches the switcher's width, and shows the profile in use in bold
+
+Build
+- Pillow, used only to make the icon, is updated to 13.0.0
+
 ## [2.4.1]
 
 Everything in 2.4.0 below. The 2.4.0 build stopped on a test limit before anything was published (Linux renders fonts a little differently, which nudged one layout measurement over its limit), so this is the first release with the 2.4 look.
