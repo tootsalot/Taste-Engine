@@ -680,3 +680,15 @@ All views read from core, plus `app_settings` through `rpt_settings`. Every Last
 | `rpt_tmdb_ratings` | item_id, media_type (`film` or `tv_show`), title, release_year, my_rating, tmdb_average, tmdb_votes, rating_diff, rated_at (when I rated it, not when I watched) |
 
 Ties in the ranked views are broken alphabetically, so the order is stable.
+
+
+## Portable profile backups (3.0)
+
+A `.tasteprofile` is a ZIP archive, format 1. `manifest.json` records `format` (integer),
+`app_version`, `profile_id`, `display_name`, and `created_at` (UTC text). `profile.db` is a
+consistent SQLite backup, `picture.png` is optional, and `recaps/` contains only that profile's
+recap files. Credential stores, fallback `.keys.json` files, reports, and shared caches are
+excluded. No database table is added. Restore upgrades the staged database through `db.connect`
+and installs only under an unused id. Retained recap files also reserve an id. Restore rejects
+unknown member names, duplicate paths, traversal, absolute paths, links, encryption, unsupported
+formats, more than 10,000 members, or more than 1 GiB unpacked. Manifests are capped at 64 KiB.

@@ -30,6 +30,18 @@ pip install -r requirements.txt
 python -m taste.desktop
 ```
 
+## Back up a profile
+
+I can use **Settings > Data > Back up this profile** to save a `.tasteprofile` file, or run
+`python -m taste --profile example_user backup example.tasteprofile`. It includes a consistent
+copy of my database, my retained recaps, and my profile picture. It contains personal history,
+so I keep it somewhere private. Keys and tokens stay out.
+
+**Restore a profile** imports it under an unused id and switches to it. I enter its source
+keys again on Settings. From the command line I use
+`python -m taste restore example.tasteprofile --as restored`. An existing profile or retained
+recap folder is never replaced.
+
 ## Use it
 
 1. Create a profile. Each profile has its own keys, settings, and data. The profile's name sits at the top of the sidebar; click it to switch profiles, add one, or give a profile its own picture.

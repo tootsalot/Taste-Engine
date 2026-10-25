@@ -7,7 +7,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from taste import __version__, db, profiles, reports, runner
+from taste import __version__, backup, db, profiles, reports, runner
 from taste.config import load_env, reports_dir
 from taste.profiles import DEFAULT_PROFILE, ProfileError
 
@@ -116,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("report", help="print a summary and write CSV files")
     rep.add_argument("--out", type=Path, help="folder for CSV files (default reports/<profile>)")
     sub.add_parser("status", help="row counts and last sync per source")
+    back = sub.add_parser("backup", help="back up this profile without its keys")
+    back.add_argument("path", type=Path)
+    restore = sub.add_parser("restore", help="restore a backup as a new profile")
+    restore.add_argument("path", type=Path)
+    restore.add_argument("--as", dest="new_id", help="a new profile id")
     prof = sub.add_parser("profiles", help="list or create profiles")
     prof_sub = prof.add_subparsers(dest="action")
     create = prof_sub.add_parser("create", help="create a profile")
@@ -151,8 +156,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "profiles":
             return cmd_profiles(args)
+        if args.command in ("backup", "restore"):
+            if args.db:
+                raise ProfileError("Backup and restore use profiles, so leave out --db.")
+            if args.command == "backup":
+                backup.create(args.profile, args.path)
+                print("Profile backup saved.")
+            else:
+                result = backup.restore(args.path, args.new_id)
+                print(f"Restored profile {result.profile_id!r}. Enter its source keys again.")
+            return 0
         conn, label = _open(args)
-    except ProfileError as exc:
+    except (ProfileError, backup.BackupError, OSError) as exc:
         print(exc, file=sys.stderr)
         return 2
     try:

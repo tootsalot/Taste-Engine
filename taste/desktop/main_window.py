@@ -147,6 +147,9 @@ class MainWindow(QMainWindow):
         self.dashboard.open_page.connect(self.show_page)
         self.settings.settings_saved.connect(self._after_settings_saved)
         self.settings.profile_deleted.connect(self._after_profile_deleted)
+        self.settings.profile_restored.connect(self._after_profile_restored)
+        self.settings.message.connect(self.say)
+        self.settings.transfer_busy.connect(self._update_busy)
         sources = self.settings.sources
         sources.hardcover_connected.connect(lambda: self.dashboard.start_sync("hardcover"))
         sources.sync_requested.connect(self.dashboard.start_sync)
@@ -154,8 +157,8 @@ class MainWindow(QMainWindow):
         # A sync and a recommendations refresh never run at the same time: both write
         # the run log, and a new run marks any other running one as interrupted.
         self.settings.is_busy = self.is_busy
-        self.dashboard.is_blocked = self.for_you.is_refreshing
-        self.for_you.is_blocked = self.dashboard.is_syncing
+        self.dashboard.is_blocked = self._blocks_sync
+        self.for_you.is_blocked = self._blocks_recs
         for signal in (
             self.dashboard.sync_started,
             self.dashboard.sync_finished,
@@ -449,12 +452,22 @@ class MainWindow(QMainWindow):
         self.dashboard.start_sync("all")
         return self.dashboard.is_syncing()
 
+    def _blocks_sync(self) -> bool:
+        return self.for_you.is_refreshing() or self.settings.is_transferring()
+
+    def _blocks_recs(self) -> bool:
+        return self.dashboard.is_syncing() or self.settings.is_transferring()
+
     def is_busy(self) -> bool:
-        return self.dashboard.is_syncing() or self.for_you.is_refreshing()
+        return (
+            self.dashboard.is_syncing()
+            or self.for_you.is_refreshing()
+            or self.settings.is_transferring()
+        )
 
     def _update_busy(self, *_args) -> None:
-        self.dashboard.set_blocked(self.for_you.is_refreshing())
-        self.for_you.set_blocked(self.dashboard.is_syncing())
+        self.dashboard.set_blocked(self._blocks_sync())
+        self.for_you.set_blocked(self._blocks_recs())
         self.settings.sources.set_busy(self.is_busy())
         enabled = self.current_profile() is not None and not self.is_busy()
         had_focus = self.profile_picker.hasFocus()
@@ -563,6 +576,11 @@ class MainWindow(QMainWindow):
             # Plan to Watch, minimum raters, and so on change the lists: recompute from
             # what's cached (no network, about a second, in the background).
             self.for_you.start_refresh(fetch=False)
+
+    def _after_profile_restored(self, profile_id: str) -> None:
+        self.ctx.forget(profile_id)
+        self.reload_profiles(select=profile_id)
+        self.show_page("Settings")
 
     def _after_profile_deleted(self, profile_id: str) -> None:
         self.say(f"Deleted profile {profile_id}.")

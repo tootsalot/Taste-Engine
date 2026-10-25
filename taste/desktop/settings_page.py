@@ -14,9 +14,11 @@ from PySide6.QtWidgets import (
     QCompleter,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLayout,
     QLineEdit,
@@ -34,6 +36,7 @@ from taste.desktop.context import AppContext
 from taste.desktop.dialogs import ConfirmDeleteDialog
 from taste.desktop.sources_card import SourcesCard
 from taste.desktop.widgets import Card, ScrollArea, Segmented, heading, label, section
+from taste.desktop.workers import BackupWorker
 from taste.settings import SettingError
 
 CACHE_SIZES = ((100, "100 MB"), (300, "300 MB"), (1000, "1 GB"))
@@ -54,6 +57,9 @@ CREDITS = (
 
 
 class SettingsPage(QWidget):
+    profile_restored = Signal(str)
+    transfer_busy = Signal()
+    message = Signal(str)
     profile_deleted = Signal(str)
     settings_saved = Signal(list)  # keys that changed
 
@@ -61,6 +67,8 @@ class SettingsPage(QWidget):
         super().__init__()
         self.ctx = ctx
         self.profile_id: str | None = None
+        self.backup_worker: BackupWorker | None = None
+        self._transfer_active = False
         self.is_busy = lambda: False  # the main window points this at "is a sync running?"
 
         outer = QVBoxLayout(self)
@@ -199,6 +207,23 @@ class SettingsPage(QWidget):
         row.addStretch()
         row.addWidget(self.delete_button)
         data_card.body.addLayout(row)
+        archive_row = QHBoxLayout()
+        self.backup_button = QPushButton("Back up this profile…")
+        self.restore_button = QPushButton("Restore a profile…")
+        self.backup_button.clicked.connect(self.backup_profile)
+        self.restore_button.clicked.connect(self.restore_profile)
+        archive_row.addWidget(self.backup_button)
+        archive_row.addWidget(self.restore_button)
+        archive_row.addStretch()
+        data_card.body.addLayout(archive_row)
+        data_card.body.addWidget(
+            label(
+                "Backups include history, recaps, and the profile picture. "
+                "Enter source keys again after restoring.",
+                role="caption",
+                wrap=True,
+            )
+        )
         # Posters and covers are kept on disk for every profile (Advanced).
         self.picture_row = QWidget()
         pictures = QHBoxLayout(self.picture_row)
@@ -508,6 +533,71 @@ class SettingsPage(QWidget):
         if not motion.windows_allows():
             note += " Windows' animation effects are off, so the app doesn't animate either."
         self.motion_note.setText(note)
+
+    def is_transferring(self) -> bool:
+        return self._transfer_active
+
+    def backup_profile(self, path: str | Path | None = None) -> bool:
+        if not self.profile_id or self.is_busy():
+            return False
+        if isinstance(path, bool):  # clicked(bool)
+            path = None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Back up this profile",
+                "profile.tasteprofile",
+                "Taste Engine profile (*.tasteprofile)",
+            )
+        return self._start_transfer("backup", path, self.profile_id) if path else False
+
+    def restore_profile(
+        self, path: str | Path | None = None, profile_id: str | None = None
+    ) -> bool:
+        if self.is_busy():
+            return False
+        if isinstance(path, bool):
+            path = None
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Restore a profile", "", "Taste Engine profile (*.tasteprofile)"
+            )
+            if not path:
+                return False
+            # Always offer an id before launching the job, including archives whose old
+            # profile or retained recap folder is still on this computer.
+            profile_id, ok = QInputDialog.getText(self, "Restore a profile", "New profile id")
+            if not ok:
+                return False
+        return self._start_transfer("restore", path, profile_id) if path else False
+
+    def _start_transfer(self, operation: str, path, profile_id: str | None) -> bool:
+        worker = BackupWorker(operation, Path(path), profile_id)
+        self.backup_worker = worker
+        worker.done.connect(self._transfer_done)
+        worker.finished.connect(self._transfer_finished)
+        self.ctx.track(worker)
+        self.backup_button.setEnabled(False)
+        self.restore_button.setEnabled(False)
+        self._transfer_active = True
+        worker.start()
+        self.transfer_busy.emit()
+        return True
+
+    def _transfer_done(self, profile_id: str, error: str) -> None:
+        if error:
+            self.message.emit(error)
+        elif self.backup_worker.operation == "restore":
+            self.profile_restored.emit(profile_id)
+            self.message.emit("Profile restored. Enter its source keys in Settings.")
+        else:
+            self.message.emit("Profile backup saved.")
+
+    def _transfer_finished(self) -> None:
+        self._transfer_active = False
+        self.backup_button.setEnabled(True)
+        self.restore_button.setEnabled(True)
+        self.transfer_busy.emit()
 
     def open_data_folder(self) -> None:
         folder = data_dir()

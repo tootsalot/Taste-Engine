@@ -13,7 +13,7 @@ from typing import Any
 
 from PySide6.QtCore import QSize, QThread, Signal
 
-from taste import db, profiles, recap, runner
+from taste import backup, db, profiles, recap, runner
 from taste.desktop import recap_cards
 from taste.desktop.art import decode
 from taste.secrets_store import SecretStore
@@ -401,3 +401,44 @@ class ConnectionTestWorker(QThread):
             if conn is not None:
                 conn.close()
         self.done.emit(ok, message)
+
+
+class BackupWorker(QThread):
+    """Back up or restore a profile without blocking the window."""
+
+    done = Signal(str, str)
+
+    def __init__(self, operation: str, path: Path, profile_id: str | None) -> None:
+        super().__init__()
+        self.operation = operation
+        self.target = Path(path)
+        self.profile_id = profile_id
+        self.root = profiles.profiles_dir()
+        self.recaps = backup.data_dir() / "recaps"
+        self.database = profiles.db_path(profile_id, self.root) if operation == "backup" else None
+        self.picture = (
+            profiles.picture_path(profile_id, self.root) if operation == "backup" else None
+        )
+
+    def run(self) -> None:
+        try:
+            if self.operation == "backup":
+                if not self.database.is_file():
+                    raise profiles.ProfileError("The profile was deleted.")
+                backup.create(
+                    self.profile_id,
+                    self.target,
+                    database=self.database,
+                    recap_root=self.recaps / self.profile_id,
+                    picture=self.picture,
+                )
+                result = self.profile_id
+            else:
+                result = backup.restore(
+                    self.target, self.profile_id, root=self.root, recap_root=self.recaps
+                ).profile_id
+            self.done.emit(result, "")
+        except (backup.BackupError, profiles.ProfileError) as exc:
+            self.done.emit("", str(exc))
+        except Exception as exc:
+            self.done.emit("", f"The profile {self.operation} failed ({type(exc).__name__}).")

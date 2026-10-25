@@ -2,6 +2,16 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [3.0.0] - Unreleased
+
+Profiles
+- I can back up a profile's history, recaps, and picture from Settings or the command line, without its keys
+- Restore makes a new profile, upgrades older databases, and leaves existing profiles and retained recaps alone
+- Archives are checked before anything is installed, with limits on unpacked size and safe file names
+
+Under the hood
+- Charts, report and Dashboard cards, recommendation lists, and Hardcover sign-in live in smaller modules
+
 ## [2.5.0]
 
 An audit for bugs, glitches, and security problems before 3.0.

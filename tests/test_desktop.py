@@ -353,15 +353,13 @@ def test_connection_test_runs_in_background(window, qtbot):
     set_up_profile(window)
     sources = window.settings.sources
     worker = sources.test_connection("lastfm")
-    with qtbot.waitSignal(worker.done, timeout=5000):
-        pass
+    qtbot.waitUntil(worker.isFinished, timeout=5000)
     qtbot.waitUntil(lambda: "connected as example_user" in sources.message.text())
 
     sources.rows["lastfm"].key.setText("wrong-key")
     sources.save_source("lastfm")
     worker = sources.test_connection("lastfm")
-    with qtbot.waitSignal(worker.done, timeout=5000):
-        pass
+    qtbot.waitUntil(worker.isFinished, timeout=5000)
     qtbot.waitUntil(lambda: "Invalid API key" in sources.message.text())
     assert "wrong-key" not in visible_text(window)
 
