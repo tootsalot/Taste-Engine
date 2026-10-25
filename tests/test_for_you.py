@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QLabel, QWidget
 from taste import recommend, settings
 from taste.desktop.context import AppContext
 from taste.desktop.for_you import (
+    LISTS,
     RecCard,
     accuracy_text,
     accuracy_tip,
@@ -202,7 +203,7 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
     assert detail(window, "anime").rec.item_key == "104"
     assert anime[2].property("selected") and not anime[0].property("selected")
     assert texts(detail(window, "anime"), "badge") == ["On your Plan to Watch"]
-    assert page.tabs.tabText(0) == "Anime (4)"
+    assert page.tabs.tabText(0) == "Anime · 4"
 
 
 def test_tiles_take_as_many_columns_as_fit(window, qtbot):
@@ -276,7 +277,7 @@ def test_not_interested_hides_a_card_for_good(window, qtbot):
     qtbot.mouseClick(detail(window, "anime").dismiss_button, Qt.MouseButton.LeftButton)
     assert [t.rec.item_key for t in tiles(window, "anime")] == ["201", "104", "206"]
     assert detail(window, "anime").rec.item_key == "104"  # the next one opens in its place
-    assert page.tabs.tabText(0) == "Anime (3)"
+    assert page.tabs.tabText(0) == "Anime · 3"
     assert "Hidden Example Drama A Season 2" in page.status.text()
     refreshed(window, qtbot)  # and it stays hidden after a refresh
     assert "203" not in [t.rec.item_key for t in tiles(window, "anime")]
@@ -420,7 +421,7 @@ def test_sync_everything_also_refreshes_recommendations(window, qtbot):
         "0 films, 0 TV shows, 0 books." in log
     )
     window.sidebar.setCurrentRow(PAGES.index("For You"))  # it catches up when shown
-    assert window.for_you.tabs.tabText(0) == "Anime (4)"  # For You picked them up
+    assert window.for_you.tabs.tabText(0) == "Anime · 4"  # For You picked them up
     assert len(tiles(window, "anime")) == 4
     assert progress  # the bar followed the recommendation steps too
 
@@ -507,7 +508,7 @@ def test_tv_tab_follows_films_and_dismisses_tv_only(window):
     conn.close()
     page = window.for_you
     page.reload()
-    assert [page.tabs.tabText(i).split(" (")[0] for i in range(page.tabs.count())] == [
+    assert [page.tabs.tabText(i).split(" · ")[0] for i in range(page.tabs.count())] == [
         "Anime",
         "Discover music",
         "Rediscover",
@@ -525,3 +526,19 @@ def test_tv_tab_follows_films_and_dismisses_tv_only(window):
     assert recommend.latest(conn, "tv")[0] == []
     assert len(recommend.latest(conn, "film")[0]) == 1
     conn.close()
+
+
+def test_the_lists_switch_with_a_pill_in_each_mediums_color(window):
+    """2.4: the list switch is the app's pill switch; the tab bar stays hidden."""
+    from PySide6.QtGui import QColor
+
+    from taste.desktop import theme
+
+    page = window.for_you
+    assert page.tabs.tabBar().isHidden()
+    assert list(page.switch.buttons) == [kind for kind, _ in LISTS]
+    page.switch.buttons["film"].click()
+    assert page.tabs.currentWidget() is page.lists["film"]
+    assert page.switch.pill.color == QColor(theme.TEAL)
+    page.tabs.setCurrentIndex(0)
+    assert page.switch.value() == "anime" and page.switch.pill.color == QColor(theme.LILAC)

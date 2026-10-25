@@ -7,7 +7,7 @@ import math
 from collections.abc import Sequence
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -53,8 +53,19 @@ def heading(text: str, size: int = 26) -> QLabel:
     return widget
 
 
+def card_title(text: str) -> QLabel:
+    """A card's title: sentence case, semibold, the first thing read in the card (2.4)."""
+    widget = label(text, role="card-title")
+    font = QFont(theme.HEADING_FAMILY)
+    font.setPixelSize(theme.CARD_TITLE_PX)
+    font.setWeight(QFont.Weight.DemiBold)
+    widget.setFont(font)
+    return widget
+
+
 def section(text: str) -> QLabel:
-    """A small spaced-out card title. Shown in capitals; the text itself stays as written."""
+    """A small spaced-out label inside a card or panel ("About", "Save"). Shown in
+    capitals; the text itself stays as written. Card titles use card_title."""
     widget = label(text, role="section")
     font = QFont(theme.BODY_FAMILY)
     font.setPixelSize(12)
@@ -144,10 +155,17 @@ class Segmented(QFrame):
 
     changed = Signal(str)
 
-    def __init__(self, options: Sequence[tuple[str, str]], accent: str = "anime") -> None:
+    def __init__(
+        self,
+        options: Sequence[tuple[str, str]],
+        accent: str = "anime",
+        accents: dict[str, str] | None = None,
+    ) -> None:
         """`options` are (key, text). `accent` lights the chosen one: "anime" lilac,
-        "music" coral, "books" amber."""
+        "music" coral, "books" amber, "screen" teal. `accents` gives some keys their own
+        (For You: each list in its medium's color)."""
         super().__init__()
+        self.accents = accents or {}
         self.setProperty("role", "segmented")
         self.pill = _Pill(self, accent)
         self.pill.hide()
@@ -163,11 +181,11 @@ class Segmented(QFrame):
             button.setProperty("accent", accent)
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Tab reaches it (with its focus ring); a click doesn't leave a ring around
+            # the lit pill (2.4).
+            button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
             button.clicked.connect(lambda _=False, k=key: self.changed.emit(k))
-            # The chosen one is bold; leave room for that, or its first letter is cut off.
-            bold = QFont(button.font())
-            bold.setBold(True)
-            button.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(text) + 32)
+            self._fit(button, text)
             self.group.addButton(button)
             row.addWidget(button)
             self.buttons[key] = button
@@ -178,6 +196,20 @@ class Segmented(QFrame):
         self.buttons[key].setChecked(True)
         self._move_pill(animate=False)
 
+    def set_text(self, key: str, text: str) -> None:
+        """Change one segment's words ("Anime · 30"); the lit pill follows its new width."""
+        button = self.buttons[key]
+        button.setText(text)
+        self._fit(button, text)
+        self._move_pill(animate=False)
+
+    @staticmethod
+    def _fit(button: QPushButton, text: str) -> None:
+        # The chosen one is bold; leave room for that, or its first letter is cut off.
+        bold = QFont(button.font())
+        bold.setBold(True)
+        button.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(text) + 32)
+
     def value(self) -> str:
         return next((k for k, b in self.buttons.items() if b.isChecked()), "")
 
@@ -186,6 +218,10 @@ class Segmented(QFrame):
         return button.geometry() if button is not None else None
 
     def _move_pill(self, animate: bool) -> None:
+        accent = self.accents.get(self.value())
+        if accent is not None:
+            self.pill.color = QColor(ACCENTS.get(accent, theme.LILAC))
+            self.pill.update()
         target = self._target()
         if target is None or target.width() <= 0:
             return
@@ -281,8 +317,20 @@ class Card(QFrame):
         super().__init__(parent)
         self.setProperty("role", "card")
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(18, 16, 18, 16)
-        self.body.setSpacing(8)
+        self.body.setContentsMargins(20, 18, 20, 18)
+        self.body.setSpacing(10)
+
+
+def top_rounded(rect: QRectF, radius: float = 5) -> QPainterPath:
+    """A bar with rounded top corners and a square foot on the baseline."""
+    radius = min(radius, rect.width() / 2, rect.height())
+    path = QPainterPath()
+    path.addRoundedRect(rect, radius, radius)
+    if rect.height() > radius:
+        foot = QPainterPath()
+        foot.addRect(QRectF(rect.left(), rect.bottom() - radius, rect.width(), radius))
+        path = path.united(foot)
+    return path
 
 
 class BarChart(QWidget):
@@ -299,6 +347,7 @@ class BarChart(QWidget):
     SCALE_ROOM = 34  # scale numbers left of the bars, at least; wider numbers get more
     GAP = 3
     LABEL_GAP = 12  # the least space between two axis labels
+    SOFT = 0.42  # how strong the bars other than the lead one are (2.4)
 
     def __init__(
         self,
@@ -431,18 +480,21 @@ class BarChart(QWidget):
                     f"{tick:,}",
                 )
         last = len(rects) - 1
+        lead = self.lead_bar()
+        soft = QColor(self.color)
+        soft.setAlphaF(self.SOFT)
         for i, rect in enumerate(rects):
             if self.partial_last and i == last:
                 faded = QColor(self.color)
-                faded.setAlpha(90)
+                faded.setAlpha(60)
                 pen = QPen(self.color, 1, Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(faded)
-                painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, 0), 3, 3)
+                painter.drawPath(top_rounded(rect.adjusted(0.5, 0.5, -0.5, 0)))
             else:
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(self.color)
-                painter.drawRoundedRect(rect, 3, 3)
+                painter.setBrush(self.color if i == lead else soft)
+                painter.drawPath(top_rounded(rect))
         for box, align, text in self.top_texts():
             partial = self.partial_last and text.endswith("so far")
             painter.setPen(muted if partial else QColor(theme.TEXT))
@@ -451,6 +503,17 @@ class BarChart(QWidget):
         painter.setPen(muted)
         for box, align, text in self.axis_labels():
             painter.drawText(box, align, text)
+
+    def lead_bar(self) -> int:
+        """The one bar drawn at full color (2.4): the highest finished one, the newest
+        on a tie. The rest are a soft fill, so the chart isn't a solid wall of color."""
+        values = self.shown()
+        if self.partial_last:
+            values = values[:-1]
+        if not values or not max(values):
+            return -1
+        top = max(values)
+        return max(i for i, v in enumerate(values) if v == top)
 
     def top_texts(self) -> list[tuple[QRectF, Qt.AlignmentFlag, str]]:
         """What goes above the bars: each count (value_labels) and "so far" over a bar
@@ -614,6 +677,12 @@ class LeanBar(QWidget):
         if self.high == self.low:
             return
         edge = QColor(theme.EDGE)
+        if type(self) is LeanBar:
+            # A faint track the whole width, so a row reads across from its name to its
+            # bar even when the bar sits at the far end (2.4).
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(theme.RAISED))
+            painter.drawRoundedRect(QRectF(0, 3, self.width(), self.height() - 6), 4, 4)
         painter.fillRect(QRectF(self._x(0.0) - 0.5, 0, 1, self.height()), edge)
         if self.usual is not None:
             painter.setPen(QPen(edge, 1, Qt.PenStyle.DashLine))
@@ -693,7 +762,7 @@ class GenreCard(Card):
         self.fit = fit
         self._row_widgets: dict[str, list[list[QWidget]]] = {"generous": [], "harsh": []}
         self.body.setSpacing(6)
-        self.body.addWidget(section(title))
+        self.body.addWidget(card_title(title))
         self.note = label("", role="muted", wrap=True)
         self.body.addWidget(self.note)
         self.note.setVisible(False)
@@ -1099,7 +1168,7 @@ class StatTile(Card):
 def chart_card(title: str, chart: QWidget, note: str = "", side: QWidget | None = None) -> Card:
     """A small title (with `side`, such as a switch, at the right), a note, and a chart."""
     card = Card()
-    card.title = section(title)
+    card.title = card_title(title)
     if side is None:
         card.body.addWidget(card.title)
     else:

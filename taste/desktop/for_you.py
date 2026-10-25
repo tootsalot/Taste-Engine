@@ -33,6 +33,7 @@ from taste.desktop.widgets import (
     Card,
     LazyPage,
     ScrollArea,
+    Segmented,
     elided_lines,
     heading,
     label,
@@ -64,6 +65,14 @@ ACCENTS = {
 }  # music is coral
 # Lists with posters or covers rather than square artwork.
 PORTRAIT = ("anime", "film", "tv", "book")
+SWITCH_ACCENTS = {  # the list switch lit in each medium's color
+    "anime": "anime",
+    "music_discover": "music",
+    "music_rediscover": "music",
+    "film": "screen",
+    "tv": "screen",
+    "book": "books",
+}
 PROGRESS = re.compile(r"(\d+) of (\d+)")
 TILE_POSTER = QSize(150, 214)
 TILE_COVER = QSize(150, 150)
@@ -176,21 +185,26 @@ class PosterTile(QFrame):
         self.art = ArtTile(ctx.art, size, accent=ACCENTS.get(list_kind, theme.CORAL))
         self.art.set_art(rec.image_url, rec.title, fallback=rec.facts.get("fallback_image"))
         layout.addWidget(self.art)
+        # The score sits beside the title (2.4), not under a two-line gap.
+        number, caption = score_text(list_kind, rec)
+        self.score = label(number if list_kind != "music_rediscover" else f"{number} plays")
+        self.score.setProperty("role", "tile-score")
+        self.score.setProperty("accent", list_kind.split("_")[0])
+        self.score.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self.title = label("", wrap=True)
         font = QFont(theme.BODY_FAMILY)
         font.setPixelSize(13)
         font.setWeight(QFont.Weight.DemiBold)
         self.title.setFont(font)
-        self.title.setText(elided_lines(rec.title, font, size.width(), 2))
         self.picture_width = size.width()
+        self.title.setText(elided_lines(rec.title, font, self._title_width(), 2))
         self.title.setFixedHeight(self.title.fontMetrics().lineSpacing() * 2 + 2)
         self.title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.title)
-        number, caption = score_text(list_kind, rec)
-        self.score = label(number if list_kind != "music_rediscover" else f"{number} plays")
-        self.score.setProperty("role", "tile-score")
-        self.score.setProperty("accent", list_kind.split("_")[0])
-        layout.addWidget(self.score)
+        line = QHBoxLayout()
+        line.setSpacing(8)
+        line.addWidget(self.title, 1)
+        line.addWidget(self.score, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(line)
         self.setToolTip(plain_tip(rec.title))
 
     def set_width(self, width: int) -> None:
@@ -202,7 +216,12 @@ class PosterTile(QFrame):
         ratio = TILE_POSTER.height() / TILE_POSTER.width() if self.poster else 1.0
         self.art.set_size(QSize(picture, round(picture * ratio)))
         self.setFixedWidth(width)
-        self.title.setText(elided_lines(self.rec.title, self.title.font(), picture, 2))
+        self.title.setText(elided_lines(self.rec.title, self.title.font(), self._title_width(), 2))
+
+    def _title_width(self) -> int:
+        """The title's room: the picture's width less the score beside it."""
+        score = self.score.fontMetrics().horizontalAdvance(self.score.text()) + 12
+        return max(self.picture_width - score - 8, 40)
 
     def set_selected(self, selected: bool) -> None:
         self.setProperty("selected", selected)
@@ -293,14 +312,16 @@ class RecCard(Card):
                 self.body.addWidget(label(line, role="caption", wrap=True))
         # The numbers behind the words, also a hover away.
         self.setToolTip(plain_tip("\n".join(details)))
-        self.body.addStretch(1)  # spare height goes here, under the words
-
+        # The buttons follow the words, together (2.4); spare height goes under them.
+        self.body.addSpacing(8)
         buttons = QHBoxLayout()
+        buttons.setSpacing(10)
         link = safe_link(rec.url)
         self.open_button = QPushButton(
             f"Open on {LINK_HOSTS[urlsplit(link).hostname]}" if link else "No link"
         )
         self.open_button.setProperty("role", "primary")
+        self.open_button.setProperty("accent", SWITCH_ACCENTS.get(list_kind, "anime"))
         self.open_button.setEnabled(link is not None)
         self.open_button.clicked.connect(lambda: self.opened.emit(link))
         self.dismiss_button = QPushButton("Not interested")
@@ -309,9 +330,10 @@ class RecCard(Card):
             lambda: self.dismissed.emit(self.list_kind, self.rec.item_key)
         )
         buttons.addWidget(self.open_button)
-        buttons.addStretch()
         buttons.addWidget(self.dismiss_button)
+        buttons.addStretch()
         self.body.addLayout(buttons)
+        self.body.addStretch(1)
         # Only now do the labels have a parent. Showing a widget without one opens it
         # as its own window, which flashed up on screen for every card.
         self.caption.setVisible(bool(caption))
@@ -502,7 +524,23 @@ class ForYouPage(LazyPage, QWidget):
             self.lists[kind] = tab
             self.tabs.addTab(tab, title)
         self.tabs.currentChanged.connect(lambda _: self._render_current())
+        # The lists switch with the app's pill switch (2.4), lit in each medium's color;
+        # the tab bar stays hidden and the two follow each other.
+        self.tabs.tabBar().hide()
+        self.switch = Segmented(LISTS, accents=SWITCH_ACCENTS)
+        self.switch.changed.connect(self._switch_to)
+        self.tabs.currentChanged.connect(self._follow_tab)
+        self.switch.set_value(LISTS[0][0])
+        layout.addWidget(self.switch, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.tabs, 1)
+
+    def _switch_to(self, kind: str) -> None:
+        self.tabs.setCurrentWidget(self.lists[kind])
+
+    def _follow_tab(self, index: int) -> None:
+        kind = LISTS[index][0] if 0 <= index < len(LISTS) else None
+        if kind is not None and self.switch.value() != kind:
+            self.switch.set_value(kind)
 
     # -- data ---------------------------------------------------------------
 
@@ -525,7 +563,10 @@ class ForYouPage(LazyPage, QWidget):
                 recs, metrics, created = recommend.latest(conn, kind)
                 self.lists[kind].set_recs(recs, created is not None)
                 index = self.tabs.indexOf(self.lists[kind])
-                self.tabs.setTabText(index, f"{title} ({len(recs)})" if created else title)
+                # "Anime · 30": the count after a dot, like the rest of the app (2.4).
+                text = f"{title} · {len(recs)}" if created else title
+                self.tabs.setTabText(index, text)
+                self.switch.set_text(kind, text)
                 if kind in ("film", "tv"):
                     rated = metrics.get("rated", 0)
                     noun = "films" if kind == "film" else "TV shows"

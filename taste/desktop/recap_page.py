@@ -14,7 +14,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QIcon, QImage, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QIcon,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
@@ -28,7 +37,7 @@ from PySide6.QtWidgets import (
 
 from taste import activity, recap, settings
 from taste.activity import Period
-from taste.desktop import motion, ui_state
+from taste.desktop import motion, theme, ui_state
 from taste.desktop.context import AppContext
 from taste.desktop.widgets import Card, LazyPage, Segmented, heading, label, section
 from taste.desktop.workers import RecapWorker
@@ -69,6 +78,7 @@ class Deck(QWidget):
     dimmed beside it. Changing card slides them across (or just swaps, with motion off)."""
 
     picked = Signal(int)  # a neighbor was clicked
+    EDGE_FADE = 56  # px over which cards at the panel's edges fade out
 
     def __init__(self) -> None:
         super().__init__()
@@ -180,6 +190,16 @@ class Deck(QWidget):
             painter.drawImage(rect, self.cards[i])
             painter.restore()
         painter.setOpacity(1.0)
+        # Cards running past either edge fade into the panel instead of being cut off
+        # in a straight line (2.4). The deck sits on a card, so it fades to that color.
+        edge = min(self.EDGE_FADE, self.width() / 6)
+        clear = QColor(theme.SURFACE)
+        clear.setAlpha(0)
+        for x0, x1 in ((0.0, edge), (self.width(), self.width() - edge)):
+            fade = QLinearGradient(QPointF(x0, 0), QPointF(x1, 0))
+            fade.setColorAt(0, QColor(theme.SURFACE))
+            fade.setColorAt(1, clear)
+            painter.fillRect(QRectF(min(x0, x1), 0, edge, self.height()), fade)
         painter.end()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)

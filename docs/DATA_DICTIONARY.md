@@ -18,6 +18,8 @@ Recaps (the Rev page's cards) are image files, not database rows: `<data folder>
 
 Window preferences shared by every profile (whether the sidebar is collapsed, Simple or Advanced settings, and whether Reports shows plays per week, month, or year) live in `<data folder>/ui_state.json`, not in any database. A missing or unreadable file means the defaults.
 
+A profile's own picture, when one is chosen, is `<profile_id>.picture.png` beside its database in the profiles folder: a 256 px square cut from the middle of the chosen image. It's not in the database, and it's deleted with the profile.
+
 ---
 
 ## Bookkeeping

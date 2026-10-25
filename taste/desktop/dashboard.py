@@ -50,6 +50,7 @@ from taste.desktop.widgets import (
     GenreCard,
     LazyPage,
     ScrollArea,
+    card_title,
     elided_lines,
     heading,
     label,
@@ -93,7 +94,7 @@ class SyncStrip(QFrame):
         super().__init__()
         self.setProperty("role", "strip")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 8, 10, 8)
+        layout.setContentsMargins(2, 0, 0, 0)  # no box since 2.4: lined up with the title
         layout.setSpacing(8)
         row = QHBoxLayout()
         row.addStrut(NOTICE_HEIGHT)
@@ -239,7 +240,7 @@ class Shelf(Card):
         self.items: list[ShelfItem] = []
         self.entries: list[tuple] = []
         self.body.setSpacing(10)
-        self.title_label = section(title)
+        self.title_label = card_title(title)
         self.body.addWidget(self.title_label)
         # The row mustn't size the card from its pictures, or the card could never get
         # narrow enough for _fit to hide any, nor short enough for them to shrink back.
@@ -367,7 +368,7 @@ class AiringCard(Card):
         self.ctx = ctx
         self.shows: list[airing.AiringShow] = []
         self.items: list[AiringRow] = []
-        self.body.addWidget(section("Airing now"))
+        self.body.addWidget(card_title("Airing now"))
         self.setToolTip(
             plain_tip(
                 "MAL's weekly broadcast time, in your profile's time zone. "
@@ -420,7 +421,7 @@ class MonthCard(Card):
     def __init__(self) -> None:
         super().__init__()
         self.body.setSpacing(8)
-        self.title = section("This month so far")
+        self.title = card_title("This month so far")
         self.body.addWidget(self.title)
         numbers = QHBoxLayout()
         numbers.setSpacing(24)
@@ -653,7 +654,7 @@ class CrowdCard(Card):
 
     def __init__(self) -> None:
         super().__init__()
-        self.body.addWidget(section("You vs the crowd"))
+        self.body.addWidget(card_title("You vs the crowd"))
         self.row = QHBoxLayout()
         self.row.setSpacing(18)
         self.body.addLayout(self.row)
@@ -760,7 +761,7 @@ class DashboardPage(LazyPage, QWidget):
         self.crowd = CrowdCard()
 
         self.scores = Card()
-        self.scores.body.addWidget(section("Your scores, 1 to 10"))
+        self.scores.body.addWidget(card_title("Your scores, 1 to 10"))
         self.score_chart = BarChart(theme.LILAC, empty_text="No scores yet", value_labels=True)
         self.score_chart.setMinimumHeight(80)
         self.scores.body.addWidget(self.score_chart, 1)
@@ -775,7 +776,7 @@ class DashboardPage(LazyPage, QWidget):
             ctx, f"On repeat, last {overview.ON_REPEAT_DAYS} days", COVER, theme.CORAL, 2
         )
         self.weeks = Card()
-        self.weeks.body.addWidget(section("Plays per week"))
+        self.weeks.body.addWidget(card_title("Plays per week"))
         self.week_chart = BarChart(theme.CORAL, scale=True, min_bar=WEEKS_MIN_BAR)
         self.week_chart.setMinimumHeight(110)
         self.weeks.body.addWidget(self.week_chart, 1)
@@ -791,8 +792,8 @@ class DashboardPage(LazyPage, QWidget):
         self.taste_shown = False
 
         self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(14)
-        self.grid.setVerticalSpacing(14)
+        self.grid.setHorizontalSpacing(theme.GAP)
+        self.grid.setVerticalSpacing(theme.GAP)
         for column in range(COLUMNS):
             self.grid.setColumnStretch(column, 1)
         self.cards = [
@@ -970,7 +971,6 @@ class DashboardPage(LazyPage, QWidget):
         finally:
             conn.close()
 
-        self.title.setText(cfg["display_name"] or self.profile_id)
         self._fill_sync_menu([s for s in sources if s.connected])
         cards_on = set(cfg["dashboard_cards"].split(","))
         shown = [

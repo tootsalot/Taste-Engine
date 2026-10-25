@@ -227,7 +227,7 @@ def test_stylesheet_shows_keyboard_focus_and_draws_control_arrows():
     ):
         assert rule in theme.STYLESHEET
     # Qt frames each status bar item, which drew a stray line after the version text.
-    assert "QStatusBar::item { border: none; }" in theme.STYLESHEET
+    assert "QStatusBar" not in theme.STYLESHEET  # 2.4: no status bar
 
 
 def test_scroll_bars_are_thin_with_no_default_groove():

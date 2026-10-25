@@ -64,7 +64,7 @@ def approving_browser(fake, **extra):
 def test_connecting_hardcover_signs_in_and_brings_the_books_in(window, qtbot):
     card = window.settings.sources
     row = card.rows["hardcover"]
-    assert not row.connect.isHidden() and row.connect.isEnabled() and row.remove.isHidden()
+    assert not row.connect.isHidden() and row.connect.isEnabled() and not row.remove.isVisible()
     assert row.state.text() == "Not connected"
     with qtbot.waitSignal(window.dashboard.sync_finished, timeout=20000):
         card.connect_hardcover(browser=approving_browser(window.hardcover))
@@ -72,8 +72,8 @@ def test_connecting_hardcover_signs_in_and_brings_the_books_in(window, qtbot):
     assert window.ctx.store.get("me", "HARDCOVER_REFRESH_TOKEN") == window.hardcover.refresh
     # Connected: Disconnect, Test, and Sync now; no Connect button at all.
     assert row.connect.isHidden() and not row.account.isHidden()
-    assert row.remove.text() == "Disconnect" and not row.remove.isHidden()
-    assert not row.test.isHidden() and not row.sync.isHidden()
+    assert row.remove.text() == "Disconnect" and row.remove.isVisible()
+    assert row.test.isVisible() and not row.sync.isHidden() and not row.more.isHidden()
     assert card.sign_in is None and row.stop.isHidden()
     assert row.state.text().startswith("Connected · synced ")
     assert row.state.text().endswith("books in your library")
@@ -89,7 +89,7 @@ def test_connecting_hardcover_signs_in_and_brings_the_books_in(window, qtbot):
     assert not credentials.hardcover_connected("me", window.ctx.store)
     assert window.hardcover.revoked  # signed out on Hardcover too
     assert row.state.text().startswith("Not connected · last synced ")
-    assert not row.connect.isHidden() and row.remove.isHidden()
+    assert not row.connect.isHidden() and not row.remove.isVisible()
 
 
 def test_settings_shows_the_latest_sync_once_a_sync_ends(window, qtbot):

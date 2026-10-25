@@ -53,7 +53,7 @@ class ScreenView(QWidget):
 
         grid = QGridLayout(self)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(12)
+        grid.setSpacing(theme.GAP)
 
         top = QHBoxLayout()
         self.span_bar = SpanBar("screen")

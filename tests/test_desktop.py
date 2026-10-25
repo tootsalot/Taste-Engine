@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QTableView
+from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QStatusBar, QTableView, QWidget
 
 from taste import profiles, settings
 from taste.desktop import listen_for_others, notify_running_instance, theme, ui_state
@@ -104,13 +104,35 @@ def test_create_profile_opens_settings(window):
     assert window.sidebar.currentRow() == PAGES.index("Settings")
 
 
-def test_status_messages_fade_and_the_version_stays(window, qtbot, monkeypatch):
+def test_messages_show_as_a_toast_that_goes_away(window, qtbot, monkeypatch):
     monkeypatch.setattr("taste.desktop.main_window.STATUS_MS", 50)
     window.new_profile(("me", "Me"))
-    bar = window.statusBar()
-    assert bar.currentMessage().startswith("Created me.")
-    qtbot.waitUntil(lambda: bar.currentMessage() == "", timeout=3000)
-    assert "Your data stays on this computer" in window.version_label.text()
+    assert window.toast.text().startswith("Created me.")
+    assert not window.toast.isHidden() and window.toast.parent() is window.centralWidget()
+    assert window.toast.textFormat() == Qt.TextFormat.PlainText
+    qtbot.waitUntil(lambda: window.toast.isHidden(), timeout=3000)
+    # 2.4: no top bar and no status bar; the version is in Settings, About.
+    assert window.findChild(QStatusBar) is None  # (statusBar() would make one)
+    assert window.findChild(QWidget, "TopBar") is None
+
+
+def test_the_profile_switcher_switches_and_adds(window, monkeypatch):
+    window.new_profile(("me", "Me"))
+    window.new_profile(("work", "Work & Play"))
+    picker = window.profile_picker
+    assert picker.currentText() == "Work & Play"
+    assert picker.text() == "Work && Play"  # a literal ampersand, not a shortcut mark
+    titles = [a.text() for a in picker.menu_.actions() if not a.isSeparator()]
+    assert titles == ["Me", "Work && Play", "New profile…", "Change picture…"]
+    assert picker.menu() is None  # opened by hand: no Qt font warning on Windows
+    picker.menu_.actions()[0].trigger()
+    assert window.current_profile() == "me"
+    asked = []
+    monkeypatch.setattr(window, "_ask_new_profile", lambda: asked.append(1))
+    next(a for a in picker.menu_.actions() if a.text() == "New profile…").trigger()
+    assert asked == [1]
+    window.set_nav_collapsed(True, remember=False)
+    assert picker.text() == "" and not picker.icon().isNull()
 
 
 def test_sidebar_collapses_to_icons_and_remembers(window, qtbot):
@@ -324,7 +346,7 @@ def test_keys_saved_cleared_and_never_shown(window):
     assert ("taste-engine", "me:LASTFM_API_KEY") not in ring.saved
     assert lastfm.key.placeholderText() == "Paste your API key"
     assert lastfm.state.text() == "Add your API key"
-    assert lastfm.remove.isHidden() and lastfm.sync.isHidden()
+    assert not lastfm.remove.isVisible() and lastfm.sync.isHidden() and lastfm.more.isHidden()
 
 
 def test_connection_test_runs_in_background(window, qtbot):
@@ -472,8 +494,10 @@ def test_labels_never_render_html(window):
     from PySide6.QtCore import Qt
 
     window.new_profile(("me", "<b>bold</b> <img src=x>"))
+    # 2.4: the name shows in the sidebar's profile switcher (a button: never rich text).
+    assert window.profile_picker.text() == "<b>bold</b> <img src=x>"
     assert window.dashboard.title.textFormat() == Qt.TextFormat.PlainText
-    assert window.dashboard.title.text() == "<b>bold</b> <img src=x>"
+    assert window.dashboard.title.text() == "Dashboard"
     assert window.reports.scope.textFormat() == Qt.TextFormat.PlainText
 
 

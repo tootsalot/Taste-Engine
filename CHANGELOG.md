@@ -2,6 +2,34 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [2.4.0]
+
+A calmer, roomier look: the same colors and fonts, with more space, clearer titles, and fewer buttons competing for attention.
+
+The frame
+- No more top bar or status bar: the profile's name sits at the top of the sidebar, and clicking it switches profiles or adds one
+- A profile can have its own picture (Change picture in the same menu): any photo, cropped to its middle square and kept on this computer beside the profile
+- Messages like "Created me" show as a short toast near the bottom of the page
+- The sidebar's last-sync line stays on one line
+
+Every page
+- Card titles in sentence case at a readable size, instead of small capitals
+- More room between cards and rounder corners
+- Bar charts draw one bar at full color (the highest) and the rest softer, with rounded tops, so a chart isn't a solid wall of color
+- Genre rows have a faint track the whole way across, so each name reads straight to its bar
+- Checked boxes show a check mark
+
+Dashboard
+- The title says Dashboard (the profile's name is in the sidebar now), and the status line's notices are soft pills instead of boxes
+
+Settings
+- Each source shows Sync now and a ⋯ menu with Test connection and Remove or Disconnect, instead of four buttons a row; Save appears once something's typed
+
+For You and Rev
+- For You switches lists with the same pill switch as Reports and Rev, lit in each medium's color, with each list's count after a dot
+- A pick's score sits beside its title, picks light up when hovered, books select in amber, and the detail panel keeps its buttons together under the text, with Open in the list's color
+- Rev's neighboring cards fade into the panel instead of being cut off at its edge
+
 ## [2.3.0]
 
 TV suggestions join For You, the Dashboard shows what's airing this week, and Rev offers to make the recaps for every month and year before I started using it.

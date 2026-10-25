@@ -93,7 +93,7 @@ class NavList(QWidget):
         status_row.addWidget(
             self.status_dot, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
-        self.status_text = label("Not synced yet", role="caption", wrap=True)
+        self.status_text = label("Not synced yet", role="caption")
         status_row.addWidget(self.status_text, 1)
 
         for index, (name, icon) in enumerate(pages):

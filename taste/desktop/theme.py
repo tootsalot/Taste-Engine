@@ -41,6 +41,9 @@ GOOD = "#86E0A8"
 
 HEADING_FAMILY = "Space Grotesk"
 BODY_FAMILY = "Inter"
+GAP = 18  # between cards on every page (2.4: was 12 to 14)
+CARD_RADIUS = 16
+CARD_TITLE_PX = 16  # card titles, sentence case (2.4: was 12 px capitals)
 
 
 def load_fonts() -> None:
@@ -154,6 +157,7 @@ def apply(app: QApplication) -> None:
 CHEVRON_UP = (ASSETS / "chevron-up.svg").as_posix()
 CHEVRON_DOWN = (ASSETS / "chevron-down.svg").as_posix()
 CHEVRON_DOWN_DARK = (ASSETS / "chevron-down-dark.svg").as_posix()  # on lilac
+CHECK_DARK = (ASSETS / "check-dark.svg").as_posix()  # on a lilac checkbox (2.4)
 ON_ACCENT_LINE = "rgba(18, 15, 31, 0.35)"  # the split in a lilac split button
 
 STYLESHEET = f"""
@@ -169,8 +173,19 @@ QToolButton#CardThumb {{ background: transparent; border: 2px solid transparent;
 QToolButton#CardThumb:hover {{ border-color: {EDGE}; }}
 QToolButton#CardThumb:checked, QToolButton#CardThumb:focus {{ border-color: {LILAC}; }}
 
-#TopBar {{ background: {PANEL}; border-bottom: 1px solid {LINE}; }}
 #NavPanel {{ background: {PANEL}; border: none; border-right: 1px solid {LINE}; }}
+QPushButton#ProfileSwitcher {{ background: transparent; border: 1px solid transparent;
+    border-radius: 12px; padding: 0 28px 0 8px; text-align: left; color: {TEXT};
+    font-size: 15px; font-weight: 600; }}
+QPushButton#ProfileSwitcher:hover {{ background: {SURFACE}; }}
+QPushButton#ProfileSwitcher:focus {{ border-color: {LILAC}; }}
+QToolButton#RowMenu {{ background: transparent; border: 1px solid {LINE}; border-radius: 17px;
+    padding: 0; }}
+QToolButton#RowMenu:hover {{ background: {RAISED}; }}
+QToolButton#RowMenu:focus {{ border-color: {LILAC}; }}
+QToolButton#RowMenu::menu-indicator {{ image: none; width: 0; }}
+QLabel[role="toast"] {{ background: {RAISED}; color: {TEXT}; border: 1px solid {LINE};
+    border-radius: 12px; padding: 10px 16px; font-size: 13px; }}
 QPushButton[role="nav"] {{ background: transparent; border: 1px solid transparent;
                            border-radius: 8px; padding: 0 0 0 9px; text-align: left;
                            color: {MUTED}; min-height: 0; }}
@@ -182,30 +197,33 @@ QPushButton[role="nav"]:checked {{ background: {RAISED}; color: {TEXT}; font-wei
 QPushButton[role="nav"]:focus {{ border-color: {LILAC}; }}
 QFrame[role="segmented"] {{ background: {BG}; border: 1px solid {LINE}; border-radius: 15px; }}
 QPushButton[role="segment"] {{ background: transparent; border: 1px solid transparent;
-                               border-radius: 13px; padding: 3px 14px; color: {MUTED};
+                               border-radius: 10px; padding: 3px 14px; color: {MUTED};
                                min-height: 0; }}
 QPushButton[role="segment"]:hover {{ color: {TEXT}; }}
 QPushButton[role="segment"]:checked {{ background: transparent; color: {ON_ACCENT};
                                        font-weight: 700; }}
 QPushButton[role="segment"]:focus {{ border-color: {TEXT}; }}
 
-QFrame[role="card"] {{ background: {SURFACE}; border-radius: 14px; }}
+QFrame[role="card"] {{ background: {SURFACE}; border-radius: {CARD_RADIUS}px; }}
+QLabel[role="card-title"] {{ color: {TEXT}; }}
 QFrame[role="card"][raised="true"] {{ background: {RAISED}; border-radius: 10px; }}
 QFrame[role="tile"] {{ background: transparent; border: 2px solid transparent;
                        border-radius: 14px; }}
-QFrame[role="tile"]:hover {{ background: {SURFACE}; }}
+QFrame[role="tile"]:hover {{ background: {RAISED}; }}
 QFrame[role="tile"]:focus {{ border-color: {EDGE}; }}
-QFrame[role="tile"][selected="true"] {{ background: {SURFACE}; border-color: {LILAC}; }}
+QFrame[role="tile"][selected="true"] {{ background: {RAISED}; border-color: {LILAC}; }}
 QFrame[role="tile"][selected="true"][accent="music"] {{ border-color: {CORAL}; }}
 QFrame[role="tile"][selected="true"][accent="tv"],
 QFrame[role="tile"][selected="true"][accent="film"] {{ border-color: {TEAL}; }}
+QFrame[role="tile"][selected="true"][accent="book"] {{ border-color: {AMBER}; }}
 QLabel[role="tile-score"] {{ color: {LILAC}; font-weight: 800; font-size: 14px; }}
 QLabel[role="tile-score"][accent="music"] {{ color: {CORAL}; }}
 QLabel[role="tile-score"][accent="tv"],
 QLabel[role="tile-score"][accent="film"] {{ color: {TEAL}; }}
+QLabel[role="tile-score"][accent="book"] {{ color: {AMBER}; }}
 QFrame[role="step"] {{ background: {RAISED}; border-radius: 12px; }}
 QFrame[role="trait"] {{ background: {RAISED}; border-radius: 10px; }}
-QFrame[role="banner"] {{ background: {RAISED}; border: 1px solid {LILAC}; border-radius: 10px; }}
+QFrame[role="banner"] {{ background: {RAISED}; border: none; border-radius: 16px; }}
 QLabel[role="badge"] {{ background: {RAISED}; color: {LILAC}; border-radius: 9px;
                         padding: 2px 10px; font-size: 12px; font-weight: 700; }}
 QLabel[role="badge"][accent="books"] {{ background: {ON_ACCENT}; color: {AMBER};
@@ -244,6 +262,12 @@ QPushButton[role="primary"] {{ background: {LILAC}; color: {ON_ACCENT}; border: 
 QPushButton[role="primary"]:hover {{ background: #C7B3FF; }}
 QPushButton[role="primary"]:focus {{ border: 2px solid {TEXT}; padding: 6px 14px; }}
 QPushButton[role="primary"]:disabled {{ background: {RAISED}; color: {MUTED}; }}
+QPushButton[role="primary"][accent="music"] {{ background: {CORAL}; }}
+QPushButton[role="primary"][accent="screen"] {{ background: {TEAL}; }}
+QPushButton[role="primary"][accent="books"] {{ background: {AMBER}; }}
+QPushButton[role="primary"][accent="music"]:hover,
+QPushButton[role="primary"][accent="screen"]:hover,
+QPushButton[role="primary"][accent="books"]:hover {{ background: {TEXT}; }}
 QPushButton[compact="true"] {{ padding: 3px 12px; min-height: 18px; border-radius: 13px; }}
 QPushButton[role="primary"][compact="true"]:focus {{ padding: 1px 10px; }}
 QPushButton[role="danger"] {{ background: transparent; color: {DANGER}; border-color: {DANGER}; }}
@@ -296,11 +320,12 @@ QComboBox QAbstractItemView {{ background: {SURFACE}; border: 1px solid {LINE};
                                selection-background-color: {RAISED}; selection-color: {TEXT}; }}
 QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px;
                         border: 1px solid {EDGE}; background: {RAISED}; }}
-QCheckBox::indicator:checked {{ background: {LILAC}; border-color: {LILAC}; }}
+QCheckBox::indicator:checked {{ background: {LILAC}; border-color: {LILAC};
+    image: url("{CHECK_DARK}"); }}
 QCheckBox:focus {{ color: {LILAC}; }}
 QCheckBox::indicator:focus {{ border: 2px solid {TEXT}; }}
 
-QFrame[role="strip"] {{ background: {PANEL}; border: 1px solid {LINE}; border-radius: 12px; }}
+QFrame[role="strip"] {{ background: transparent; border: none; }}
 QFrame#StatusDot {{ background: {MUTED}; border-radius: 4px; }}
 QFrame#StatusDot[state="running"] {{ background: {LILAC}; }}
 QFrame#StatusDot[state="ok"] {{ background: {GOOD}; }}
@@ -314,8 +339,11 @@ QProgressBar::chunk {{ background: {CORAL}; border-radius: 4px; }}
 QProgressBar#RecapProgress::chunk {{ background: {LILAC}; }}
 
 QTabWidget::pane {{ border: 1px solid {LINE}; border-radius: 10px; top: -1px; }}
-QTabBar::tab {{ background: transparent; color: {MUTED}; padding: 8px 14px; margin-right: 2px; }}
-QTabBar::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {LILAC}; }}
+QTabBar::tab {{ background: transparent; color: {MUTED}; border: 1px solid {LINE};
+    border-radius: 17px; padding: 7px 16px; margin: 0 8px 10px 0; font-weight: 600; }}
+QTabBar::tab:hover {{ background: {RAISED}; color: {TEXT}; }}
+QTabBar::tab:selected {{ background: {TEXT}; color: {ON_ACCENT}; border-color: {TEXT}; }}
+QTabBar::tab:focus {{ border-color: {LILAC}; }}
 
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px 2px 4px 0; border: none; }}
 QScrollBar::handle:vertical {{ background: {LINE}; border-radius: 3px; min-height: 32px;
@@ -331,8 +359,6 @@ QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; border: none;
 QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 QAbstractScrollArea::corner {{ background: transparent; }}
 
-QStatusBar {{ background: {PANEL}; color: {MUTED}; border-top: 1px solid {LINE}; }}
-QStatusBar::item {{ border: none; }}
 QToolTip {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {LINE}; }}
 QMessageBox {{ background: {BG}; }}
 """

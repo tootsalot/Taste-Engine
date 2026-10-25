@@ -301,3 +301,16 @@ def test_checkboxes_fit_as_many_to_a_row_as_their_width_holds(qtbot):
     assert boxes.fits(four - 1) < 4
     assert boxes.fits(1) == 1
     assert boxes.minimumSizeHint().width() == max(widths)  # one box wide, never a full row
+
+
+def test_one_bar_leads_at_full_color(qtbot):
+    """2.4: the highest finished bar (newest on a tie) is solid; the rest are soft."""
+    chart = BarChart()
+    qtbot.addWidget(chart)
+    chart.resize(400, 200)
+    chart.set_data([1, 5, 3, 5, 2], list("abcde"))
+    assert chart.lead_bar() == 3
+    chart.set_data([1, 5, 3, 9], list("abcd"), partial_last=True)
+    assert chart.lead_bar() == 1  # a month still filling up never leads
+    chart.set_data([0, 0], ["a", "b"])
+    assert chart.lead_bar() == -1

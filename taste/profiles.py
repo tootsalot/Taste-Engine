@@ -67,6 +67,12 @@ def db_path(profile_id: str, root: Path | None = None) -> Path:
     return root / f"{validate_id(profile_id)}.db"
 
 
+def picture_path(profile_id: str, root: Path | None = None) -> Path:
+    """Where a profile's own picture goes (2.4), beside its database. It may not exist."""
+    root = root or profiles_dir()
+    return root / f"{validate_id(profile_id)}.picture.png"
+
+
 def exists(profile_id: str, root: Path | None = None) -> bool:
     root = root or profiles_dir()
     return db_path(profile_id, root).is_file()
@@ -135,6 +141,7 @@ def delete(profile_id: str, root: Path | None = None, store: Any = None) -> None
     path.unlink()
     for suffix in ("-journal", "-wal", "-shm"):
         Path(f"{path}{suffix}").unlink(missing_ok=True)
+    picture_path(profile_id, root).unlink(missing_ok=True)
     (store or SecretStore(root)).delete_all(profile_id)
 
 

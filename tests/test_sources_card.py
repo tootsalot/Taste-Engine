@@ -70,9 +70,15 @@ def test_a_new_profile_shows_every_source_and_what_it_needs(window, qtbot):
         "tmdb": "Save a read access token, then connect your account",
         "hardcover": "Not connected",
     }
-    # Nothing connected: no Test or Sync now yet, and nothing sits disabled.
+    # Nothing connected: no Test or Sync now yet, and nothing sits disabled. No row has
+    # anything in its menu, so no menu button either; Save waits for typing (2.4).
     for row in card.rows.values():
-        assert row.test.isHidden() and row.sync.isHidden()
+        assert not row.test.isVisible() and row.sync.isHidden() and row.more.isHidden()
+        assert row.save is None or row.save.isHidden()
+    card.usernames["mal"].setText("example_user")
+    assert card.rows["mal"].save.isVisible()
+    card.usernames["mal"].setText("")
+    assert card.rows["mal"].save.isHidden()
     assert card.rows["hardcover"].connect.isVisible() and card.rows["hardcover"].connect.isEnabled()
     assert card.rows["tmdb"].connect.isHidden()  # needs the token first
     assert card.rows["hardcover"].no_key.isVisible()
@@ -94,6 +100,8 @@ def test_saving_a_row_keeps_the_username_and_the_key(window, qtbot):
     row = card.rows["mal"]
     assert row.state.text() == "Connected · never synced"
     assert row.test.isVisible() and row.sync.isVisible() and row.remove.text() == "Remove"
+    assert row.more.isVisible() and row.test in row.more.menu().actions()
+    assert row.save.isHidden()  # everything typed is saved
     # The Dashboard's menu follows at once.
     assert [a.text() for a in window.dashboard.sync_menu.actions()] == ["MyAnimeList"]
 
@@ -113,11 +121,16 @@ def test_every_row_lines_up(window, qtbot):
                 for s, r in card.rows.items() if getattr(r, part) is not None
                 and getattr(r, part).isVisible()}  # fmt: skip
 
-    for part in ("save", "test", "sync", "remove"):
+    for part in ("sync", "more"):
         found = lefts(part)
         assert len(found) >= 3 and len(set(found.values())) == 1, (part, found)
-    widths = {r.test.width() for r in card.rows.values() if r.test.isVisible()}
+    widths = {r.sync.width() for r in card.rows.values() if r.sync.isVisible()}
     assert len(widths) == 1
+    # Save appearing while typing never moves Sync now (its column keeps the room).
+    before = lefts("sync")
+    card.usernames["mal"].setText("someone_else")
+    qtbot.wait(20)
+    assert card.rows["mal"].save.isVisible() and lefts("sync") == before
 
 
 def test_a_connected_source_never_shows_a_disabled_connect(window, qtbot):

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from taste import charts, reports
-from taste.desktop import motion, ui_state
+from taste.desktop import motion, theme, ui_state
 from taste.desktop.anime_view import AnimeView
 from taste.desktop.books_view import BooksView
 from taste.desktop.context import AppContext
@@ -102,7 +102,7 @@ def section_page(layout_parent: QWidget) -> tuple[QScrollArea, QGridLayout]:
     scroll.setWidget(body)
     grid = QGridLayout(body)
     grid.setContentsMargins(0, 0, 0, 0)
-    grid.setSpacing(12)
+    grid.setSpacing(theme.GAP)
     return scroll, grid
 
 

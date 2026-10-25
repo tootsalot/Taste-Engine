@@ -123,7 +123,7 @@ SETTINGS: list[Setting] = [
         "Display name",
         "text",
         "",
-        "The name at the top of the Dashboard. Leave it blank to use the profile ID.",
+        "The profile's name at the top of the sidebar. Leave it blank to use the profile ID.",
     ),
     Setting(
         "timezone",

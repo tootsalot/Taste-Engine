@@ -2,9 +2,11 @@
 
 Every row has the same columns, so the fields and buttons line up down the card
 (approved from a mockup, 2026-10-16): the source and its state, the username or
-account, the key, Save, Test, Sync now, and Remove or Disconnect. TMDB and Hardcover
-have no username; their Connect button sits in that column. Test and Sync now only
-show once a source is connected, and a connected source never shows a Connect button.
+account, the key, Save, Sync now, and a menu. TMDB and Hardcover have no username;
+their Connect button sits in that column. Since 2.4 (approved from a mockup,
+2026-10-24) Sync now is the one button a connected row shows: Test connection and
+Remove or Disconnect are in the row's menu, and Save shows only while a field holds
+something not saved yet. A connected source never shows a Connect button.
 The state lines come from taste.source_status, shared with the Dashboard.
 """
 
@@ -13,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import QSize, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -21,8 +23,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -57,7 +61,7 @@ HELP = {
     "browser to approve Taste Engine, which can only read. Books still on Goodreads? "
     "Hardcover can import a Goodreads export for you.",
 }
-COLUMNS = ("source", "account", "key", "save", "test", "sync", "remove")
+COLUMNS = ("source", "account", "key", "save", "sync", "more")
 DOT = 10
 USERNAME_WIDTH = 150
 KEY_WIDTH = 220
@@ -69,9 +73,10 @@ class SourceRow:
 
     source: str
     state: QLabel
-    test: QPushButton
     sync: QPushButton
-    remove: QPushButton
+    more: QToolButton  # the row's menu: Test connection, Remove or Disconnect
+    test: QAction
+    remove: QAction
     username: QLineEdit | None = None
     key: QLineEdit | None = None
     save: QPushButton | None = None
@@ -98,6 +103,7 @@ class SourcesCard(Card):
         self.hardcover_worker: CallWorker | None = None
         self.sign_in: hardcover.SignIn | None = None
         self.usernames: dict[str, QLineEdit] = {}
+        self.saved_usernames: dict[str, str] = {}  # to tell when Save is needed
         self.key_inputs: dict[str, QLineEdit] = {}  # by key name, like MAL_CLIENT_ID
 
         self.body.addWidget(heading("Sources", 18))
@@ -111,7 +117,7 @@ class SourcesCard(Card):
         self.grid = QGridLayout()
         self.grid.setHorizontalSpacing(8)
         self.grid.setVerticalSpacing(6)
-        for column, stretch in enumerate((3, 2, 3, 0, 0, 0, 0)):
+        for column, stretch in enumerate((3, 2, 3, 0, 0, 0)):
             self.grid.setColumnStretch(column, stretch)
         for column, text in ((1, "Username or account"), (2, "Key")):
             self.grid.addWidget(label(text, role="caption"), 0, column)
@@ -150,14 +156,31 @@ class SourcesCard(Card):
         # The state goes on the full-width line under the row, beside nothing: in the
         # name column it wrapped onto four or five lines at 1920 px.
         state = label("", role="muted", wrap=True)
+        more = QToolButton()
+        more.setObjectName("RowMenu")
+        more.setIcon(QIcon(str(theme.ASSETS / "more.svg")))  # three dots, drawn the same
+        more.setIconSize(QSize(18, 18))  # everywhere (the font's "⋯" wasn't)
+        more.setFixedSize(34, 34)
+        more.setToolTip(f"More for {SOURCE_LABELS[source]}")
+        more.setAccessibleName(f"More for {SOURCE_LABELS[source]}")
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        more.setMenu(menu)
+        test = QAction("Test connection", menu)
+        test.triggered.connect(lambda _=False: self.test_connection(source))
+        remove = QAction("Remove", menu)
+        remove.triggered.connect(lambda _=False: self.remove_source(source))
+        menu.addAction(test)
+        menu.addSeparator()
+        menu.addAction(remove)
         row = SourceRow(
             source=source,
             state=state,
-            test=self._button("Test", lambda: self.test_connection(source)),
             sync=self._button("Sync now", lambda: self.sync_now(source)),
-            remove=self._button("Remove", lambda: self.remove_source(source), "danger"),
+            more=more,
+            test=test,
+            remove=remove,
         )
-        row.test.setToolTip("Test the connection")
         self.grid.addWidget(name, at, 0)
 
         account = QHBoxLayout()
@@ -168,6 +191,7 @@ class SourcesCard(Card):
             row.username.setMaxLength(200)
             row.username.setMinimumWidth(USERNAME_WIDTH)
             row.username.returnPressed.connect(lambda: self.save_source(source))
+            row.username.textChanged.connect(lambda _text: self._update_save(source))
             self.usernames[source] = row.username
             account.addWidget(row.username)
         else:
@@ -186,10 +210,14 @@ class SourcesCard(Card):
             row.key.setEchoMode(QLineEdit.EchoMode.Password)
             row.key.setMinimumWidth(KEY_WIDTH)  # room for "Saved in Credential Manager"
             row.key.returnPressed.connect(lambda: self.save_source(source))
+            row.key.textChanged.connect(lambda _text: self._update_save(source))
             self.key_inputs[KEYS[source]] = row.key
             self.grid.addWidget(row.key, at, 2)
-            row.save = self._button("Save", lambda: self.save_source(source))
+            row.save = self._button("Save", lambda: self.save_source(source), "primary")
             self.grid.addWidget(row.save, at, 3)
+            row.save.setVisible(False)  # until something is typed (in its layout first)
+            # The column keeps the button's width, so Sync now and the menu never shift.
+            self.grid.setColumnMinimumWidth(3, row.save.sizeHint().width())
         else:
             box = QHBoxLayout()
             box.setContentsMargins(0, 0, 0, 0)
@@ -200,20 +228,19 @@ class SourcesCard(Card):
             box.addWidget(row.copy)
             box.addStretch()
             self.grid.addLayout(box, at, 2)
-        self.grid.addWidget(row.test, at, 4)
-        self.grid.addWidget(row.sync, at, 5)
-        self.grid.addWidget(row.remove, at, 6)
+        self.grid.addWidget(row.sync, at, 4)
+        self.grid.addWidget(row.more, at, 5)
         under = QVBoxLayout()
         under.setContentsMargins(DOT * 2 + 8, 0, 0, 0)  # lined up with the source's name
         under.setSpacing(2)
         under.addWidget(state)
         under.addWidget(label(HELP[source], role="caption", wrap=True))
-        self.grid.addLayout(under, at + 1, 0, 1, 7)
+        self.grid.addLayout(under, at + 1, 0, 1, len(COLUMNS))
         if not last:
             line = QFrame()
             line.setObjectName("SourceLine")
             line.setFixedHeight(1)
-            self.grid.addWidget(line, at + 2, 0, 1, 7)
+            self.grid.addWidget(line, at + 2, 0, 1, len(COLUMNS))
         return row
 
     # -- state ----------------------------------------------------------------
@@ -228,7 +255,8 @@ class SourcesCard(Card):
         conn = self.ctx.connect(profile_id)
         try:
             for source, field in self.usernames.items():
-                field.setText(settings.get(conn, USERNAMES[source]))
+                self.saved_usernames[source] = settings.get(conn, USERNAMES[source])
+                field.setText(self.saved_usernames[source])
         finally:
             conn.close()
         self.refresh_status()
@@ -258,7 +286,7 @@ class SourcesCard(Card):
             row.state.setText(source_status.state_line(status, tz_name, now))
             set_role(row.state, "ok" if status.connected else "muted")
             stored = self._key_state(row) if row.key is not None else None
-            self._show(row.test, status.connected)
+            row.test.setVisible(status.connected)
             self._show(row.sync, status.connected)
             row.sync.setEnabled(not self.busy)
             if source in USERNAMES:
@@ -269,11 +297,28 @@ class SourcesCard(Card):
                 self._tmdb_buttons(row, status.connected, stored)
             else:
                 self._hardcover_buttons(row, status.connected)
+            self._show(row.more, any(a.isVisible() for a in (row.test, row.remove)))
+            self._update_save(source)
         if self.isVisible():
             motion.fade_in(self._appeared, stagger=False)  # Test and Sync now, once connected
 
-    def _show(self, widget: QWidget, shown: bool) -> None:
-        """Show or hide a row's button; one that appears fades in (see refresh_status)."""
+    def _update_save(self, source: str) -> None:
+        """Save shows only while the row holds something not saved yet (2.4)."""
+        row = getattr(self, "rows", {}).get(source)  # (fields fill in while rows are built)
+        if row is None or row.save is None:
+            return
+        typed = row.key is not None and bool(row.key.text().strip())
+        if row.username is not None:
+            saved = self.saved_usernames.get(source, "")
+            typed = typed or row.username.text().strip() != saved
+        row.save.setVisible(typed)
+
+    def _show(self, widget: QWidget | QAction, shown: bool) -> None:
+        """Show or hide a row's button; one that appears fades in (see refresh_status).
+        Menu actions just show or hide."""
+        if isinstance(widget, QAction):
+            widget.setVisible(shown)
+            return
         if shown and widget.isHidden():
             self._appeared.append(widget)
         widget.setVisible(shown)
@@ -336,6 +381,7 @@ class SourcesCard(Card):
                 if settings.validate(key, value) != settings.get(conn, key):
                     settings.set_value(conn, key, value)
                     saved.append("username")
+                self.saved_usernames[source] = settings.get(conn, key)
             except SettingError as exc:
                 problems.append(str(exc))
             finally:

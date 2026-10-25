@@ -1,17 +1,18 @@
-"""The main window: top bar with the profile picker, sidebar, and pages."""
+"""The main window: the sidebar (profile switcher on top, then the pages) and the pages.
+No top bar and no status bar since 2.4; short messages show as a toast."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
-    QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import __version__, local_time, profiles, recap, recommend, settings, source_status
+from taste import local_time, profiles, recap, recommend, settings, source_status
 from taste.activity import Period
 from taste.desktop import motion, theme, ui_state
 from taste.desktop.context import AppContext
@@ -28,6 +29,7 @@ from taste.desktop.dashboard import DashboardPage
 from taste.desktop.dialogs import NewProfileDialog
 from taste.desktop.for_you import ForYouPage
 from taste.desktop.nav import NavList, nav_button
+from taste.desktop.profile_switcher import ProfileSwitcher, save_picture
 from taste.desktop.recap_page import RecapPage
 from taste.desktop.reports_page import ReportsPage
 from taste.desktop.settings_page import SettingsPage
@@ -50,9 +52,10 @@ PAGE_ICONS = {
 }
 # The sidebar rows under the Reports heading, and the report page each one shows.
 REPORT_ROWS = {"Anime": "anime", "Music": "music", "Books": "books", "Films and TV": "screen"}
-STATUS_MS = 8000  # how long a status bar message stays
+STATUS_MS = 8000  # how long a toast message stays
+TOAST_WIDTH = 520
 LAUNCH_SYNC_DELAY_MS = 1500
-NAV_WIDTH = 200
+NAV_WIDTH = 220
 NAV_COLLAPSED_WIDTH = 60  # icons only
 
 
@@ -74,26 +77,6 @@ class MainWindow(QMainWindow):
         outer.setSpacing(0)
         self.setCentralWidget(root)
 
-        # Top bar
-        bar = QWidget()
-        bar.setObjectName("TopBar")
-        bar_layout = QHBoxLayout(bar)
-        bar_layout.setContentsMargins(18, 10, 18, 10)
-        logo = QLabel()
-        logo.setPixmap(theme.app_icon().pixmap(QSize(30, 30)))
-        bar_layout.addWidget(logo)
-        bar_layout.addWidget(heading("Taste Engine", 20))
-        bar_layout.addStretch()
-        bar_layout.addWidget(label("Profile", role="muted"))
-        self.profile_picker = QComboBox()
-        self.profile_picker.setMinimumWidth(200)
-        self.profile_picker.currentIndexChanged.connect(self._on_profile_changed)
-        bar_layout.addWidget(self.profile_picker)
-        new_button = QPushButton("New profile")
-        new_button.clicked.connect(lambda: self.new_profile())
-        bar_layout.addWidget(new_button)
-        outer.addWidget(bar)
-
         # Sidebar (collapses to an icon rail) and pages
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -101,10 +84,24 @@ class MainWindow(QMainWindow):
         self.nav = QFrame()
         self.nav.setObjectName("NavPanel")
         nav_layout = QVBoxLayout(self.nav)
-        nav_layout.setContentsMargins(8, 10, 8, 10)
+        nav_layout.setContentsMargins(10, 14, 10, 10)
         nav_layout.setSpacing(8)
+        # The profile, switched or added from its menu (2.4: no top bar).
+        self.profile_picker = ProfileSwitcher()
+        self.profile_picker.currentIndexChanged.connect(self._on_profile_changed)
+        self.profile_picker.new_requested.connect(self._new_profile_from_menu)
+        self.profile_picker.picture_requested.connect(self._picture_from_menu)
+        self.profile_picker.picture_removed.connect(self.remove_picture)
+        nav_layout.addWidget(self.profile_picker)
+        rule = QFrame()
+        rule.setProperty("role", "nav-line")
+        rule.setFixedHeight(1)
+        nav_layout.addWidget(rule)
         # The toggle is a page row without a page, so its icon lines up with theirs.
         self.nav_toggle = nav_button("sidebar")
+        # Ctrl+B does this from anywhere; out of the Tab order, focus never lands (and
+        # rings) here when the page list was disabled without a profile (2.4).
+        self.nav_toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.nav_toggle.clicked.connect(lambda: self.toggle_nav())
         nav_layout.addWidget(self.nav_toggle)
         self.sidebar = NavList(
@@ -167,15 +164,15 @@ class MainWindow(QMainWindow):
         ):
             signal.connect(self._update_busy)
 
-        # The version line stays; a message takes its place for a few seconds. Qt drew
-        # both at once over each other, so the line hides while a message shows.
-        self.version_label = label(
-            f"Taste Engine {__version__}. Your data stays on this computer.", role="muted"
-        )
-        self.statusBar().addWidget(self.version_label)
-        self.statusBar().messageChanged.connect(
-            lambda text: self.version_label.setVisible(not text)
-        )
+        # Short messages ("Created me. ...") float over the bottom of the page for a few
+        # seconds. In its parent before it's ever shown, so it never opens as a window.
+        self.toast = label("", role="toast", wrap=True)
+        self.toast.setParent(root)
+        self.toast.setMaximumWidth(TOAST_WIDTH)
+        self.toast.hide()
+        self.toast_timer = QTimer(self)
+        self.toast_timer.setSingleShot(True)
+        self.toast_timer.timeout.connect(self.toast.hide)
         self.nav_collapsed = False
         self.set_nav_collapsed(bool(ui_state.load().get("nav_collapsed")), remember=False)
         self.reload_profiles()
@@ -215,6 +212,7 @@ class MainWindow(QMainWindow):
         self.nav_collapsed = collapsed
         motion.resize_width(self.nav, NAV_COLLAPSED_WIDTH if collapsed else NAV_WIDTH)
         self.sidebar.set_collapsed(collapsed)
+        self.profile_picker.set_collapsed(collapsed)
         self.nav_toggle.setToolTip(
             "Show page names (Ctrl+B)" if collapsed else "Collapse the sidebar (Ctrl+B)"
         )
@@ -454,7 +452,12 @@ class MainWindow(QMainWindow):
         self.dashboard.set_blocked(self.for_you.is_refreshing())
         self.for_you.set_blocked(self.dashboard.is_syncing())
         self.settings.sources.set_busy(self.is_busy())
-        self.profile_picker.setEnabled(self.current_profile() is not None and not self.is_busy())
+        enabled = self.current_profile() is not None and not self.is_busy()
+        had_focus = self.profile_picker.hasFocus()
+        self.profile_picker.setEnabled(enabled)
+        if had_focus and not enabled:
+            # Qt would hand focus to the next control, the sidebar toggle, and ring it.
+            self.sidebar.focus_current()
 
     def _ask_new_profile(self) -> tuple[str, str] | None:
         dialog = NewProfileDialog(self)
@@ -478,7 +481,60 @@ class MainWindow(QMainWindow):
         return True
 
     def say(self, text: str) -> None:
-        self.statusBar().showMessage(text, STATUS_MS)
+        """A short message near the bottom of the page, gone after STATUS_MS."""
+        self.toast.setText(text)
+        self.toast.adjustSize()
+        self._place_toast()
+        self.toast.show()
+        self.toast.raise_()
+        self.toast_timer.start(STATUS_MS)
+
+    def _place_toast(self) -> None:
+        area = self.stack.geometry()
+        self.toast.move(
+            area.x() + (area.width() - self.toast.width()) // 2,
+            area.bottom() - self.toast.height() - 24,
+        )
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().resizeEvent(event)
+        if not self.toast.isHidden():
+            self._place_toast()
+
+    def _new_profile_from_menu(self) -> None:
+        self.new_profile()
+
+    def _picture_from_menu(self) -> None:
+        self.change_picture()
+
+    def change_picture(self, path: str | None = None) -> bool:
+        """Use an image as the profile's picture (cropped to a square, kept beside its
+        database). `path` skips the file dialog (tests)."""
+        pid = self.current_profile()
+        if pid is None:
+            return False
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Choose a profile picture",
+                str(Path.home() / "Pictures"),
+                "Pictures (*.png *.jpg *.jpeg *.webp *.gif *.bmp)",
+            )
+        if not path:
+            return False
+        problem = save_picture(path, profiles.picture_path(pid))
+        if problem:
+            self.say(problem)
+            return False
+        self.profile_picker.refresh_picture()
+        self.say("Picture saved.")
+        return True
+
+    def remove_picture(self) -> None:
+        pid = self.current_profile()
+        if pid is not None:
+            profiles.picture_path(pid).unlink(missing_ok=True)
+            self.profile_picker.refresh_picture()
 
     def _apply_preferences(self, profile_id: str) -> None:
         """Settings that change how everything reads, not what it shows: the clock."""

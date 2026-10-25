@@ -441,7 +441,7 @@ class BooksView(QWidget):
 
         grid = QGridLayout(self)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(12)
+        grid.setSpacing(theme.GAP)
 
         # The span: All time, the newest years, and older years in a list.
         top = QHBoxLayout()

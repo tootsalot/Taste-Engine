@@ -20,14 +20,18 @@ from tests.fill_world import World, bare_share, empty_share
 from tests.test_desktop import set_up_profile
 
 SIZES = ((2560, 1380), (1920, 1040))
-LIMITS = {"For You": 0.10, "Anime": 0.12, "Music": 0.12, "Books": 0.12, "Films and TV": 0.12}
+# 2.4 widened the gaps between cards from 12 to 18 px (approved from a mockup,
+# 2026-10-24), and gaps are bare background, so the Reports limit moved from 12% to 14%.
+LIMITS = {"For You": 0.10, "Anime": 0.14, "Music": 0.14, "Books": 0.14, "Films and TV": 0.14}
 LIMIT = 0.15
 # Bare background or empty card surface, outside charts (2.1). Set just above what the
 # made-up library measures after the cleanup (2026-10-16), so no page quietly gets
 # emptier. For You's 30 picks fill three rows at full screen and can't grow without a
 # fourth; Settings in Simple mode has less to show than a full screen holds.
-EMPTY_LIMITS = {"For You": 0.33, "Rev": 0.30, "Settings": 0.55, "Dashboard": 0.13}
-EMPTY_LIMIT = 0.25  # the four Reports pages
+# The 2.4 spacing (gaps, card padding) moved For You from 33% to 37% and the Dashboard
+# from 13% to 16%.
+EMPTY_LIMITS = {"For You": 0.37, "Rev": 0.30, "Settings": 0.55, "Dashboard": 0.16}
+EMPTY_LIMIT = 0.27  # the four Reports pages (0.25 before the 2.4 spacing)
 CHARTS = (BarChart, BandChart, LeanBar, RankList, CoverWall)
 
 
