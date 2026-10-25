@@ -197,9 +197,11 @@ QFrame[role="tile"]:hover {{ background: {SURFACE}; }}
 QFrame[role="tile"]:focus {{ border-color: {EDGE}; }}
 QFrame[role="tile"][selected="true"] {{ background: {SURFACE}; border-color: {LILAC}; }}
 QFrame[role="tile"][selected="true"][accent="music"] {{ border-color: {CORAL}; }}
+QFrame[role="tile"][selected="true"][accent="tv"],
 QFrame[role="tile"][selected="true"][accent="film"] {{ border-color: {TEAL}; }}
 QLabel[role="tile-score"] {{ color: {LILAC}; font-weight: 800; font-size: 14px; }}
 QLabel[role="tile-score"][accent="music"] {{ color: {CORAL}; }}
+QLabel[role="tile-score"][accent="tv"],
 QLabel[role="tile-score"][accent="film"] {{ color: {TEAL}; }}
 QFrame[role="step"] {{ background: {RAISED}; border-radius: 12px; }}
 QFrame[role="trait"] {{ background: {RAISED}; border-radius: 10px; }}

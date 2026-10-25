@@ -483,48 +483,55 @@ def shrunk(average: float, votes: int, typical: float, prior: int = FILM_PRIOR_V
     return (votes * average + prior * typical) / (votes + prior)
 
 
-def typical_film_average(conn: sqlite3.Connection) -> float:
-    """TMDB's typical average: the mean over the films known here with settled averages."""
+def _typical_tmdb_average(conn: sqlite3.Connection, kind: str = "movie") -> float:
+    """The mean of settled TMDB averages, separately for films and TV."""
+    table = "stg_tmdb_movies" if kind == "movie" else "stg_tmdb_tv"
     row = conn.execute(
-        "SELECT AVG(vote_average) FROM stg_tmdb_movies "
-        "WHERE vote_average IS NOT NULL AND vote_count >= ?",
+        f"SELECT AVG(vote_average) FROM {table} WHERE vote_average IS NOT NULL AND vote_count >= ?",
         (FILM_MIN_VOTES,),
     ).fetchone()
     return row[0] if row and row[0] is not None else TYPICAL_FALLBACK
 
 
-def _film_facts(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
-    """Every film in staging, with genres and directors in the model's slots."""
+def _screen_facts(conn: sqlite3.Connection, kind: str = "movie") -> dict[int, dict[str, Any]]:
+    """Staged titles with genres and directors or creators in the model's slots."""
     facts = {}
-    for row in conn.execute("SELECT * FROM stg_tmdb_movies"):
-        directors = [d.get("name") for d in json.loads(row["directors_json"] or "[]")]
+    table = "stg_tmdb_movies" if kind == "movie" else "stg_tmdb_tv"
+    people = "directors_json" if kind == "movie" else "creators_json"
+    for row in conn.execute(f"SELECT * FROM {table}"):
+        people_names = [d.get("name") for d in json.loads(row[people] or "[]")]
         facts[row["tmdb_id"]] = {
             **dict(row),
+            "title": row["title"] if kind == "movie" else row["name"],
+            "release_date": row["release_date"] if kind == "movie" else row["first_air_date"],
+            "runtime": row["runtime"] if kind == "movie" else row["episode_run_time"],
             "genres": json.loads(row["genres_json"] or "[]"),
-            "studios": [d for d in directors if d],  # directors stand where studios do
+            "studios": [name for name in people_names if name],
         }
     return facts
 
 
-def _film_scored(
-    conn: sqlite3.Connection, typical: float, prior: int = FILM_PRIOR_VOTES
+def _screen_scored(
+    conn: sqlite3.Connection, typical: float, prior: int = FILM_PRIOR_VOTES, kind: str = "movie"
 ) -> list[tuple[int, float, float]]:
-    """(film, my rating, its shrunk TMDB average): the model learns on the same numbers
+    """(title id, my rating, its shrunk TMDB average): learn on the same numbers
     it predicts from."""
+    table = "stg_tmdb_movies" if kind == "movie" else "stg_tmdb_tv"
     return [
         (r[0], r[1], shrunk(r[2], r[3], typical, prior))
         for r in conn.execute(
             "SELECT a.tmdb_id, a.rating, m.vote_average, m.vote_count "
             "FROM stg_tmdb_account_ratings a "
-            "JOIN stg_tmdb_movies m ON m.tmdb_id = a.tmdb_id WHERE a.media_type = 'movie' "
-            "AND a.removed_at IS NULL AND m.vote_average IS NOT NULL AND m.vote_count > 0"
+            f"JOIN {table} m ON m.tmdb_id = a.tmdb_id WHERE a.media_type = ? "
+            "AND a.removed_at IS NULL AND m.vote_average IS NOT NULL AND m.vote_count > 0",
+            (kind,),
         )
     ]
 
 
 def holdout_check(scored: list[tuple[int, float, float]], residuals: list[float],
                   raw: dict[int, float]) -> dict[str, Any]:  # fmt: skip
-    """How far predictions landed from my real ratings on films they never saw, next to
+    """How far predictions landed from my real ratings on titles they never saw, next to
     TMDB's own average alone (both mean absolute errors)."""
     if not residuals:
         return {}
@@ -546,44 +553,70 @@ def _runtime(minutes: int | None) -> str:
 def film_recommendations(
     conn: sqlite3.Connection, today: date | None = None, prior: int | None = None
 ) -> tuple[list[Rec], dict[str, Any]]:
-    """Films I haven't rated, predicted the anime way: the TMDB average shifted (or, with
-    enough ratings, scaled) by how I usually differ from it, plus shrunk genre and
-    director leans. Candidates come from TMDB's recommendations for films I liked,
-    plus my watchlist. Films not out yet are left out, and an average from few votes is
-    pulled toward TMDB's typical one (`shrunk`)."""
+    """Film picks using my film ratings, genres, and directors."""
+    return _screen_recommendations(conn, today, prior, "movie")
+
+
+def tv_recommendations(
+    conn: sqlite3.Connection, today: date | None = None, prior: int | None = None
+) -> tuple[list[Rec], dict[str, Any]]:
+    """The film model applied to my TV ratings, with creators instead of directors."""
+    return _screen_recommendations(conn, today, prior, "tv")
+
+
+def _screen_recommendations(
+    conn: sqlite3.Connection,
+    today: date | None = None,
+    prior: int | None = None,
+    kind: str = "movie",
+) -> tuple[list[Rec], dict[str, Any]]:
+    """Apply the existing model separately to films or TV.
+
+    Use each medium's ratings, genres, and directors or creators. Unreleased titles
+    stay out, and thin TMDB averages get the same caution as film picks.
+    """
+    item_kind = "film" if kind == "movie" else "tv"
+    noun = "films" if kind == "movie" else "TV shows"
+    table = "stg_tmdb_movies" if kind == "movie" else "stg_tmdb_tv"
+    rec_table = (
+        "stg_tmdb_movie_recommendations" if kind == "movie" else "stg_tmdb_tv_recommendations"
+    )
+    title_column = "title" if kind == "movie" else "name"
     cfg = settings.get_all(conn)
     prior = cfg["film_prior_votes"] if prior is None else prior  # the profile's setting
     today_text = (today or date.today()).isoformat()
-    facts = _film_facts(conn)
-    typical = typical_film_average(conn)
-    scored = _film_scored(conn, typical, prior)
+    facts = _screen_facts(conn, kind)
+    typical = _typical_tmdb_average(conn, kind)
+    scored = _screen_scored(conn, typical, prior, kind)
     raw = {tmdb_id: facts[tmdb_id]["vote_average"] for tmdb_id, _, _ in scored}
     model = build_model(scored, facts)
-    mine = tmdb.my_film_mean(conn)
-    support = tmdb.candidate_support(conn)
-    dismissed = _dismissed(conn, "film")
+    mine = tmdb.my_rating_mean(conn, kind)
+    support = tmdb.candidate_support(conn, kind)
+    dismissed = _dismissed(conn, item_kind)
     watchlist = {
         r[0]
         for r in conn.execute(
-            "SELECT tmdb_id FROM stg_tmdb_account_lists WHERE media_type = 'movie' "
-            "AND list_name = 'watchlist' AND removed_at IS NULL"
+            "SELECT tmdb_id FROM stg_tmdb_account_lists WHERE media_type = ? "
+            "AND list_name = 'watchlist' AND removed_at IS NULL",
+            (kind,),
         )
     }
     rated = {
         r[0]
         for r in conn.execute(
-            "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = 'movie' "
-            "AND removed_at IS NULL"
+            "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = ? "
+            "AND removed_at IS NULL",
+            (kind,),
         )
     }
     sources: dict[int, list[tuple[float, str, float]]] = {}
     for rec_id, title, rating, position in conn.execute(
-        "SELECT r.recommended_id, m.title, a.rating, r.position "
-        "FROM stg_tmdb_movie_recommendations r "
-        "JOIN stg_tmdb_account_ratings a ON a.tmdb_id = r.tmdb_id AND a.media_type = 'movie' "
-        "JOIN stg_tmdb_movies m ON m.tmdb_id = r.tmdb_id "
+        f"SELECT r.recommended_id, m.{title_column}, a.rating, r.position "
+        f"FROM {rec_table} r "
+        "JOIN stg_tmdb_account_ratings a ON a.tmdb_id = r.tmdb_id AND a.media_type = ? "
+        f"JOIN {table} m ON m.tmdb_id = r.tmdb_id "
         "WHERE a.removed_at IS NULL AND a.rating > ?",
-        (mine if mine is not None else 11,),
+        (kind, mine if mine is not None else 11),
     ):
         weight = (rating - (mine or 0)) / (1 + position / 10)
         sources.setdefault(rec_id, []).append((weight, title, rating))
@@ -600,13 +633,13 @@ def film_recommendations(
         crowd = shrunk(f["vote_average"], f["vote_count"], typical, prior)
         predicted = model.predict(crowd, f["genres"], f["studios"])
         rec = Rec(
-            kind="film",
+            kind=item_kind,
             item_key=str(tmdb_id),
             title=f["title"],
             score=round(predicted, 2),
             support=round(support.get(tmdb_id, 0.0), 3),
             image_url=tmdb.poster_url(f["poster_path"]),
-            url=tmdb.TITLE_URL["movie"].format(tmdb_id),
+            url=tmdb.TITLE_URL[kind].format(tmdb_id),
         )
         parts = [(f["release_date"] or "")[:4], _runtime(f["runtime"])]
         if f["studios"]:
@@ -625,7 +658,12 @@ def film_recommendations(
         best = sorted(sources.get(tmdb_id, []), reverse=True)[:MAX_REASON_SEEDS]
         seeds = [(title, rating) for _, title, rating in best]
         liked, harsh = _genre_leans(model, f["genres"])
-        rec.reasons.extend(_because(seeds, liked, harsh, noun="films"))
+        if kind == "movie":
+            rec.reasons.extend(_because(seeds, liked, harsh, noun="films"))
+        else:
+            rec.reasons.extend(
+                f"TMDB recommends it alongside {t}, which you rated {r:g}." for t, r in seeds
+            )
         details = [f"TMDB recommends it alongside {t}, which you rated {r:g}." for t, r in seeds]
         if abs(crowd - f["vote_average"]) >= 0.1:
             details.append(
@@ -633,7 +671,7 @@ def film_recommendations(
                 f"so it counts as {crowd:.1f} here."
             )
         for genre in filter(None, (liked, harsh)):
-            details.append(f"You rate {genre} films {model.genre[genre]:+.2f} vs your usual.")
+            details.append(f"You rate {genre} {noun} {model.genre[genre]:+.2f} vs your usual.")
         rec.facts["details"] = details
         recs.append(rec)
     recs.sort(key=lambda r: (-(r.score + 0.15 * math.log1p(r.support)), r.title))
@@ -1005,7 +1043,7 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
     ).fetchone()
     if run is None:
         return [], {}, None
-    item_kind = kind if kind in ("anime", "film", "book") else "artist"
+    item_kind = kind if kind in ("anime", "film", "tv", "book") else "artist"
     dismissed = _dismissed(conn, item_kind)
     recs = [
         Rec(
@@ -1053,7 +1091,7 @@ def compute_all(
     now: datetime | None = None,
     kinds: tuple[str, ...] = ("anime", "music"),
 ) -> dict[str, int]:
-    """Recompute and save the lists (anime, music, or both). No network.
+    """Recompute and save the requested anime, music, film, TV, or book lists. No network.
 
     Returns counts per list. Lists that weren't recomputed are counted from
     their latest saved run.
@@ -1068,10 +1106,13 @@ def compute_all(
     if "film" in kinds:
         films, metrics = film_recommendations(conn, now.date() if now else None)
         save_run(conn, "film", films, metrics)
+    if "tv" in kinds:
+        shows, metrics = tv_recommendations(conn, now.date() if now else None)
+        save_run(conn, "tv", shows, metrics)
     if "book" in kinds:
         books, metrics = book_recommendations(conn)
         save_run(conn, "book", books, metrics)
     return {kind: len(latest(conn, kind)[0]) for kind in LIST_KINDS}
 
 
-LIST_KINDS = ("anime", "music_discover", "music_rediscover", "film", "book")
+LIST_KINDS = ("anime", "music_discover", "music_rediscover", "film", "tv", "book")

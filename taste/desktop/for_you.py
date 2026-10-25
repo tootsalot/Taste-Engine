@@ -47,6 +47,7 @@ LISTS = (
     ("music_discover", "Discover music"),
     ("music_rediscover", "Rediscover"),
     ("film", "Films"),
+    ("tv", "TV"),
     ("book", "Books"),
 )
 LINK_HOSTS = {
@@ -55,8 +56,14 @@ LINK_HOSTS = {
     "www.themoviedb.org": "TMDB",
     "hardcover.app": "Hardcover",
 }
-ACCENTS = {"anime": theme.LILAC, "film": theme.TEAL, "book": theme.AMBER}  # music is coral
-PORTRAIT = ("anime", "film", "book")  # lists whose pictures are posters or covers, not squares
+ACCENTS = {
+    "anime": theme.LILAC,
+    "film": theme.TEAL,
+    "tv": theme.TEAL,
+    "book": theme.AMBER,
+}  # music is coral
+# Lists with posters or covers rather than square artwork.
+PORTRAIT = ("anime", "film", "tv", "book")
 PROGRESS = re.compile(r"(\d+) of (\d+)")
 TILE_POSTER = QSize(150, 214)
 TILE_COVER = QSize(150, 150)
@@ -83,6 +90,10 @@ EMPTY = {
         "No film suggestions yet. Connect your TMDB account in Settings, sync, then press "
         "Refresh recommendations. They start from the films you rated highest."
     ),
+    "tv": (
+        "No TV suggestions yet. Connect your TMDB account in Settings, sync, then press "
+        "Refresh recommendations. They start from the shows you rated highest."
+    ),
     "book": (
         "No book suggestions yet. Connect your Hardcover account in Settings, sync, then press "
         "Refresh recommendations. They start from the books you rated highest."
@@ -95,6 +106,7 @@ EMPTY_AFTER_RUN = {
     ),
     "music_discover": "No new artists found among the ones similar to what you play.",
     "music_rediscover": EMPTY["music_rediscover"],
+    "tv": "No TV shows to suggest yet. Rating a few more shows on TMDB gives it more to go on.",
     "film": "No films to suggest yet. Rating a few more films on TMDB gives it more to go on.",
     "book": "No books to suggest yet. Rating a few more books on Hardcover gives it more to go on.",
 }
@@ -119,7 +131,7 @@ def score_text(kind: str, rec: Rec) -> tuple[str, str]:
         mal = rec.facts.get("mal_mean")
         caption = f"for you ({exact}) · MAL {mal:.2f}" if mal else f"predicted for you ({exact})"
         return str(whole), caption
-    if kind == "film":
+    if kind in ("film", "tv"):
         # TMDB ratings come in half points, so one decimal, not a whole number.
         mean = rec.facts.get("tmdb_mean")
         return f"{rec.score:.1f}", f"for you · TMDB {mean:.1f}" if mean else "predicted for you"
@@ -514,12 +526,14 @@ class ForYouPage(LazyPage, QWidget):
                 self.lists[kind].set_recs(recs, created is not None)
                 index = self.tabs.indexOf(self.lists[kind])
                 self.tabs.setTabText(index, f"{title} ({len(recs)})" if created else title)
-                if kind == "film":
+                if kind in ("film", "tv"):
                     rated = metrics.get("rated", 0)
+                    noun = "films" if kind == "film" else "TV shows"
+                    person = "director" if kind == "film" else "creator"
                     self.lists[kind].note.setText(
-                        f"Predicted from your TMDB ratings ({rated} rated films), the same way "
+                        f"Predicted from your TMDB ratings ({rated} rated {noun}), the same way "
                         "as anime: the TMDB average, your usual difference from it, and your "
-                        "genre and director leans."
+                        f"genre and {person} leans."
                         if created
                         else ""
                     )
@@ -568,7 +582,7 @@ class ForYouPage(LazyPage, QWidget):
 
     def dismiss(self, list_kind: str, item_key: str) -> None:
         """Hide a suggestion for good. Its tile fades out, then the grid closes up."""
-        kind = list_kind if list_kind in ("anime", "film", "book") else "artist"
+        kind = list_kind if list_kind in ("anime", "film", "tv", "book") else "artist"
         conn = self.ctx.connect(self.profile_id)
         try:
             recommend.dismiss(conn, kind, item_key)

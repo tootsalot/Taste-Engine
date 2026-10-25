@@ -279,6 +279,13 @@ class World:
             when = NOW_DT - timedelta(days=rng.randint(0, 900))
             stamp = when.strftime("%Y-%m-%dT%H:%M:%S.000Z")
             ratings.append(("tv", tid, rng.randint(4, 20) / 2, stamp))
+        # TV candidates use invented details without changing the random library above.
+        for i in range(700, 730):
+            catalog[("tv", i)]["_recs"] = list(range(800, 830))
+        for i in range(800, 830):
+            catalog[("tv", i)] = fake_tmdb.tv(
+                i, f"Example Suggested Series {i}", 7.5, ["Drama"], "Ola Writer"
+            )
         self.tmdb = fake_tmdb.FakeTmdb(
             ratings, catalog=catalog, watchlist=[("movie", 401)], favorites=[]
         )

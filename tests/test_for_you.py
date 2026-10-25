@@ -168,6 +168,7 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
         "music_discover": 4,
         "music_rediscover": 1,
         "film": 0,
+        "tv": 0,
         "book": 0,
     }
     assert page.refresh_button.isEnabled()
@@ -415,7 +416,8 @@ def test_sync_everything_also_refreshes_recommendations(window, qtbot):
     log = dash.log.toPlainText()
     assert "Recommendations: details for shows you liked, 2 of 2" in log
     assert (
-        "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover, 0 films, 0 books." in log
+        "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover, "
+        "0 films, 0 TV shows, 0 books." in log
     )
     window.sidebar.setCurrentRow(PAGES.index("For You"))  # it catches up when shown
     assert window.for_you.tabs.tabText(0) == "Anime (4)"  # For You picked them up
@@ -491,3 +493,35 @@ def test_a_tile_laid_out_before_the_grid_has_a_width_asks_for_no_negative_size(q
     assert tile.art.width() >= 1 and tile.art.height() >= 1
     tile.deleteLater()
     ctx.shutdown()
+
+
+def test_tv_tab_follows_films_and_dismisses_tv_only(window):
+    from taste.desktop import theme
+    from taste.desktop.for_you import ACCENTS, PORTRAIT
+
+    set_up_profile(window)
+    conn = window.ctx.connect("me")
+    pick = Rec(kind="tv", item_key="41", title="Example River", score=8.2, facts={"tmdb_mean": 7.8})
+    recommend.save_run(conn, "tv", [pick], {"rated": 2})
+    recommend.save_run(conn, "film", [Rec(kind="film", item_key="41", title="Example Film")])
+    conn.close()
+    page = window.for_you
+    page.reload()
+    assert [page.tabs.tabText(i).split(" (")[0] for i in range(page.tabs.count())] == [
+        "Anime",
+        "Discover music",
+        "Rediscover",
+        "Films",
+        "TV",
+        "Books",
+    ]
+    assert ACCENTS["tv"] == theme.TEAL and "tv" in PORTRAIT
+    page.tabs.setCurrentWidget(page.lists["tv"])
+    assert page.lists["tv"].detail.score.text() == "8.2"
+    assert "TMDB 7.8" in page.lists["tv"].detail.caption.text()
+    assert "creator" in page.lists["tv"].note.text()
+    page.lists["tv"].detail.dismiss_button.click()
+    conn = window.ctx.connect("me")
+    assert recommend.latest(conn, "tv")[0] == []
+    assert len(recommend.latest(conn, "film")[0]) == 1
+    conn.close()

@@ -487,8 +487,8 @@ def save_details(
     conn.execute(
         "INSERT INTO stg_tmdb_tv (tmdb_id, name, original_name, first_air_date, last_air_date, "
         "status, seasons, episodes, episode_run_time, vote_average, vote_count, poster_path, "
-        "networks_json, genres_json, creators_json, raw_page_id, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "networks_json, genres_json, creators_json, raw_page_id, fetched_at, overview) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (tmdb_id) DO UPDATE SET name = excluded.name, "
         "original_name = excluded.original_name, first_air_date = excluded.first_air_date, "
         "last_air_date = excluded.last_air_date, status = excluded.status, "
@@ -496,7 +496,8 @@ def save_details(
         "episode_run_time = excluded.episode_run_time, vote_average = excluded.vote_average, "
         "vote_count = excluded.vote_count, poster_path = excluded.poster_path, "
         "networks_json = excluded.networks_json, genres_json = excluded.genres_json, "
-        "creators_json = excluded.creators_json, raw_page_id = excluded.raw_page_id, "
+        "creators_json = excluded.creators_json, overview = excluded.overview, "
+        "raw_page_id = excluded.raw_page_id, "
         "fetched_at = excluded.fetched_at",
         (
             data["id"],
@@ -516,6 +517,7 @@ def save_details(
             json.dumps(creators, ensure_ascii=False),
             raw_id,
             fetched_at,
+            (data.get("overview") or "").strip() or None,
         ),
     )
 
@@ -526,7 +528,7 @@ def save_details(
 
 
 def backfill_overviews(conn: sqlite3.Connection) -> int:
-    """Overviews and popularity for films fetched before they were kept, read back from
+    """Overviews for TV and films, plus film popularity, read back from
     the stored response (no network). Returns how many were filled."""
     rows = conn.execute(
         "SELECT m.tmdb_id, p.payload FROM stg_tmdb_movies m "
@@ -547,6 +549,22 @@ def backfill_overviews(conn: sqlite3.Connection) -> int:
             (overview, data.get("popularity"), tmdb_id),
         )
         filled += 1
+    rows = conn.execute(
+        "SELECT t.tmdb_id, p.payload FROM stg_tmdb_tv t "
+        "JOIN raw_api_pages p ON p.raw_page_id = t.raw_page_id "
+        "WHERE t.overview IS NULL AND t.fetched_at <> ''"
+    ).fetchall()
+    for tmdb_id, payload in rows:
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            continue
+        overview = (data.get("overview") or "").strip() or None
+        if overview:
+            conn.execute(
+                "UPDATE stg_tmdb_tv SET overview = ? WHERE tmdb_id = ?", (overview, tmdb_id)
+            )
+            filled += 1
     return filled
 
 
@@ -660,53 +678,61 @@ def _load_core(conn: sqlite3.Connection, kind: str, tmdb_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Film suggestion candidates
+# Film and TV suggestion candidates
 # ---------------------------------------------------------------------------
 
 CANDIDATE_DETAILS = 120  # details for this many of the strongest candidates
 
 
-def my_film_mean(conn: sqlite3.Connection) -> float | None:
+def my_rating_mean(conn: sqlite3.Connection, kind: str = "movie") -> float | None:
     return conn.execute(
-        "SELECT AVG(rating) FROM stg_tmdb_account_ratings WHERE media_type = 'movie' "
-        "AND removed_at IS NULL"
+        "SELECT AVG(rating) FROM stg_tmdb_account_ratings WHERE media_type = ? "
+        "AND removed_at IS NULL",
+        (kind,),
     ).fetchone()[0]
 
 
 def film_seeds(conn: sqlite3.Connection) -> list[int]:
-    """Films I rated above my own average, best first."""
-    mean = my_film_mean(conn)
+    """Films I rated above my own film average, best first."""
+    return recommendation_seeds(conn, "movie")
+
+
+def recommendation_seeds(conn: sqlite3.Connection, kind: str = "movie") -> list[int]:
+    """Films or shows rated above my own average for that medium, best first."""
+    mean = my_rating_mean(conn, kind)
     if mean is None:
         return []
     return [
         r[0]
         for r in conn.execute(
-            "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = 'movie' "
+            "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = ? "
             "AND removed_at IS NULL AND rating > ? ORDER BY rating DESC, tmdb_id",
-            (mean,),
+            (kind, mean),
         )
     ]
 
 
-def candidate_support(conn: sqlite3.Connection) -> dict[int, float]:
-    """Films I haven't rated, by how strongly the films I liked point at them. Each
-    liked film adds (my rating - my average), a little less the further down its list."""
-    mean = my_film_mean(conn)
+def candidate_support(conn: sqlite3.Connection, kind: str = "movie") -> dict[int, float]:
+    """Unrated titles, by how strongly liked titles of that medium point at them. Each
+    liked title adds (my rating - my average), a little less the further down its list."""
+    mean = my_rating_mean(conn, kind)
     if mean is None:
         return {}
     rated = {
         r[0]
         for r in conn.execute(
-            "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = 'movie' "
-            "AND removed_at IS NULL"
+            "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = ? "
+            "AND removed_at IS NULL",
+            (kind,),
         )
     }
+    table = "stg_tmdb_movie_recommendations" if kind == "movie" else "stg_tmdb_tv_recommendations"
     support: dict[int, float] = {}
     for rec_id, position, rating in conn.execute(
-        "SELECT r.recommended_id, r.position, a.rating FROM stg_tmdb_movie_recommendations r "
-        "JOIN stg_tmdb_account_ratings a ON a.tmdb_id = r.tmdb_id AND a.media_type = 'movie' "
+        f"SELECT r.recommended_id, r.position, a.rating FROM {table} r "
+        "JOIN stg_tmdb_account_ratings a ON a.tmdb_id = r.tmdb_id AND a.media_type = ? "
         "WHERE a.removed_at IS NULL AND a.rating > ?",
-        (mean,),
+        (kind, mean),
     ):
         if rec_id not in rated:
             support[rec_id] = support.get(rec_id, 0.0) + (rating - mean) / (1 + position / 10)
@@ -721,19 +747,37 @@ def enrich_recommendations(
     *,
     now: datetime | None = None,
 ) -> int:
-    """TMDB's recommendations for the films I liked (cached 30 days), then details for
+    """Cache film and TV recommendation lists and fetch the strongest 120 of each."""
+    return sum(
+        _enrich_recommendations(conn, client, cfg, out, now=now, kind=kind)
+        for kind in ("movie", "tv")
+    )
+
+
+def _enrich_recommendations(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    cfg: TmdbSettings,
+    out: Callable[[str], None] = print,
+    *,
+    now: datetime | None = None,
+    kind: str = "movie",
+) -> int:
+    """TMDB's recommendations for liked titles (cached 30 days), then details for
     the strongest candidates. Returns how many lists were fetched."""
+    table = "stg_tmdb_movie_recommendations" if kind == "movie" else "stg_tmdb_tv_recommendations"
+    method = "recommendations" if kind == "movie" else "tv_recommendations"
+    noun = "films" if kind == "movie" else "TV shows"
     now = now or datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=REFRESH_DAYS)).strftime(TIMESTAMP_FORMAT)
     fresh = {
         r[0]
         for r in conn.execute(
-            "SELECT tmdb_id FROM stg_tmdb_fetches WHERE method = 'recommendations' "
-            "AND fetched_at >= ?",
-            (cutoff,),
+            "SELECT tmdb_id FROM stg_tmdb_fetches WHERE method = ? AND fetched_at >= ?",
+            (method, cutoff),
         )
     }
-    todo = [i for i in film_seeds(conn) if i not in fresh]
+    todo = [i for i in recommendation_seeds(conn, kind) if i not in fresh]
     with transaction(conn):
         backfill_overviews(conn)
     run = SyncRun(conn, SOURCE, "enrich")
@@ -741,7 +785,7 @@ def enrich_recommendations(
         for i, tmdb_id in enumerate(todo, 1):
             params = {"page": 1}
             response = client.get_json(
-                f"{API}/3/movie/{tmdb_id}/recommendations",
+                f"{API}/3/{kind}/{tmdb_id}/recommendations",
                 params=params,
                 headers=bearer(cfg.read_token),
                 checker=check_response,
@@ -751,40 +795,44 @@ def enrich_recommendations(
                     conn,
                     sync_run_id=run.run_id,
                     source=SOURCE,
-                    endpoint="/3/movie/{id}/recommendations",
+                    endpoint=f"/3/{kind}/{{id}}/recommendations",
                     params={"id": tmdb_id, **params},
                     page_number=1,
                     http_status=response.status,
                     payload=response.data,
                 )
-                conn.execute(
-                    "DELETE FROM stg_tmdb_movie_recommendations WHERE tmdb_id = ?", (tmdb_id,)
-                )
+                conn.execute(f"DELETE FROM {table} WHERE tmdb_id = ?", (tmdb_id,))
                 for position, item in enumerate(response.data.get("results") or []):
                     if not isinstance(item, dict) or "id" not in item:
                         continue
                     conn.execute(
-                        "INSERT INTO stg_tmdb_movie_recommendations (tmdb_id, recommended_id, "
+                        f"INSERT INTO {table} (tmdb_id, recommended_id, "
                         "recommended_title, position) VALUES (?, ?, ?, ?) "
                         "ON CONFLICT (tmdb_id, recommended_id) DO NOTHING",
                         (tmdb_id, item["id"], _title(item), position),
                     )
-                    _seed_details(conn, "movie", item, raw_id)
+                    if kind == "tv":
+                        conn.execute(
+                            f"UPDATE {table} SET raw_page_id = ? WHERE tmdb_id = ? "
+                            "AND recommended_id = ?",
+                            (raw_id, tmdb_id, item["id"]),
+                        )
+                    _seed_details(conn, kind, item, raw_id)
                 conn.execute(
                     "INSERT INTO stg_tmdb_fetches (tmdb_id, method, fetched_at) VALUES (?, ?, ?) "
                     "ON CONFLICT (tmdb_id, method) DO UPDATE SET fetched_at = excluded.fetched_at",
-                    (tmdb_id, "recommendations", now.strftime(TIMESTAMP_FORMAT)),
+                    (tmdb_id, method, now.strftime(TIMESTAMP_FORMAT)),
                 )
                 run.pages_fetched += 1
                 run.save()
             if i % 10 == 0 or i == len(todo):
-                out(f"Recommendations: films like the ones you liked, {i} of {len(todo)}")
-        support = candidate_support(conn)
+                out(f"Recommendations: {noun} like the ones you liked, {i} of {len(todo)}")
+        support = candidate_support(conn, kind)
         strongest = sorted(support, key=lambda i: (-support[i], i))[:CANDIDATE_DETAILS]
-        stale = {i for kind, i in _detail_ids(conn, now, account_only=False) if kind == "movie"}
+        stale = {i for media, i in _detail_ids(conn, now, account_only=False) if media == kind}
         fetch_details(
             conn, client, cfg, run, out, now=now,
-            ids=[("movie", i) for i in strongest if i in stale],
+            ids=[(kind, i) for i in strongest if i in stale],
         )  # fmt: skip
         run.finish("success")
     except ApiError as exc:

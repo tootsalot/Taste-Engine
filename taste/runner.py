@@ -185,7 +185,7 @@ def refresh_recommendations(
 
     store = store or SecretStore()
     lastfm_cfg = None
-    pending = ["anime", "music", "film", "book"]
+    pending = ["anime", "music", "film", "tv", "book"]
     if fetch:
         try:
             mal_cfg = credentials.mal(conn, profile_id, store)
@@ -258,7 +258,7 @@ def refresh_recommendations(
     out(
         f"Recommendations ready: {counts['anime']} anime, {counts['music_discover']} new "
         f"artists, {counts['music_rediscover']} to rediscover, {counts['film']} films, "
-        f"{counts['book']} books."
+        f"{counts['tv']} TV shows, {counts['book']} books."
     )
     return counts
 

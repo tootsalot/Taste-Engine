@@ -438,9 +438,17 @@ def test_refresh_recommendations_end_to_end(conn):
     counts = runner.refresh_recommendations(
         conn, "me", store=store, out=messages.append, client_factory=client_factory, now=NOW_DT
     )
-    assert counts == {"anime": 4, "music_discover": 4, "music_rediscover": 1, "film": 0, "book": 0}
+    assert counts == {
+        "anime": 4,
+        "music_discover": 4,
+        "music_rediscover": 1,
+        "film": 0,
+        "tv": 0,
+        "book": 0,
+    }
     assert messages[-1] == (
-        "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover, 0 films, 0 books."
+        "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover, "
+        "0 films, 0 TV shows, 0 books."
     )
     # Suggested artists without a played album get their top album's cover.
     discover, _, _ = recommend.latest(conn, "music_discover")
@@ -468,7 +476,14 @@ def test_refresh_without_data_is_empty_not_an_error(conn):
         conn, "me", store=SecretStore(backend=FakeKeyring()), out=quiet,
         now=datetime(2026, 10, 1, tzinfo=timezone.utc),
     )  # fmt: skip
-    assert counts == {"anime": 0, "music_discover": 0, "music_rediscover": 0, "film": 0, "book": 0}
+    assert counts == {
+        "anime": 0,
+        "music_discover": 0,
+        "music_rediscover": 0,
+        "film": 0,
+        "tv": 0,
+        "book": 0,
+    }
 
 
 def test_reasons_read_like_sentences(conn, anime_world):

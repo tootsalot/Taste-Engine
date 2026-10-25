@@ -314,3 +314,16 @@ def test_dashboard_cards_can_be_hidden_and_the_rest_share_the_room(library):
     assert dash.crowd.width() + dash.month.width() > page * 0.9
     assert dash.films.width() > page * 0.4  # books and films share their row
     assert bare_share(win.stack.currentWidget()) < LIMIT
+
+
+def test_tv_suggestions_fill_the_window(library):
+    win = library
+    win.sidebar.setCurrentRow(PAGES.index("For You"))
+    page = win.for_you
+    page.tabs.setCurrentWidget(page.lists["tv"])
+    assert page.lists["tv"].recs
+    for width, height in SIZES:
+        win.resize(width, height)
+        pump()
+        assert bare_share(page) <= LIMITS["For You"]
+        assert empty_share(page, ignore=CHARTS) <= EMPTY_LIMITS["For You"]

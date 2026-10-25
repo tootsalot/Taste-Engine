@@ -349,10 +349,18 @@ Films and TV come from my TMDB account: ratings (0.5 to 10, in halves), watchlis
 Watchlist and favorites membership. Key: `(media_type, tmdb_id, list_name)`, where `list_name` is `watchlist` or `favorites`. Columns: title, last_seen_run_id, removed_at.
 
 ### `stg_tmdb_movies`, `stg_tmdb_tv`
-Details per title: title (name), original title, release or first air date, runtime (episode run time for TV), the TMDB average and vote count, poster path, genres (`genres_json`), directors (`directors_json`, films) or creators (`creators_json`, TV), seasons and episodes and networks (TV), `raw_page_id`, and `fetched_at` (`''` while only a list entry is known; refreshed after 30 days). Films also keep TMDB's `overview` and `popularity`; films fetched before those were kept get them back from their stored raw response.
+Details per title: title (name), original title, release or first air date, runtime (episode run time for TV), the TMDB average and vote count, poster path, genres (`genres_json`), directors (`directors_json`, films) or creators (`creators_json`, TV), seasons and episodes and networks (TV), `raw_page_id`, and `fetched_at` (`''` while only a list entry is known; refreshed after 30 days). Both keep TMDB's `overview`; films also keep `popularity`. Older details get those fields back from the stored raw response without another request. TV's `overview` is added through `ADDED_COLUMNS` when an existing profile opens.
 
 ### `stg_tmdb_movie_recommendations`
 TMDB's recommendations for films I rated above my own average: the film suggestion candidates. Key `(tmdb_id, recommended_id)`, plus recommended_title and position (0 is TMDB's first). `stg_tmdb_fetches` records when each list was fetched, so it's asked again only after 30 days.
+
+### `stg_tmdb_tv_recommendations`
+TV suggestions from `/3/tv/{id}/recommendations`, for shows I rated above my own TV average. The key is `(tmdb_id, recommended_id)`. `recommended_title` and `position` (starting at 0) have the same meaning as in the film table. `source` is `tmdb`, and `raw_page_id` links the row to the response kept in `raw_api_pages`. Refreshing replaces a seed's list idempotently; details are fetched for the strongest 120 candidates per medium. Recommendation responses use page 1, as film picks already do.
+
+### `stg_tmdb_fetches`
+Key `(tmdb_id, method)`, plus `fetched_at` as UTC text. Film recommendation lists use method `recommendations`, TV lists use `tv_recommendations`, so the same numeric id in both media cannot share a cache entry. Both expire after 30 days. Missing details use `gone_movie` or `gone_tv` to avoid repeatedly asking for titles that returned 404.
+
+TV suggestion runs use `rec_runs.kind = 'tv'`. Their saved items and dismissals use kind `tv` too, separately from films. Community scores remain in `core_community_ratings`, account ratings in `core_ratings`, and watchlist membership in `core_curation`.
 
 ---
 

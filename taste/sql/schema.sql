@@ -327,6 +327,17 @@ CREATE TABLE IF NOT EXISTS stg_tmdb_movie_recommendations (
     PRIMARY KEY (tmdb_id, recommended_id)
 );
 
+-- TV candidates use their own ids, separate from movie ids.
+CREATE TABLE IF NOT EXISTS stg_tmdb_tv_recommendations (
+    tmdb_id           INTEGER NOT NULL,
+    recommended_id    INTEGER NOT NULL,
+    recommended_title TEXT NOT NULL,
+    position          INTEGER NOT NULL,
+    source            TEXT NOT NULL DEFAULT 'tmdb' REFERENCES core_sources (source),
+    raw_page_id       INTEGER REFERENCES raw_api_pages (raw_page_id),
+    PRIMARY KEY (tmdb_id, recommended_id)
+);
+
 CREATE TABLE IF NOT EXISTS stg_tmdb_fetches (
     tmdb_id    INTEGER NOT NULL,
     method     TEXT NOT NULL,

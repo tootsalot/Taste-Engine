@@ -136,10 +136,11 @@ class FakeTmdb:
                 200,
                 {"page": page, "results": chunk, "total_pages": pages, "total_results": len(items)},
             )
-        match = re.match(r"/3/movie/(\d+)/recommendations$", path)
+        match = re.match(r"/3/(movie|tv)/(\d+)/recommendations$", path)
         if match:
-            recs = self.catalog.get(("movie", int(match.group(1))), {}).get("_recs", [])
-            results = [list_item("movie", r, self.catalog) for r in recs]
+            kind, tmdb_id = match.groups()
+            recs = self.catalog.get((kind, int(tmdb_id)), {}).get("_recs", [])
+            results = [list_item(kind, r, self.catalog) for r in recs]
             return FakeResponse(200, {"page": 1, "results": results, "total_pages": 1})
         match = re.match(r"/3/(movie|tv)/(\d+)$", path)
         if match:

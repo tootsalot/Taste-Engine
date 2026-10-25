@@ -294,11 +294,11 @@ SETTINGS: list[Setting] = [
     ),
     Setting(
         "film_prior_votes",
-        "Votes before a TMDB average is trusted",
+        "TMDB votes before an average is trusted",
         "int",
         1000,
-        "Film suggestions trust a TMDB average from this many votes halfway, the rest being "
-        "TMDB's typical average, so a new film's early hype counts for less. 0 trusts every "
+        "Film and TV suggestions trust a TMDB average from this many votes halfway, the rest being "
+        "TMDB's typical average, so a new title's early hype counts for less. 0 trusts every "
         "average as it is.",
         minimum=0,
         maximum=1_000_000,

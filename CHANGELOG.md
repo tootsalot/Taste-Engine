@@ -2,6 +2,14 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [2.3.0] (unreleased)
+
+For You
+- TV has its own tab after Films, with picks from shows I rated above my own TV average and my watchlist
+- TV picks use the film model with my TV ratings, genre and creator leans, and the same caution on averages from few votes
+- Shows not out yet stay out, watchlist picks are marked, and Not interested hides a TV pick without hiding a film with the same TMDB id
+- The TMDB vote setting now says it covers both film and TV suggestions
+
 ## [2.2.0]
 
 An audit of the whole app: Rev's Rebuild really rebuilds, adult anime is hidden without losing any history, and about thirty fixes for wrong numbers, crashes at exit, and wasted requests.
