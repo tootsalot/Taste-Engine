@@ -30,6 +30,20 @@ pip install -r requirements.txt
 python -m taste.desktop
 ```
 
+## Across everything
+
+For You has an **Across everything** list after Books, marked Experimental. It mixes candidates
+from my existing lists using an explicit genre/theme map and my whole profile. Every pick
+keeps its own medium's color and score. Its reasons name the other media behind a shared theme,
+with their numbers. The note shows each rated medium's baseline holdout; music has plays,
+not a rating holdout. The map describes broad overlaps, not the meaning of an individual item.
+
+A third Advanced switch can let TV and books borrow theme leans from the other media while
+their own ratings are sparse. It defaults off and the influence fades as their ratings grow.
+Its separate off/on checks can get worse, so I check the numbers before using it. Dismissing
+a pick in the experimental mix hides it there. Dismissing it in its original list also hides
+it from the mix. Themes never link titles across sources.
+
 ## Experimental picks
 
 Advanced settings has two switches, both off to start: learning a little from **Not interested**,

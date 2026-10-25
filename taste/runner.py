@@ -256,6 +256,7 @@ def refresh_recommendations(
             conn, client_factory([lastfm_cfg.api_key]), lastfm_cfg, names, now
         ):
             counts = compute("music")
+    counts = compute("everything")
     out(
         f"Recommendations ready: {counts['anime']} anime, {counts['music_discover']} new "
         f"artists, {counts['music_rediscover']} to rediscover, {counts['film']} films, "

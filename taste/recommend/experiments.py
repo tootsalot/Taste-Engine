@@ -7,7 +7,7 @@ import sqlite3
 from collections import Counter
 from datetime import date, datetime, timezone
 
-from taste import settings
+from taste import settings, themes
 from taste.recommend.model import (
     GENRE_SHRINK,
     MIN_RESIDUALS,
@@ -137,20 +137,33 @@ def residuals(
     scored: list[tuple],
     facts: dict,
     now: datetime | date | None = None,
+    transfer: bool | None = None,
     **switches,
 ) -> list[float]:
     if len(scored) < MIN_RESIDUALS:
         return []
+    use_transfer = settings.get(conn, "rec_theme_transfer") if transfer is None else transfer
     result = []
     for fold in range(5):
         train = [row for row in scored if row[0] % 5 != fold]
         model = apply(conn, kind, build_model(train, facts), train, facts, now, **switches)
+        taste = (
+            themes.profile(
+                conn, themes.excluded_items(conn, kind, {k for k, _, _ in scored if k % 5 == fold})
+            )
+            if use_transfer and kind in ("tv", "book")
+            else None
+        )
         for key, mine, crowd in scored:
             if key % 5 == fold:
                 f = facts.get(key, {})
-                result.append(
-                    mine - model.predict(crowd, f.get("genres", []), f.get("studios", []))
-                )
+                prediction = model.predict(crowd, f.get("genres", []), f.get("studios", []))
+                if taste is not None:
+                    tags = themes.candidate_themes(conn, kind, str(key), f)
+                    prediction = min(
+                        10, max(1, prediction + themes.transfer(taste, kind, tags, len(train)))
+                    )
+                result.append(mine - prediction)
     return result
 
 
@@ -162,7 +175,9 @@ def metrics(
     now: datetime | date | None = None,
 ) -> dict:
     def check(dismissal, recency):
-        errors = residuals(conn, kind, scored, facts, now, dismissal=dismissal, recency=recency)
+        errors = residuals(
+            conn, kind, scored, facts, now, dismissal=dismissal, recency=recency, transfer=False
+        )
         return {
             "count": len(errors),
             "mae": round(sum(map(abs, errors)) / len(errors), 3) if errors else None,
@@ -183,3 +198,22 @@ def metrics(
             },
         }
     }
+
+
+def transfer_metrics(
+    conn: sqlite3.Connection,
+    kind: str,
+    scored: list[tuple],
+    facts: dict,
+    now: datetime | date | None = None,
+) -> dict:
+    checks = {}
+    for on in (False, True):
+        errors = residuals(
+            conn, kind, scored, facts, now, dismissal=False, recency=False, transfer=on
+        )
+        checks["on" if on else "off"] = {
+            "count": len(errors),
+            "mae": round(sum(map(abs, errors)) / len(errors), 3) if errors else None,
+        }
+    return {"enabled": settings.get(conn, "rec_theme_transfer"), **checks}

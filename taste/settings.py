@@ -339,6 +339,16 @@ SETTINGS: list[Setting] = [
         advanced=True,
     ),
     Setting(
+        "rec_theme_transfer",
+        "Borrow themes for TV and books (experimental)",
+        "bool",
+        False,
+        "Let sparse TV and book ratings borrow a little theme evidence from other media. "
+        "Off keeps their usual picks.",
+        group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
         "drift_min_titles",
         "Titles before a yearly comparison",
         "int",

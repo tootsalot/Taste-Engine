@@ -7,10 +7,11 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
-from taste import settings
+from taste import settings, themes
 from taste.db import utc_now
 from taste.recommend.anime import anime_recommendations
 from taste.recommend.books import book_recommendations
+from taste.recommend.everything import everything_recommendations
 from taste.recommend.model import Rec, _dismissed
 from taste.recommend.music import music_recommendations
 from taste.recommend.screen import film_recommendations, tv_recommendations
@@ -20,6 +21,8 @@ def save_run(
     conn: sqlite3.Connection, kind: str, recs: list[Rec], metrics: dict[str, Any] | None = None
 ) -> int:
     params = {k: settings.get(conn, k) for k in REC_SETTINGS}
+    if kind in ("anime", "everything"):
+        params["anime_visibility"] = themes.visibility(conn)
     run_id = conn.execute(
         "INSERT INTO rec_runs (kind, created_at, params_json, metrics_json) VALUES (?, ?, ?, ?)",
         (kind, utc_now(), json.dumps(params), json.dumps(metrics or {})),
@@ -50,17 +53,23 @@ def save_run(
 def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, Any], str | None]:
     """The most recent saved run of a kind, minus anything dismissed since."""
     run = conn.execute(
-        "SELECT rec_run_id, created_at, metrics_json FROM rec_runs WHERE kind = ? "
+        "SELECT rec_run_id, created_at, metrics_json, params_json FROM rec_runs WHERE kind = ? "
         "ORDER BY rec_run_id DESC LIMIT 1",
         (kind,),
     ).fetchone()
     if run is None:
         return [], {}, None
-    item_kind = kind if kind in ("anime", "film", "tv", "book") else "artist"
+    if kind in ("anime", "everything") and json.loads(run["params_json"]).get(
+        "anime_visibility"
+    ) != themes.visibility(conn):
+        return [], {}, None  # old reasons may name a seed that has since become hidden
+    item_kind = kind if kind in ("anime", "film", "tv", "book", "everything") else "artist"
     dismissed = _dismissed(conn, item_kind)
     recs = [
         Rec(
-            kind=item_kind,
+            kind=json.loads(r["facts_json"] or "{}").get("medium", "artist")
+            if kind == "everything"
+            else item_kind,
             item_key=r["item_key"],
             title=r["title"],
             subtitle=r["subtitle"],
@@ -77,6 +86,9 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
         )
         if r["item_key"] not in dismissed
     ]
+    if kind == "everything":
+        hidden = {tuple(r) for r in conn.execute("SELECT kind, item_key FROM rec_dismissed")}
+        recs = [r for r in recs if (r.kind, r.facts.get("source_item_key")) not in hidden]
     return recs, json.loads(run["metrics_json"]), run["created_at"]
 
 
@@ -89,6 +101,7 @@ def dismiss(conn: sqlite3.Connection, kind: str, item_key: str) -> None:
 
 
 REC_SETTINGS = [
+    "rec_theme_transfer",
     "rec_dismissal_signal",
     "rec_recent_ratings",
     "rec_count",
@@ -127,7 +140,10 @@ def compute_all(
     if "book" in kinds:
         books, metrics = book_recommendations(conn, now)
         save_run(conn, "book", books, metrics)
+    if "everything" in kinds:
+        picks, metrics = everything_recommendations(conn, now)
+        save_run(conn, "everything", picks, metrics)
     return {kind: len(latest(conn, kind)[0]) for kind in LIST_KINDS}
 
 
-LIST_KINDS = ("anime", "music_discover", "music_rediscover", "film", "tv", "book")
+LIST_KINDS = ("anime", "music_discover", "music_rediscover", "film", "tv", "book", "everything")

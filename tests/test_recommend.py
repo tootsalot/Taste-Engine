@@ -445,6 +445,7 @@ def test_refresh_recommendations_end_to_end(conn):
         "film": 0,
         "tv": 0,
         "book": 0,
+        "everything": 9,
     }
     assert messages[-1] == (
         "Recommendations ready: 4 anime, 4 new artists, 1 to rediscover, "
@@ -483,6 +484,7 @@ def test_refresh_without_data_is_empty_not_an_error(conn):
         "film": 0,
         "tv": 0,
         "book": 0,
+        "everything": 0,
     }
 
 

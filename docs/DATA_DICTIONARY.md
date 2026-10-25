@@ -737,3 +737,40 @@ both off. All use the same five folds by source id, fitting without held-out rat
 20 ratings, count is 0 and mae is null, rather than an invented accuracy. The ordinary
 accuracy fields describe the usual model. Chance estimates use the active experiment fit.
 Music has no personal rating holdout and keeps its listening model.
+
+
+## Shared themes and mixed suggestions (3.0)
+
+`taste/themes.py` holds a hand-written, case-insensitive map of MAL genres/themes, TMDB genres,
+Hardcover genres/moods, and Last.fm artist tags. Unknown terms contribute no evidence.
+It maps categories, never item titles. Cross-source item identity remains solely in
+core_item_external_ids. The synthetic Dream Pop alias is included for the offline fixture.
+
+Profile evidence is computed from source-tagged core ratings paired with community ratings.
+Each theme records a medium's count, mean rating difference (normalized to that source's
+scale), and a lean centered on that medium's overall difference, shrunk by 5. Music contributes
+recorded play shares for mapped artist tags, explicitly marked `play share`, never a personal
+rating. Its maximum lean is 0.1, shrunk by 100 plays. Each other medium contributes one lean
+to a theme's mean so a large library cannot outweigh every other medium by volume alone.
+
+The new rec_runs kind `everything` stores an Experimental mix of candidates from the existing
+six lists. Rank within each native list is the common base, plus 0.15 times the other media's
+theme lean. Native prediction/match scores remain in rec_items.score. Namespaced item keys
+are `kind:source_key`; facts_json keeps `medium`, `source_item_key`, `list_kind`, mapped `themes`,
+and `mix_score`. metrics_json records `experimental`, the profile's theme evidence, a visibility
+stamp, and each rated medium's five-fold baseline holdout on the 1 to 10 model scale. Music
+records count 0, mae null, and a note that it has plays rather than personal ratings.
+
+`rec_theme_transfer` is an Advanced app_settings boolean, false by default, recorded with
+run parameters. When on, TV/books predictions add 5 times the other media's mean theme lean,
+multiplied by 10/(own rated count + 10). The shift is on the 1 to 10 model scale and clipped
+to its limits, with book stars converted back afterwards. facts_json details state the shift.
+`metrics_json.theme_transfer` stores enabled/off/on checks. Each fold removes held-out core
+items from the theme profile as well as the rating fit, including explicit cross-source links.
+The two earlier experiments' separate checks always exclude transfer.
+
+`rec_dismissed` accepts kind `everything` with the namespaced key. Those dismissals leave the
+ordinary lists alone. Original-list dismissals filter both fresh and saved mixed lists.
+Anime and mixed runs record `params_json.anime_visibility`: the NSFW setting plus a hash of
+adult classifications. A mismatch with current policy withholds the saved list, including old
+seed reasons, until recomputed. No core table or source-id link is added for themes.

@@ -8,7 +8,7 @@ import sqlite3
 from datetime import date
 from typing import Any
 
-from taste import settings
+from taste import settings, themes
 from taste.recommend import experiments
 from taste.recommend.model import (
     FILM_PRIOR_VOTES,
@@ -133,6 +133,7 @@ def _screen_recommendations(
     typical = _typical_tmdb_average(conn, kind)
     scored = _screen_scored(conn, typical, prior, kind)
     raw = {tmdb_id: facts[tmdb_id]["vote_average"] for tmdb_id, _, _ in scored}
+    theme_taste = themes.profile(conn) if cfg["rec_theme_transfer"] and kind == "tv" else None
     model = build_model(scored, facts)
     model = experiments.apply(conn, item_kind, model, scored, facts, today)
     mine = tmdb.my_rating_mean(conn, kind)
@@ -166,7 +167,11 @@ def _screen_recommendations(
         weight = (rating - (mine or 0)) / (1 + position / 10)
         sources.setdefault(rec_id, []).append((weight, title, rating))
     residuals = sorted(holdout_residuals(scored, facts))  # chance_at_least needs them sorted
-    if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"]:
+    if (
+        cfg["rec_dismissal_signal"]
+        or cfg["rec_recent_ratings"]
+        or (cfg["rec_theme_transfer"] and kind == "tv")
+    ):
         residuals = sorted(experiments.residuals(conn, item_kind, scored, facts, today))
     recs: list[Rec] = []
     for tmdb_id in (set(support) | watchlist) - rated:
@@ -181,6 +186,10 @@ def _screen_recommendations(
             continue  # MAL and the Anime tab cover anime
         crowd = shrunk(f["vote_average"], f["vote_count"], typical, prior)
         predicted = model.predict(crowd, f["genres"], f["studios"])
+        if theme_taste is not None:
+            shared = themes.candidate_themes(conn, item_kind, str(tmdb_id), f)
+            theme_shift = themes.transfer(theme_taste, item_kind, shared, len(scored))
+            predicted = min(10, max(1, predicted + theme_shift))
         rec = Rec(
             kind=item_kind,
             item_key=str(tmdb_id),
@@ -221,6 +230,11 @@ def _screen_recommendations(
             )
         for genre in filter(None, (liked, harsh)):
             details.append(f"You rate {genre} {noun} {model.genre[genre]:+.2f} vs your usual.")
+        if theme_taste is not None:
+            details.append(
+                f"Experimental theme adjustment: {theme_shift / 1:+.2f} points, "
+                f"shrunk over {len(scored)} own ratings."
+            )
         rec.facts["details"] = details
         recs.append(rec)
     recs.sort(key=lambda r: (-(r.score + 0.15 * math.log1p(r.support)), r.title))
@@ -231,4 +245,8 @@ def _screen_recommendations(
         **holdout_check(scored, residuals, raw),
     }
     metrics.update(experiments.metrics(conn, item_kind, scored, facts, today))
+    if kind == "tv":
+        metrics["theme_transfer"] = experiments.transfer_metrics(
+            conn, item_kind, scored, facts, today
+        )
     return recs[: cfg["rec_count"]], metrics

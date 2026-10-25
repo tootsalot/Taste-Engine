@@ -11,6 +11,7 @@ from taste.recommend.books import BOOK_URL as BOOK_URL
 from taste.recommend.books import _book_facts as _book_facts
 from taste.recommend.books import _book_scored as _book_scored
 from taste.recommend.books import book_recommendations as book_recommendations
+from taste.recommend.everything import everything_recommendations as everything_recommendations
 from taste.recommend.model import ABOUT_MAX as ABOUT_MAX
 from taste.recommend.model import FILM_PRIOR_VOTES as FILM_PRIOR_VOTES
 from taste.recommend.model import GENRE_MENTION as GENRE_MENTION

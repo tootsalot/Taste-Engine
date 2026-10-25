@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -50,6 +51,7 @@ LISTS = (
     ("film", "Films"),
     ("tv", "TV"),
     ("book", "Books"),
+    ("everything", "Across everything · Experimental"),
 )
 LINK_HOSTS = {
     "myanimelist.net": "MyAnimeList",
@@ -72,6 +74,7 @@ SWITCH_ACCENTS = {  # the list switch lit in each medium's color
     "film": "screen",
     "tv": "screen",
     "book": "books",
+    "everything": "anime",
 }
 PROGRESS = re.compile(r"(\d+) of (\d+)")
 TILE_POSTER = QSize(150, 214)
@@ -84,7 +87,12 @@ DETAIL_POSTER = QSize(168, 240)
 DETAIL_COVER = QSize(200, 200)
 DETAIL_WIDTH = 440  # the panel that shows the selected suggestion in full
 
+MEDIUM_LABELS = {"anime": "Anime", "film": "Film", "tv": "TV", "book": "Book", "artist": "Music"}
+
+
 EMPTY = {
+    "everything": "No mixed suggestions yet. Refresh recommendations to build "
+    "the experimental list.",
     "anime": (
         "No anime suggestions yet. Sync MyAnimeList, then press Refresh recommendations. "
         "The first refresh takes about five minutes; later ones take seconds."
@@ -109,6 +117,8 @@ EMPTY = {
     ),
 }
 EMPTY_AFTER_RUN = {
+    "everything": "No mixed suggestions with these settings. "
+    "Sync a source and refresh recommendations.",
     "anime": (
         "Nothing to suggest with the current settings. Lowering the minimum MAL raters "
         "or adding anime types in Settings widens the pool."
@@ -131,6 +141,8 @@ def safe_link(url: str | None) -> str | None:
 
 def score_text(kind: str, rec: Rec) -> tuple[str, str]:
     """(big number or label, caption) for a card. Runs saved before facts existed still read."""
+    if kind == "everything":
+        return score_text(rec.facts.get("list_kind", rec.kind), rec)
     if rec.score is None:
         return "-", ""
     if kind == "anime":
@@ -170,26 +182,35 @@ class PosterTile(QFrame):
     def __init__(self, ctx: AppContext, list_kind: str, rec: Rec, index: int) -> None:
         super().__init__()
         self.rec = rec
+        visual_kind = (
+            rec.facts.get("list_kind", list_kind) if list_kind == "everything" else list_kind
+        )
         self.index = index
         self.setProperty("role", "tile")
         self.setProperty("selected", False)
-        self.setProperty("accent", list_kind.split("_")[0])  # anime, music, or film
+        self.setProperty("accent", visual_kind.split("_")[0])  # anime, music, or film
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.poster = list_kind in PORTRAIT
+        self.poster = visual_kind in PORTRAIT
         size = TILE_POSTER if self.poster else TILE_COVER
         self.setFixedWidth(size.width() + 2 * TILE_PAD)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(TILE_PAD, TILE_PAD, TILE_PAD, TILE_PAD)
         layout.setSpacing(6)
-        self.art = ArtTile(ctx.art, size, accent=ACCENTS.get(list_kind, theme.CORAL))
+        self.art = ArtTile(ctx.art, size, accent=ACCENTS.get(visual_kind, theme.CORAL))
         self.art.set_art(rec.image_url, rec.title, fallback=rec.facts.get("fallback_image"))
         layout.addWidget(self.art)
+        if list_kind == "everything":
+            layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            self.medium = label(MEDIUM_LABELS[rec.kind], role="badge")
+            self.medium.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            self.medium.setProperty("accent", SWITCH_ACCENTS.get(visual_kind, "music"))
+            layout.addWidget(self.medium, 0, Qt.AlignmentFlag.AlignLeft)
         # The score sits beside the title (2.4), not under a two-line gap.
         number, caption = score_text(list_kind, rec)
         self.score = label(number if list_kind != "music_rediscover" else f"{number} plays")
         self.score.setProperty("role", "tile-score")
-        self.score.setProperty("accent", list_kind.split("_")[0])
+        self.score.setProperty("accent", visual_kind.split("_")[0])
         self.score.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self.title = label("", wrap=True)
         font = QFont(theme.BODY_FAMILY)
@@ -248,9 +269,12 @@ class RecCard(Card):
     def __init__(self, ctx: AppContext, list_kind: str, rec: Rec) -> None:
         super().__init__()
         self.rec = rec
+        visual_kind = (
+            rec.facts.get("list_kind", list_kind) if list_kind == "everything" else list_kind
+        )
         self.list_kind = list_kind
-        poster = list_kind in PORTRAIT
-        accent = ACCENTS.get(list_kind, theme.CORAL)
+        poster = visual_kind in PORTRAIT
+        accent = ACCENTS.get(visual_kind, theme.CORAL)
         self.body.setContentsMargins(22, 22, 22, 20)
         self.body.setSpacing(10)
 
@@ -266,11 +290,13 @@ class RecCard(Card):
         self.score.setFont(theme.number_font(40))
         self.score.setStyleSheet(f"color: {accent};")
         side.addWidget(self.score, 0, Qt.AlignmentFlag.AlignLeft)
+        if list_kind == "everything":
+            caption = MEDIUM_LABELS[rec.kind] + " · " + caption
         self.caption = label(caption, role="muted", wrap=True)
         side.addWidget(self.caption)
-        chance = rec.facts.get("chance_4_plus" if list_kind == "book" else "chance_8_plus")
+        chance = rec.facts.get("chance_4_plus" if visual_kind == "book" else "chance_8_plus")
         self.chance = label(
-            chance_text(chance, list_kind) if chance is not None else "", role="muted", wrap=True
+            chance_text(chance, visual_kind) if chance is not None else "", role="muted", wrap=True
         )
         side.addWidget(self.chance)
         if rec.badge:
@@ -321,7 +347,7 @@ class RecCard(Card):
             f"Open on {LINK_HOSTS[urlsplit(link).hostname]}" if link else "No link"
         )
         self.open_button.setProperty("role", "primary")
-        self.open_button.setProperty("accent", SWITCH_ACCENTS.get(list_kind, "anime"))
+        self.open_button.setProperty("accent", SWITCH_ACCENTS.get(visual_kind, "anime"))
         self.open_button.setEnabled(link is not None)
         self.open_button.clicked.connect(lambda: self.opened.emit(link))
         self.dismiss_button = QPushButton("Not interested")
@@ -482,6 +508,70 @@ class RecList(QWidget):
             self._place()
 
 
+class ListSwitch(Segmented):
+    """The list pills wrap on a narrow page, keeping the same selection and colors."""
+
+    def __init__(self) -> None:
+        super().__init__(LISTS, accents=SWITCH_ACCENTS)
+        outer = self.layout()
+        while outer.count():
+            outer.takeAt(0)
+        self.rows = QVBoxLayout()
+        self.rows.setSpacing(0)
+        self.rows.setContentsMargins(0, 0, 0, 0)
+        outer.addLayout(self.rows)
+        self.wrap_width = 900
+        self._lines = []
+        self.reflow(self.wrap_width)
+
+    def minimumSizeHint(self) -> QSize:
+        buttons = getattr(self, "buttons", {})
+        return QSize(
+            max((b.minimumWidth() for b in buttons.values()), default=0) + 4, self.height()
+        )
+
+    def sizeHint(self) -> QSize:
+        return QSize(
+            min(self.wrap_width, sum(b.minimumWidth() for b in self.buttons.values()) + 4),
+            self.minimumHeight(),
+        )
+
+    def set_text(self, key: str, text: str) -> None:
+        super().set_text(key, text)
+        self.reflow(self.wrap_width)
+
+    def reflow(self, width: int) -> None:
+        self.wrap_width = max(width, 1)
+        while self.rows.count():
+            old = self.rows.takeAt(0).layout()
+            while old.count():
+                old.takeAt(0)
+            old.deleteLater()
+        self._lines = []
+        line, used = None, 0
+        for button in self.buttons.values():
+            size = button.minimumWidth()
+            if line is None or used + size > self.wrap_width - 4:
+                if line is not None:
+                    line.addStretch()
+                line = QHBoxLayout()
+                line.setSpacing(0)
+                line.setContentsMargins(0, 0, 0, 0)
+                self.rows.addLayout(line)
+                self._lines.append(line)
+                used = 0
+            line.addWidget(button)
+            used += size
+        if line is not None:
+            line.addStretch()
+        height = max(b.sizeHint().height() for b in self.buttons.values())
+        self.setFixedHeight(len(self._lines) * height + 4)
+        self.setMaximumWidth(self.wrap_width)
+        self.layout().activate()
+        self.updateGeometry()
+        self._move_pill(animate=False)
+
+
 class ForYouPage(LazyPage, QWidget):
     refresh_started = Signal()
     refresh_finished = Signal(dict)
@@ -527,12 +617,16 @@ class ForYouPage(LazyPage, QWidget):
         # The lists switch with the app's pill switch (2.4), lit in each medium's color;
         # the tab bar stays hidden and the two follow each other.
         self.tabs.tabBar().hide()
-        self.switch = Segmented(LISTS, accents=SWITCH_ACCENTS)
+        self.switch = ListSwitch()
         self.switch.changed.connect(self._switch_to)
         self.tabs.currentChanged.connect(self._follow_tab)
         self.switch.set_value(LISTS[0][0])
         layout.addWidget(self.switch, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.tabs, 1)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.switch.reflow(max(self.width() - 56, 1))
 
     def _switch_to(self, kind: str) -> None:
         self.tabs.setCurrentWidget(self.lists[kind])
@@ -587,6 +681,22 @@ class ForYouPage(LazyPage, QWidget):
                         if created
                         else ""
                     )
+                if kind == "everything":
+                    checks = []
+                    for medium, check in metrics.get("holdouts", {}).items():
+                        error, count = check.get("mae"), check.get("count", 0)
+                        checks.append(
+                            f"{MEDIUM_LABELS.get(medium, medium.title())}: "
+                            + (
+                                f"{error:.2f} points on {count}"
+                                if error is not None
+                                else "no rating holdout"
+                            )
+                        )
+                    self.lists[kind].note.setText(
+                        "Experimental. Genre themes mix the existing pools. "
+                        "Baseline holdouts use the 1 to 10 scale. " + "; ".join(checks)
+                    )
                 if kind == "anime":
                     self.lists[kind].note.setText(accuracy_text(metrics))
                     self.lists[kind].note.setToolTip(plain_tip(accuracy_tip(metrics)))
@@ -623,7 +733,7 @@ class ForYouPage(LazyPage, QWidget):
 
     def dismiss(self, list_kind: str, item_key: str) -> None:
         """Hide a suggestion for good. Its tile fades out, then the grid closes up."""
-        kind = list_kind if list_kind in ("anime", "film", "tv", "book") else "artist"
+        kind = list_kind if list_kind in ("anime", "film", "tv", "book", "everything") else "artist"
         conn = self.ctx.connect(self.profile_id)
         try:
             recommend.dismiss(conn, kind, item_key)

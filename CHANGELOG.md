@@ -10,6 +10,9 @@ Profiles
 - Archives are checked before anything is installed, with limits on unpacked size and safe file names
 
 For You
+- Across everything mixes the existing lists with shared genre themes, keeps each pick's medium color and native score, and is marked Experimental
+- A third switch can let sparse TV and book ratings borrow themes from the other media, off by default, with separate holdout checks
+- The list pills wrap at narrow widths, and cached anime reasons are withheld if NSFW visibility or adult classifications change
 - Two Advanced switches can learn a little from dismissed picks or weight recent dated ratings more, both off to start
 - Saved metrics compare each idea off and on against the same held-out ratings, without treating dismissals or plays as ratings
 

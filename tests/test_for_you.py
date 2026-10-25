@@ -171,6 +171,7 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
         "film": 0,
         "tv": 0,
         "book": 0,
+        "everything": 9,
     }
     assert page.refresh_button.isEnabled()
     assert window.dashboard.sync_button.isEnabled()
@@ -475,7 +476,7 @@ def test_the_panel_says_what_a_pick_is_and_how_popular(window, qtbot):
     card = detail(window, "music_discover")
     assert card.about.text().endswith("is a made-up band & friends.")
     assert texts(card, "chip")[0] == "123.5k listeners on Last.fm"
-    assert page.tabs.tabText(page.tabs.count() - 1).startswith("Books")
+    assert page.tabs.tabText(page.tabs.indexOf(page.lists["book"])).startswith("Books")
 
 
 def test_a_tile_laid_out_before_the_grid_has_a_width_asks_for_no_negative_size(qtlog):
@@ -515,6 +516,7 @@ def test_tv_tab_follows_films_and_dismisses_tv_only(window):
         "Films",
         "TV",
         "Books",
+        "Across everything",
     ]
     assert ACCENTS["tv"] == theme.TEAL and "tv" in PORTRAIT
     page.tabs.setCurrentWidget(page.lists["tv"])
