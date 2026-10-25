@@ -692,3 +692,14 @@ excluded. No database table is added. Restore upgrades the staged database throu
 and installs only under an unused id. Retained recap files also reserve an id. Restore rejects
 unknown member names, duplicate paths, traversal, absolute paths, links, encryption, unsupported
 formats, more than 10,000 members, or more than 1 GiB unpacked. Manifests are capped at 64 KiB.
+
+
+## Raw payload encoding (3.0)
+
+`raw_api_pages.payload_encoding` is TEXT NOT NULL DEFAULT ''. An empty value means plain
+JSON. `zlib-b64` means UTF-8 JSON compressed with zlib and encoded as base64, still TEXT.
+`taste.raw.read_page` is the reader for both forms. Pages older than three days are compressed
+in batches of 100 after sync, inside the sync worker in the desktop app. Small pages that
+would grow stay plain. Decoding refuses damaged data, unknown encodings, or more than 64 MiB
+decoded from one compressed page. Identical-page detection compares decoded content. Existing
+retention, raw references, and pruning do not change. The column is upgraded through ADDED_COLUMNS.

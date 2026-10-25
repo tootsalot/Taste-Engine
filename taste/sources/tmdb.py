@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from taste import core, local_time
+from taste import core, local_time, raw
 from taste.db import TIMESTAMP_FORMAT, iso_to_utc, transaction, utc_now, utc_to_unix
 from taste.http_client import RETRYABLE_HTTP_STATUSES, ApiError, HttpClient
 from taste.raw import store_page
@@ -551,13 +551,13 @@ def backfill_origins(conn: sqlite3.Connection) -> int:
     """Language and origin for shows fetched before they were kept, read back from the
     stored details response (no network). Returns how many were filled."""
     rows = conn.execute(
-        "SELECT t.tmdb_id, p.payload FROM stg_tmdb_tv t "
+        "SELECT t.tmdb_id, p.payload, p.payload_encoding FROM stg_tmdb_tv t "
         "JOIN raw_api_pages p ON p.raw_page_id = t.raw_page_id "
         "WHERE t.original_language IS NULL AND t.fetched_at <> ''"
     ).fetchall()
-    for tmdb_id, payload in rows:
+    for tmdb_id, payload, encoding in rows:
         try:
-            data = json.loads(payload)
+            data = raw.read_page(payload, encoding)
         except ValueError:
             continue
         conn.execute(
@@ -572,14 +572,14 @@ def backfill_overviews(conn: sqlite3.Connection) -> int:
     """Overviews for TV and films, plus film popularity, read back from
     the stored response (no network). Returns how many were filled."""
     rows = conn.execute(
-        "SELECT m.tmdb_id, p.payload FROM stg_tmdb_movies m "
+        "SELECT m.tmdb_id, p.payload, p.payload_encoding FROM stg_tmdb_movies m "
         "JOIN raw_api_pages p ON p.raw_page_id = m.raw_page_id "
         "WHERE m.overview IS NULL AND m.popularity IS NULL AND m.fetched_at <> ''"
     ).fetchall()
     filled = 0
-    for tmdb_id, payload in rows:
+    for tmdb_id, payload, encoding in rows:
         try:
-            data = json.loads(payload)
+            data = raw.read_page(payload, encoding)
         except ValueError:
             continue
         overview = (data.get("overview") or "").strip() or None
@@ -591,13 +591,13 @@ def backfill_overviews(conn: sqlite3.Connection) -> int:
         )
         filled += 1
     rows = conn.execute(
-        "SELECT t.tmdb_id, p.payload FROM stg_tmdb_tv t "
+        "SELECT t.tmdb_id, p.payload, p.payload_encoding FROM stg_tmdb_tv t "
         "JOIN raw_api_pages p ON p.raw_page_id = t.raw_page_id "
         "WHERE t.overview IS NULL AND t.fetched_at <> ''"
     ).fetchall()
-    for tmdb_id, payload in rows:
+    for tmdb_id, payload, encoding in rows:
         try:
-            data = json.loads(payload)
+            data = raw.read_page(payload, encoding)
         except ValueError:
             continue
         overview = (data.get("overview") or "").strip() or None

@@ -17,14 +17,13 @@ API behavior this relies on (checked against the live API): `from` is inclusive,
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from taste import core, local_time
+from taste import core, local_time, raw
 from taste import settings as profile_settings
 from taste.config import LastfmSettings
 from taste.db import transaction, unix_to_utc, utc_now
@@ -433,12 +432,12 @@ def backfill_images(conn: sqlite3.Connection) -> int:
     many album covers were set.
     """
     pages = conn.execute(
-        "SELECT DISTINCT p.raw_page_id, p.payload FROM raw_api_pages p "
+        "SELECT DISTINCT p.raw_page_id, p.payload, p.payload_encoding FROM raw_api_pages p "
         "JOIN stg_lastfm_scrobbles s ON s.raw_page_id = p.raw_page_id "
         "WHERE s.image_url IS NULL"
     ).fetchall()
     for page in pages:
-        recent = json.loads(page["payload"]).get("recenttracks") or {}
+        recent = raw.read_page(page["payload"], page["payload_encoding"]).get("recenttracks") or {}
         for s in parse_tracks(recent.get("track")):
             if s["image_url"]:
                 conn.execute(

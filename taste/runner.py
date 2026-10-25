@@ -92,6 +92,7 @@ def sync_sources(
     pruned = raw.prune(conn, settings.get(conn, "raw_retention_days"))
     if pruned:
         out(f"Cleaned up {pruned} old raw API pages.")
+    raw.compress_old_pages(conn)
     return results
 
 

@@ -40,6 +40,7 @@ def connect(path: str | Path, *, setup: bool = True) -> sqlite3.Connection:
 # them to an existing database, so they're added here. ALTER TABLE ... ADD ports to
 # SQL Server; reading PRAGMA table_info is SQLite-only and stays in Python.
 ADDED_COLUMNS = [
+    ("raw_api_pages", "payload_encoding", "TEXT NOT NULL DEFAULT ''"),
     ("stg_mal_anime", "broadcast_day", "TEXT"),
     ("stg_mal_anime", "broadcast_time", "TEXT"),
     ("stg_tmdb_tv", "overview", "TEXT"),

@@ -11,12 +11,15 @@ Three rules keep it from growing without bound:
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import sqlite3
+import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from taste.db import TIMESTAMP_FORMAT, utc_now
+from taste.db import TIMESTAMP_FORMAT, transaction, utc_now
 
 # Request parameters that must never be stored.
 SECRET_PARAMS = {
@@ -60,12 +63,12 @@ def store_page(
     request_params = json.dumps(safe_params(params), sort_keys=True)
     body = json.dumps(payload, ensure_ascii=False)
     latest = conn.execute(
-        "SELECT raw_page_id, payload FROM raw_api_pages "
+        "SELECT raw_page_id, payload, payload_encoding FROM raw_api_pages "
         "WHERE source = ? AND endpoint = ? AND request_params = ? "
         "ORDER BY raw_page_id DESC LIMIT 1",
         (source, endpoint, request_params),
     ).fetchone()
-    if latest is not None and latest[1] == body:
+    if latest is not None and read_page(latest[1], latest[2]) == payload:
         return latest[0]
     cursor = conn.execute(
         "INSERT INTO raw_api_pages (sync_run_id, source, endpoint, request_params, page_number, "
@@ -120,3 +123,59 @@ def prune(conn: sqlite3.Connection, retention_days: int, now: datetime | None = 
         (cutoff,),
     )
     return cursor.rowcount
+
+
+MAX_PAGE_BYTES = 64 << 20
+
+
+def read_page(payload: str, encoding: str = "") -> Any:
+    """Read plain JSON or an older page compressed as zlib and base64."""
+    if encoding == "zlib-b64":
+        try:
+            decoder = zlib.decompressobj()
+            decoded = decoder.decompress(
+                base64.b64decode(payload, validate=True), MAX_PAGE_BYTES + 1
+            )
+            if len(decoded) > MAX_PAGE_BYTES or not decoder.eof or decoder.unused_data:
+                raise ValueError("The compressed raw page is too large or damaged.")
+            payload = decoded.decode("utf-8")
+        except (binascii.Error, zlib.error, UnicodeError) as exc:
+            raise ValueError("The compressed raw page is damaged.") from exc
+    elif encoding:
+        raise ValueError("Unknown raw page encoding.")
+    return json.loads(payload)
+
+
+def compress_old_pages(
+    conn: sqlite3.Connection, now: datetime | None = None, batch_size: int = 100
+) -> int:
+    """Compress pages older than three days in short transactions. Pruning is unchanged."""
+    if batch_size < 1:
+        raise ValueError("The batch size must be positive.")
+    cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=3)).strftime(TIMESTAMP_FORMAT)
+    after, changed = 0, 0
+    while True:
+        rows = conn.execute(
+            "SELECT raw_page_id, payload FROM raw_api_pages WHERE payload_encoding = '' "
+            "AND fetched_at < ? AND raw_page_id > ? ORDER BY raw_page_id LIMIT ?",
+            (cutoff, after, batch_size),
+        ).fetchall()
+        if not rows:
+            break
+        encoded = []
+        for page_id, payload in rows:
+            body = payload.encode("utf-8")
+            if len(body) > MAX_PAGE_BYTES:
+                continue  # keep readable plain JSON rather than creating an unreadable page
+            packed = base64.b64encode(zlib.compress(body)).decode("ascii")
+            if len(packed) < len(body):
+                encoded.append((packed, page_id, payload))
+        with transaction(conn):
+            for packed, page_id, payload in encoded:
+                changed += conn.execute(
+                    "UPDATE raw_api_pages SET payload = ?, payload_encoding = 'zlib-b64' "
+                    "WHERE raw_page_id = ? AND payload_encoding = '' AND payload = ?",
+                    (packed, page_id, payload),
+                ).rowcount
+        after = rows[-1][0]
+    return changed

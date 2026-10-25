@@ -30,6 +30,14 @@ pip install -r requirements.txt
 python -m taste.desktop
 ```
 
+## Storage and timing
+
+I keep raw responses so I can rebuild the staging data. Pages older than three days use
+zlib and base64 in the background after a sync. Readers handle both formats, identical pages
+still reuse the stored copy, and retention rules stay the same. To measure the app without
+my data or live APIs, I run `python scripts/time_app.py`, which builds the made-up test library
+in a temporary folder and prints timings. These are local measurements, not a Windows benchmark.
+
 ## Back up a profile
 
 I can use **Settings > Data > Back up this profile** to save a `.tasteprofile` file, or run

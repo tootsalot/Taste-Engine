@@ -9,6 +9,10 @@ Profiles
 - Restore makes a new profile, upgrades older databases, and leaves existing profiles and retained recaps alone
 - Archives are checked before anything is installed, with limits on unpacked size and safe file names
 
+Storage and speed
+- Old raw pages are compressed after a sync, in small background batches, with one reader for plain and compressed JSON
+- I can time launch, page switches, sync, settings, and picks against the invented library with scripts/time_app.py
+
 Under the hood
 - Charts, report and Dashboard cards, recommendation lists, and Hardcover sign-in live in smaller modules
 
