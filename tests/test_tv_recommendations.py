@@ -77,7 +77,7 @@ def test_tv_list_uses_tv_ratings_caution_watchlist_and_dismissal(conn, library, 
         models.append(model)
         return model
 
-    monkeypatch.setattr(recommend, "build_model", record_model)
+    monkeypatch.setattr(recommend.screen, "build_model", record_model)
     recs, metrics = recommend.tv_recommendations(conn, date(2026, 10, 24))
     assert models[0].slope == 1 and models[0].intercept is None
     assert set(models[0].studio) == {"Lu Writer", "Mo Writer"}

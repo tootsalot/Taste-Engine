@@ -6,9 +6,10 @@ import pytest
 from PySide6.QtCore import Qt
 
 from taste.desktop import theme
-from taste.desktop.dashboard import SHELF_MAX, finished_tip
+from taste.desktop.dashboard import SHELF_MAX
+from taste.desktop.dashboard_cards import finished_tip
 from taste.desktop.main_window import PAGES
-from taste.desktop.widgets import LeanBar
+from taste.desktop.plots import LeanBar
 from taste.overview import FinishedShow
 from tests import test_for_you
 from tests.fake_images import image_bytes

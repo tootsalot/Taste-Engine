@@ -13,7 +13,7 @@ import sqlite3
 from taste import settings
 from taste.config import ConfigError, LastfmSettings, MalSettings
 from taste.secrets_store import KEY_LABELS, SecretStore
-from taste.sources.hardcover import Tokens
+from taste.sources.hardcover_auth import Tokens
 from taste.sources.tmdb import TmdbSettings
 
 

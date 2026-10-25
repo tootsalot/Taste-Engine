@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from taste.sources import hardcover
+from taste.sources import hardcover, hardcover_auth
 from tests.conftest import FakeResponse
 
 ACCESS = "hc_at_fake-access-0123456789"
@@ -181,13 +181,16 @@ class FakeHardcover:
         )
 
     def __call__(self, url: str, params: dict[str, Any]) -> FakeResponse:
-        if url == hardcover.TOKEN_URL:
+        if url == hardcover_auth.TOKEN_URL:
             self.calls.append(f"token:{params.get('grant_type')}")
-            if params.get("client_id") != hardcover.CLIENT_ID:
+            if params.get("client_id") != hardcover_auth.CLIENT_ID:
                 return FakeResponse(401, {"error": "invalid_client"})
             if params.get("grant_type") == "authorization_code":
                 expected = self.codes.pop(params.get("code"), None)
-                if expected is None or hardcover.challenge(params["code_verifier"]) != expected:
+                if (
+                    expected is None
+                    or hardcover_auth.challenge(params["code_verifier"]) != expected
+                ):
                     return FakeResponse(400, {"error": "invalid_grant"})
                 return self._pair()
             if params.get("grant_type") == "refresh_token":
@@ -198,7 +201,7 @@ class FakeHardcover:
                 self.refresh = f"{REFRESH}-{self.refreshes}"  # rotates, like the real one
                 return self._pair()
             return FakeResponse(400, {"error": "unsupported_grant_type"})
-        if url == hardcover.REVOKE_URL:
+        if url == hardcover_auth.REVOKE_URL:
             self.revoked.append(params.get("token"))
             return FakeResponse(200, {})
         if url == hardcover.API_URL:

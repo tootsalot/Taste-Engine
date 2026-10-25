@@ -13,7 +13,7 @@ from taste.config import ConfigError
 from taste.db import transaction
 from taste.http_client import ApiError, HttpClient
 from taste.secrets_store import SecretStore, SecretStoreError
-from taste.sources import hardcover, lastfm, mal, tmdb
+from taste.sources import hardcover, hardcover_auth, lastfm, mal, tmdb
 
 SOURCES = ("mal", "lastfm", "tmdb", "hardcover")
 SOURCE_LABELS = {
@@ -268,13 +268,13 @@ def hardcover_tokens(
     store: SecretStore,
     client_factory: ClientFactory = _default_client,
     clock: Callable[[], float] | None = None,
-) -> hardcover.Tokens:
+) -> hardcover_auth.Tokens:
     """The stored Hardcover tokens, refreshed first when the access token is close to
     running out. The new pair is saved before it's used: the old refresh token is dead."""
     tokens = credentials.hardcover(profile_id, store)
     now = datetime.fromtimestamp(clock(), timezone.utc) if clock else datetime.now(timezone.utc)
     if tokens.due(now):
         client = client_factory([tokens.access, tokens.refresh])
-        tokens = hardcover.refresh(client, tokens.refresh, now)
+        tokens = hardcover_auth.refresh(client, tokens.refresh, now)
         credentials.save_hardcover(profile_id, store, tokens)
     return tokens

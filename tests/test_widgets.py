@@ -6,16 +6,9 @@ from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QLabel
 
 from taste.charts import Band
-from taste.desktop.widgets import (
-    BandChart,
-    BarChart,
-    GenreCard,
-    LeanAxis,
-    elided,
-    elided_lines,
-    nice_ticks,
-    small_font,
-)
+from taste.desktop.cards import GenreCard
+from taste.desktop.plots import BandChart, BarChart, LeanAxis, nice_ticks
+from taste.desktop.widgets import elided, elided_lines, small_font
 from taste.overview import GenreLean
 
 
@@ -229,7 +222,7 @@ def test_tooltips_show_api_text_as_written():
 
 
 def test_sparse_labels_land_on_their_own_bars(qtbot):
-    from taste.desktop.widgets import BarChart
+    from taste.desktop.plots import BarChart
 
     chart = BarChart()
     qtbot.addWidget(chart)

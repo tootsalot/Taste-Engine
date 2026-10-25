@@ -14,16 +14,10 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
 from taste import charts, screenstats, settings
 from taste.desktop import motion, theme
 from taste.desktop.books_view import CoverWall, PersonCard, ShareList, SpanBar, WallItem
+from taste.desktop.cards import StatTile, chart_card, tile_row
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import (
-    BandChart,
-    BarChart,
-    Segmented,
-    StatTile,
-    chart_card,
-    label,
-    tile_row,
-)
+from taste.desktop.plots import BandChart, BarChart
+from taste.desktop.widgets import Segmented, label
 from taste.screenstats import Rated, ScreenStats
 
 POSTER = QSize(84, 126)

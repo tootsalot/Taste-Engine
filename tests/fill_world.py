@@ -23,7 +23,7 @@ from taste.desktop.context import AppContext
 from taste.desktop.main_window import MainWindow
 from taste.http_client import HttpClient
 from taste.secrets_store import SecretStore
-from taste.sources.hardcover import Tokens
+from taste.sources.hardcover_auth import Tokens
 from tests import fake_hardcover, fake_recs, fake_tmdb
 from tests.conftest import FakeKeyring, FakeTransport
 from tests.fake_recs import FakeDeezer, FakeLastfmApi, FakeMal, anime, scrobble

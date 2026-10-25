@@ -13,9 +13,10 @@ from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtWidgets import QScrollBar
 
 from taste.desktop.books_view import CoverWall
-from taste.desktop.dashboard import SyncStrip
+from taste.desktop.cards import RankList
+from taste.desktop.dashboard_cards import SyncStrip
 from taste.desktop.main_window import PAGES
-from taste.desktop.widgets import BandChart, BarChart, LeanBar, RankList
+from taste.desktop.plots import BandChart, BarChart, LeanBar
 from tests.fake_images import FakeImageSession
 from tests.fill_world import World, bare_share, empty_share
 from tests.test_desktop import set_up_profile

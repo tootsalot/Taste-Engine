@@ -11,7 +11,7 @@ from taste.desktop.context import AppContext
 from taste.desktop.main_window import PAGES, MainWindow
 from taste.http_client import HttpClient
 from taste.secrets_store import SecretStore
-from taste.sources import hardcover
+from taste.sources import hardcover_auth
 from tests.conftest import FakeKeyring, FakeResponse, FakeTransport
 from tests.fake_hardcover import FakeHardcover
 from tests.fake_images import FakeImageSession
@@ -54,7 +54,7 @@ def approving_browser(fake, **extra):
     def browser(url):
         query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
         code = fake.issue(query["code_challenge"])
-        back = {"code": code, "state": query["state"], "iss": hardcover.ISSUER, **extra}
+        back = {"code": code, "state": query["state"], "iss": hardcover_auth.ISSUER, **extra}
         target = f"{query['redirect_uri']}?{urllib.parse.urlencode(back)}"
         threading.Thread(target=lambda: urllib.request.urlopen(target, timeout=5).read()).start()
 
@@ -130,7 +130,7 @@ def test_waiting_for_hardcover_can_be_stopped(window, qtbot):
     card.copy_hardcover_link()
     from PySide6.QtWidgets import QApplication
 
-    assert QApplication.clipboard().text().startswith(hardcover.AUTHORIZE_URL)
+    assert QApplication.clipboard().text().startswith(hardcover_auth.AUTHORIZE_URL)
     with qtbot.waitSignal(worker.done, timeout=15000):
         card.stop_hardcover()
     qtbot.waitUntil(lambda: card.sign_in is None)

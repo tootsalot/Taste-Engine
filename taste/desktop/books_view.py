@@ -26,21 +26,10 @@ from taste import bookstats, charts, settings
 from taste.bookstats import BookStats, Cover, Share
 from taste.desktop import motion, theme
 from taste.desktop.art import ArtTile
+from taste.desktop.cards import StatTile, chart_card, tile_row
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import (
-    BandChart,
-    BarChart,
-    Card,
-    LeanBar,
-    Segmented,
-    Sparkline,
-    StatTile,
-    chart_card,
-    elided,
-    label,
-    plain_tip,
-    tile_row,
-)
+from taste.desktop.plots import BandChart, BarChart, LeanBar, Sparkline
+from taste.desktop.widgets import Card, Segmented, elided, label, plain_tip
 
 YEARS_ON_SWITCH = 5  # the newest years get a button; older ones are in a list beside it
 COVER = QSize(84, 126)

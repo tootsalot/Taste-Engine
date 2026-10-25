@@ -16,16 +16,10 @@ from taste.activity import Finished
 from taste.animestats import AnimeStats
 from taste.desktop import motion, theme
 from taste.desktop.books_view import CoverWall, PersonCard, SpanBar, WallItem
+from taste.desktop.cards import GenreCard, StatTile, chart_card, tile_row
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import (
-    BandChart,
-    BarChart,
-    GenreCard,
-    StatTile,
-    chart_card,
-    label,
-    tile_row,
-)
+from taste.desktop.plots import BandChart, BarChart
+from taste.desktop.widgets import label
 
 POSTER = QSize(84, 120)
 PEOPLE_COLUMNS = 3

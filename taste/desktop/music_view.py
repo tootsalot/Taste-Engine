@@ -14,16 +14,10 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
 from taste import charts, local_time, musicstats, settings
 from taste.desktop import motion, theme
 from taste.desktop.books_view import CoverWall, PersonCard, SpanBar, WallItem
+from taste.desktop.cards import RankList, StatTile, chart_card, tile_row
 from taste.desktop.context import AppContext
-from taste.desktop.widgets import (
-    BarChart,
-    RankList,
-    Segmented,
-    StatTile,
-    chart_card,
-    label,
-    tile_row,
-)
+from taste.desktop.plots import BarChart
+from taste.desktop.widgets import Segmented, label
 from taste.musicstats import MusicStats
 
 COVER = QSize(100, 100)

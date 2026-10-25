@@ -10,7 +10,7 @@ import pytest
 
 from taste import activity, credentials, db, runner
 from taste.secrets_store import SecretStore
-from taste.sources import hardcover
+from taste.sources import hardcover, hardcover_auth
 from tests import fake_hardcover
 from tests.conftest import FakeKeyring
 from tests.fake_hardcover import FakeHardcover, book, entry
@@ -32,12 +32,12 @@ def browser_returns(sign_in, **query):
 
 
 def test_the_sign_in_url_asks_for_read_only_access_with_pkce():
-    sign_in = hardcover.SignIn()
+    sign_in = hardcover_auth.SignIn()
     try:
         query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(sign_in.url).query))
-        assert sign_in.url.startswith(hardcover.AUTHORIZE_URL + "?")
-        assert query["client_id"] == hardcover.CLIENT_ID
-        assert query["code_challenge"] == hardcover.challenge(sign_in.verifier)
+        assert sign_in.url.startswith(hardcover_auth.AUTHORIZE_URL + "?")
+        assert query["client_id"] == hardcover_auth.CLIENT_ID
+        assert query["code_challenge"] == hardcover_auth.challenge(sign_in.verifier)
         assert query["code_challenge_method"] == "S256"
         assert query["redirect_uri"].startswith("http://127.0.0.1:")
         assert query["redirect_uri"].endswith("/callback")
@@ -48,15 +48,17 @@ def test_the_sign_in_url_asks_for_read_only_access_with_pkce():
 
 
 def test_the_browser_coming_back_gives_the_code(make_client):
-    sign_in = hardcover.SignIn()
+    sign_in = hardcover_auth.SignIn()
     fake = FakeHardcover()
-    code = fake.issue(hardcover.challenge(sign_in.verifier))
-    thread, visit = browser_returns(sign_in, code=code, state=sign_in.state, iss=hardcover.ISSUER)
+    code = fake.issue(hardcover_auth.challenge(sign_in.verifier))
+    thread, visit = browser_returns(
+        sign_in, code=code, state=sign_in.state, iss=hardcover_auth.ISSUER
+    )
     assert sign_in.wait(timeout=10) == code
     thread.join()
     assert "close this tab" in visit.page
     client, transport = make_client(fake)
-    tokens = hardcover.exchange(client, sign_in, code, NOW)
+    tokens = hardcover_auth.exchange(client, sign_in, code, NOW)
     assert (tokens.access, tokens.refresh) == (fake_hardcover.ACCESS, fake_hardcover.REFRESH)
     assert tokens.expires_at == "2026-10-21 12:00:00"
     sent = transport.calls[0]["params"]
@@ -73,10 +75,10 @@ def test_the_browser_coming_back_gives_the_code(make_client):
     ],
 )
 def test_a_wrong_or_refused_callback_is_rejected(change, message):
-    sign_in = hardcover.SignIn()
-    query = {"code": "code-1", "state": sign_in.state, "iss": hardcover.ISSUER, **change}
+    sign_in = hardcover_auth.SignIn()
+    query = {"code": "code-1", "state": sign_in.state, "iss": hardcover_auth.ISSUER, **change}
     thread, visit = browser_returns(sign_in, **query)
-    with pytest.raises(hardcover.SignInError, match=message):
+    with pytest.raises(hardcover_auth.SignInError, match=message):
         sign_in.wait(timeout=10)
     thread.join()
     assert "didn't get access" in visit.page  # the browser never says "Signed in"
@@ -87,10 +89,12 @@ def test_a_stray_callback_is_turned_away_and_the_real_one_still_works():
     sign-in, so the real redirect a moment later found the listener closed."""
     import time
 
-    sign_in = hardcover.SignIn()
+    sign_in = hardcover_auth.SignIn()
     stray, stray_visit = browser_returns(sign_in, code="old", state="someone-else")
     time.sleep(0.3)  # queued first: the listener answers in order once wait() runs
-    thread, _ = browser_returns(sign_in, code="code-1", state=sign_in.state, iss=hardcover.ISSUER)
+    thread, _ = browser_returns(
+        sign_in, code="code-1", state=sign_in.state, iss=hardcover_auth.ISSUER
+    )
     assert sign_in.wait(timeout=10) == "code-1"
     stray.join(timeout=5)
     thread.join()
@@ -103,14 +107,14 @@ def test_an_idle_connection_never_holds_up_the_real_callback():
     for good, so the real redirect was never answered and Stop couldn't end the wait."""
     import socket
 
-    sign_in = hardcover.SignIn()
+    sign_in = hardcover_auth.SignIn()
     idle = socket.create_connection(sign_in.server.server_address)  # opens, says nothing
     found = []
     try:
         waiter = threading.Thread(target=lambda: found.append(sign_in.wait(timeout=20)))
         waiter.start()
         thread, _ = browser_returns(
-            sign_in, code="code-1", state=sign_in.state, iss=hardcover.ISSUER
+            sign_in, code="code-1", state=sign_in.state, iss=hardcover_auth.ISSUER
         )
         waiter.join(timeout=10)
         assert not waiter.is_alive() and found == ["code-1"]
@@ -123,17 +127,17 @@ def test_an_idle_connection_never_holds_up_the_real_callback():
 def test_a_refusal_without_state_still_ends_the_sign_in():
     """Some OAuth servers send a refusal without state; it carries no code, so it can end
     the wait (it used to be ignored after the stray-callback fix, hanging 5 minutes)."""
-    sign_in = hardcover.SignIn()
+    sign_in = hardcover_auth.SignIn()
     thread, _ = browser_returns(sign_in, error="access_denied")
-    with pytest.raises(hardcover.SignInError, match="didn't approve"):
+    with pytest.raises(hardcover_auth.SignInError, match="didn't approve"):
         sign_in.wait(timeout=10)
     thread.join()
 
 
 def test_a_sign_in_can_be_stopped():
-    sign_in = hardcover.SignIn()
+    sign_in = hardcover_auth.SignIn()
     sign_in.cancel()
-    with pytest.raises(hardcover.SignInError, match="Stopped"):
+    with pytest.raises(hardcover_auth.SignInError, match="Stopped"):
         sign_in.wait(timeout=10)
 
 
@@ -308,7 +312,7 @@ def test_tokens_refresh_before_they_run_out_and_the_new_pair_is_kept(make_client
     store = SecretStore(tmp_path, backend=FakeKeyring())
     fake = FakeHardcover()
     credentials.save_hardcover(
-        "me", store, hardcover.Tokens(fake.access, fake.refresh, "2026-10-14 18:00:00")
+        "me", store, hardcover_auth.Tokens(fake.access, fake.refresh, "2026-10-14 18:00:00")
     )
     factory = lambda secrets: make_client(fake)[0]  # noqa: E731
     clock = NOW.timestamp
@@ -327,7 +331,7 @@ def test_sync_all_includes_hardcover_once_connected(conn, make_client, tmp_path)
     results = runner.sync_sources(conn, "me", "hardcover", store=store, out=lambda m: None)
     assert results == {"hardcover": False}  # not connected yet
     credentials.save_hardcover(
-        "me", store, hardcover.Tokens(fake.access, fake.refresh, "2026-12-01 00:00:00")
+        "me", store, hardcover_auth.Tokens(fake.access, fake.refresh, "2026-12-01 00:00:00")
     )
     results = runner.sync_sources(
         conn, "me", "hardcover", store=store, out=lambda m: None, client_factory=factory,
@@ -344,7 +348,7 @@ def test_test_connection_asks_hardcover_whose_account_it_is(conn, make_client, t
     assert not ok
     assert message == "Hardcover: connect your Hardcover account on the Settings page first."
     credentials.save_hardcover(
-        "me", store, hardcover.Tokens(fake.access, fake.refresh, "2026-12-01 00:00:00")
+        "me", store, hardcover_auth.Tokens(fake.access, fake.refresh, "2026-12-01 00:00:00")
     )
     ok, message = runner.check_connection(
         conn, "me", "hardcover", store=store, client_factory=factory
@@ -406,7 +410,7 @@ def test_a_refresh_token_that_ran_out_asks_to_connect_again(conn, make_client, t
     store = SecretStore(tmp_path, backend=FakeKeyring())
     fake = FakeHardcover()
     credentials.save_hardcover(
-        "me", store, hardcover.Tokens(fake.access, "hc_rt_long-gone", "2026-10-01 00:00:00")
+        "me", store, hardcover_auth.Tokens(fake.access, "hc_rt_long-gone", "2026-10-01 00:00:00")
     )
     lines = []
     results = runner.sync_sources(

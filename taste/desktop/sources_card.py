@@ -40,7 +40,7 @@ from taste.http_client import HttpClient
 from taste.runner import SOURCE_LABELS, SOURCES
 from taste.secrets_store import SecretStoreError
 from taste.settings import SettingError
-from taste.sources import hardcover, tmdb
+from taste.sources import hardcover, hardcover_auth, tmdb
 
 KEYS = source_status.KEYS  # source -> the key it's typed into
 USERNAMES = {source: names[0] for source, names in source_status.USERNAMES.items()}
@@ -101,7 +101,7 @@ class SourcesCard(Card):
         self.testers: list[ConnectionTestWorker] = []
         self.tmdb_worker: CallWorker | None = None
         self.hardcover_worker: CallWorker | None = None
-        self.sign_in: hardcover.SignIn | None = None
+        self.sign_in: hardcover_auth.SignIn | None = None
         self.usernames: dict[str, QLineEdit] = {}
         self.saved_usernames: dict[str, str] = {}  # to tell when Save is needed
         self.key_inputs: dict[str, QLineEdit] = {}  # by key name, like MAL_CLIENT_ID
@@ -544,7 +544,7 @@ class SourcesCard(Card):
         if not self.profile_id or self.sign_in is not None:
             return None
         try:
-            sign_in = hardcover.SignIn()
+            sign_in = hardcover_auth.SignIn()
         except OSError:
             self.say("Couldn't listen for Hardcover's reply here.", ok=False)
             return None
@@ -555,7 +555,7 @@ class SourcesCard(Card):
 
         def sign_in_and_swap():
             code = sign_in.wait()
-            tokens = hardcover.exchange(client, sign_in, code, now)
+            tokens = hardcover_auth.exchange(client, sign_in, code, now)
             client.secrets += [tokens.access, tokens.refresh]
             return tokens, hardcover.me(client, tokens.access)[1]
 
@@ -612,4 +612,4 @@ class SourcesCard(Card):
             self.hardcover_worker.wait()
             self.refresh_status()
 
-        return self._run_hardcover(lambda: hardcover.revoke(client, refresh), revoked)
+        return self._run_hardcover(lambda: hardcover_auth.revoke(client, refresh), revoked)
