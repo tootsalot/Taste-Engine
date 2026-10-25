@@ -30,6 +30,14 @@ pip install -r requirements.txt
 python -m taste.desktop
 ```
 
+## Taste over time
+
+Yearly Rev decks can include **How your taste changed**, after the year card. I can compare
+my current ratings against the crowd for each year's activity, genres that grew or faded,
+and the share of my recorded plays from artists first heard that year. It stays quiet for
+a medium without enough data in both years. The minimums are in Advanced settings. These
+are comparisons of saved history, not snapshots of how I rated something years ago.
+
 ## Storage and timing
 
 I keep raw responses so I can rebuild the staging data. Pages older than three days use

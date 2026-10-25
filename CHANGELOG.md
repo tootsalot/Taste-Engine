@@ -9,6 +9,10 @@ Profiles
 - Restore makes a new profile, upgrades older databases, and leaves existing profiles and retained recaps alone
 - Archives are checked before anything is installed, with limits on unpacked size and safe file names
 
+Rev
+- Year decks compare how my ratings differ from the crowd, which genres grew or faded, and how my recorded listening changed
+- Each comparison carries its numbers and waits for enough data in both years, with the minimums in Advanced settings
+
 Storage and speed
 - Old raw pages are compressed after a sync, in small background batches, with one reader for plain and compressed JSON
 - I can time launch, page switches, sync, settings, and picks against the invented library with scripts/time_app.py

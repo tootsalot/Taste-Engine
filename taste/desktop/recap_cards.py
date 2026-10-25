@@ -614,6 +614,36 @@ def year(p: QPainter, data: RecapData, pictures: Pictures) -> float:
     return y
 
 
+def taste_changes(p: QPainter, data: RecapData, pictures: Pictures) -> float:
+    y = band(p, 0, "YOUR TASTE", theme.LILAC) + 40
+    y = headline(p, y, "How your taste changed", theme.LILAC, 72) + 24
+    colors = {
+        "anime": theme.LILAC,
+        "music": theme.CORAL,
+        "book": theme.AMBER,
+        "film": theme.TEAL,
+        "tv": theme.TEAL,
+    }
+    for kind, change in data.drift.items():
+        y += 26
+        y += text(p, QRectF(M, y, W - 2 * M, 70), change["label"], font(36), colors[kind])
+        y += 14
+        for line in change["lines"]:
+            y += (
+                text(p, QRectF(M, y, W - 2 * M, 190), line, font(29, weight=QFont.Weight.Normal))
+                + 16
+            )
+    y += 20
+    y += text(
+        p,
+        QRectF(M, y, W - 2 * M, 150),
+        "Current ratings for each year's activity. Listening is the history recorded by Last.fm.",
+        font(25, weight=QFont.Weight.Normal),
+        theme.MUTED,
+    )
+    return y
+
+
 def closing(p: QPainter, data: RecapData, pictures: Pictures) -> float:
     discs(p, QPointF(W / 2, 190), 130)
     y = 390.0
@@ -646,6 +676,7 @@ PAINTERS = {
     "tv": tv,
     "compare": compare,
     "year": year,
+    "drift": taste_changes,
     "closing": closing,
 }
 ACCENT = {
@@ -658,6 +689,7 @@ ACCENT = {
     "tv": theme.TEAL,
     "compare": theme.LILAC,
     "year": theme.CORAL,
+    "drift": theme.LILAC,
     "closing": theme.LILAC,
 }
 

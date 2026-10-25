@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from taste import activity, recommend, settings
+from taste import activity, drift, recommend, settings
 from taste.activity import Period
 from taste.config import data_dir
 from taste.db import utc_now
@@ -131,6 +131,7 @@ SLIDES = (
     ("cover", ("cover",)),
     ("music", ("music",)),
     ("when", ("clock", "year")),
+    ("drift", ("drift",)),
     ("anime", ("anime",)),
     ("books", ("books",)),
     ("screen", ("films", "tv")),
@@ -153,6 +154,7 @@ class RecapData:
     year: YearView | None
     closing: str
     cards: list[str]  # card names in order: "cover", "music", "clock", ...
+    drift: dict = field(default_factory=dict)
     monday_first: bool = False  # Rev's calendar, with the "Weeks start on" setting
 
     def to_json(self) -> dict:
@@ -168,7 +170,8 @@ class RecapData:
 
     @property
     def slides(self) -> list[tuple[str, list[str]]]:
-        """The cards to swipe through: (card name, the parts drawn on it), at most seven.
+        """The cards to swipe through: (card name, the parts drawn on it).
+        At most eight for years and seven for months.
         A card none of whose parts has anything to show is left out."""
         return slides_for(self.cards)
 
@@ -458,6 +461,9 @@ def build(conn: sqlite3.Connection, period: Period, now: datetime | None = None)
         )
     ):
         cards.append("year")
+    changes = drift.compare(conn, period.key) if period.kind == "year" else {}
+    if changes:
+        cards.append("drift")
     cards.append("closing")
     return RecapData(
         period=period,
@@ -471,6 +477,7 @@ def build(conn: sqlite3.Connection, period: Period, now: datetime | None = None)
         tv=tv,
         compare=compare,
         year=year,
+        drift=changes,
         closing=closing_sentence(period, music, anime),
         monday_first=settings.get(conn, "week_start") == "monday",
         cards=cards,

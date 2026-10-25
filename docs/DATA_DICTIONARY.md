@@ -703,3 +703,17 @@ in batches of 100 after sync, inside the sync worker in the desktop app. Small p
 would grow stay plain. Decoding refuses damaged data, unknown encodings, or more than 64 MiB
 decoded from one compressed page. Identical-page detection compares decoded content. Existing
 retention, raw references, and pruning do not change. The column is upgraded through ADDED_COLUMNS.
+
+
+## Yearly taste comparisons (3.0)
+
+Recap JSON adds `drift`, grouped by anime, film, TV, book, and music. The payload and its
+numbers enter the recap fingerprint. Title media record both activity counts, current and
+previous mean differences against the crowd when enough pairs exist, and the largest growing
+and fading genre shares (at least 10 percentage points). Books use stars; MAL and TMDB use
+points. Adult shows count without titles or pictures. These are current saved ratings for
+that year's activity, not historical rating snapshots. Music records play totals, plays from
+artists first recorded in each year, their shares, both top-five lists, and retained artists.
+No table is added. `drift_min_titles` (default 10) and `drift_min_plays` (default 100) live in
+app_settings, require both years to qualify, and are Advanced settings. Years have at most
+eight slides; months stay at most seven. `drift` follows the combined clock/year slide.
