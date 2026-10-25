@@ -176,7 +176,10 @@ class ArtTile(QWidget):
 
     def set_size(self, size: QSize) -> None:
         """Show the picture at a new size. The old one is drawn scaled until the new
-        one is decoded, so growing a shelf never flashes the placeholder."""
+        one is decoded, so growing a shelf never flashes the placeholder. A size worked
+        out before a layout has its width (For You at launch) can be zero or negative;
+        it's kept to at least 1 x 1 instead of a Qt warning per tile."""
+        size = QSize(max(size.width(), 1), max(size.height(), 1))
         if size == self.art_size:
             return
         self.art_size = QSize(size)

@@ -242,6 +242,8 @@ QPushButton[role="primary"] {{ background: {LILAC}; color: {ON_ACCENT}; border: 
 QPushButton[role="primary"]:hover {{ background: #C7B3FF; }}
 QPushButton[role="primary"]:focus {{ border: 2px solid {TEXT}; padding: 6px 14px; }}
 QPushButton[role="primary"]:disabled {{ background: {RAISED}; color: {MUTED}; }}
+QPushButton[compact="true"] {{ padding: 3px 12px; min-height: 18px; border-radius: 13px; }}
+QPushButton[role="primary"][compact="true"]:focus {{ padding: 1px 10px; }}
 QPushButton[role="danger"] {{ background: transparent; color: {DANGER}; border-color: {DANGER}; }}
 QToolButton#SyncButton {{ background: {LILAC}; color: {ON_ACCENT}; border: none;
     border-radius: 18px; padding: 8px 44px 8px 16px; min-height: 20px; font-weight: 700; }}
@@ -306,6 +308,7 @@ QLabel[role="caption"] {{ color: {MUTED}; font-size: 12px; }}
 QProgressBar {{ background: {RAISED}; border: none; border-radius: 4px; height: 8px;
                 text-align: center; color: transparent; }}
 QProgressBar::chunk {{ background: {CORAL}; border-radius: 4px; }}
+QProgressBar#RecapProgress::chunk {{ background: {LILAC}; }}
 
 QTabWidget::pane {{ border: 1px solid {LINE}; border-radius: 10px; top: -1px; }}
 QTabBar::tab {{ background: transparent; color: {MUTED}; padding: 8px 14px; margin-right: 2px; }}

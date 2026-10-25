@@ -661,6 +661,14 @@ CREATE TABLE IF NOT EXISTS recap_runs (
     PRIMARY KEY (period_kind, period_key)
 );
 
+-- Small per-profile app state that isn't a setting (never shown on the Settings page),
+-- like whether past recaps were offered (taste/recap.py).
+CREATE TABLE IF NOT EXISTS app_state (
+    state_key   TEXT NOT NULL PRIMARY KEY,
+    state_value TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 -- "Not interested". App state, not a taste signal yet.
 CREATE TABLE IF NOT EXISTS rec_dismissed (
     kind         TEXT NOT NULL,

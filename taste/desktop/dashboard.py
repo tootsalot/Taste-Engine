@@ -666,6 +666,9 @@ class DashboardPage(LazyPage, QWidget):
         self.banner = Banner()
         self.strip.row.insertWidget(2, self.banner)
         self.banner.setVisible(False)
+        self.past = PastRecaps()
+        self.strip.row.insertWidget(3, self.past)
+        self.past.setVisible(False)
 
         self.welcome = GettingStarted()
         self.welcome.open_settings.connect(lambda: self.open_page.emit("Settings"))
@@ -830,6 +833,7 @@ class DashboardPage(LazyPage, QWidget):
         self.outcome = None
         self.strip.clear()
         self.banner.setVisible(False)
+        self.past.hide_notice()
         self.refresh()
 
     def refresh(self) -> None:
@@ -1066,6 +1070,89 @@ class Banner(QFrame):
 
     def _open(self) -> None:
         self.hide_banner()
+        self.opened.emit()
+
+
+class PastRecaps(QFrame):
+    """The offer to make recaps for past months, then their progress, then done: all on
+    the status line, so it never moves the cards (2.3, mockup A approved 2026-10-19)."""
+
+    accepted = Signal()
+    declined = Signal()
+    opened = Signal()
+    PROGRESS_WIDTH = 140
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setProperty("role", "banner")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 2, 6, 2)
+        row.setSpacing(8)
+        self.text = label("")
+        row.addWidget(self.text)
+        self.progress = QProgressBar()
+        self.progress.setObjectName("RecapProgress")
+        self.progress.setFixedWidth(self.PROGRESS_WIDTH)
+        self.progress.setTextVisible(False)
+        row.addWidget(self.progress, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.make_button = QPushButton("Make them")
+        self.make_button.setProperty("role", "primary")
+        self.make_button.clicked.connect(self._accept)
+        row.addWidget(self.make_button)
+        self.later_button = QPushButton("Not now")
+        self.later_button.clicked.connect(self._decline)
+        row.addWidget(self.later_button)
+        for button in (self.make_button, self.later_button):
+            button.setProperty("compact", True)  # no taller than the status line
+        self.open_button = QPushButton("Open Rev")
+        self.open_button.setProperty("role", "link")
+        self.open_button.clicked.connect(self._open)
+        row.addWidget(self.open_button)
+        self.dismiss_button = QPushButton("Dismiss")
+        self.dismiss_button.setProperty("role", "link")
+        self.dismiss_button.clicked.connect(self.hide_notice)
+        row.addWidget(self.dismiss_button)
+
+    def _show(self, text: str, *visible: QWidget) -> None:
+        self.text.setText(text)
+        parts = (
+            self.progress, self.make_button, self.later_button, self.open_button,
+            self.dismiss_button,
+        )  # fmt: skip
+        for widget in parts:
+            widget.setVisible(widget in visible)  # each is in this row's layout already
+        if self.isHidden():
+            self.setVisible(True)  # already in the strip's layout
+            motion.fade_in([self], stagger=False)
+
+    def offer(self, text: str) -> None:
+        self._show(text, self.make_button, self.later_button)
+
+    def making(self, done: int, total: int, name: str = "") -> None:
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(done)
+        where = f" ({name})" if name else ""
+        self._show(f"Making recaps: {done} of {total}{where}", self.progress)
+
+    def finished(self, made: int) -> None:
+        if made:
+            text = f"Made {made} past {'recap' if made == 1 else 'recaps'}."
+            self._show(text, self.open_button, self.dismiss_button)
+        else:
+            self._show("Your past months had nothing to recap.", self.dismiss_button)
+
+    def hide_notice(self) -> None:
+        self.setVisible(False)
+
+    def _accept(self) -> None:
+        self.accepted.emit()
+
+    def _decline(self) -> None:
+        self.hide_notice()
+        self.declined.emit()
+
+    def _open(self) -> None:
+        self.hide_notice()
         self.opened.emit()
 
 

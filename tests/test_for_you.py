@@ -473,3 +473,21 @@ def test_the_panel_says_what_a_pick_is_and_how_popular(window, qtbot):
     assert card.about.text().endswith("is a made-up band & friends.")
     assert texts(card, "chip")[0] == "123.5k listeners on Last.fm"
     assert page.tabs.tabText(page.tabs.count() - 1).startswith("Books")
+
+
+def test_a_tile_laid_out_before_the_grid_has_a_width_asks_for_no_negative_size(qtlog):
+    """At launch the grid can size a pick before the panel has a width (0 or 12 px),
+    which gave its picture a negative size: dozens of Qt warnings in the terminal."""
+    from taste.desktop.context import AppContext
+    from taste.desktop.for_you import PosterTile
+    from taste.recommend import Rec
+
+    ctx = AppContext(image_session=FakeImageSession())
+    tile = PosterTile(ctx, "anime", Rec("anime", "1", "Example Show"), 0)
+    for width in (0, 12):
+        tile.set_width(width)
+    warnings = [r.message for r in qtlog.records if "Negative sizes" in r.message]
+    assert warnings == []
+    assert tile.art.width() >= 1 and tile.art.height() >= 1
+    tile.deleteLater()
+    ctx.shutdown()

@@ -126,6 +126,8 @@ class MainWindow(QMainWindow):
         self.empty = self._empty_state()
         self.auto_recap: RecapWorker | None = None
         self.banner_period: Period | None = None
+        self.past_worker: RecapWorker | None = None  # past recaps, made in one go (2.3)
+        self._past_waiting: list[Period] | None = None  # until the automatic check ends
         for page in (
             self.dashboard,
             self.for_you,
@@ -140,6 +142,9 @@ class MainWindow(QMainWindow):
 
         self.dashboard.sync_finished.connect(self._after_sync)
         self.dashboard.banner.opened.connect(self._open_banner_recap)
+        self.dashboard.past.accepted.connect(self._make_past_recaps)
+        self.dashboard.past.declined.connect(self._decline_past_recaps)
+        self.dashboard.past.opened.connect(self._open_rev)
         self.dashboard.recs_updated.connect(self.for_you.refresh_later)
         self.dashboard.status_changed.connect(self.sidebar.set_status)
         self.dashboard.open_page.connect(self.show_page)
@@ -242,9 +247,13 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.empty)
             return
         self._apply_preferences(pid)
+        if self.past_worker is not None and self.past_worker.isRunning():
+            self.past_worker.cancel()  # another profile's: it goes on when that one's back
+        self._past_waiting = None
         for page in (self.dashboard, self.for_you, self.reports, self.recap, self.settings):
             page.set_profile(pid)
         self.make_recaps()
+        self.offer_past_recaps()
         if self.sidebar.currentRow() < 0:
             self.sidebar.setCurrentRow(0)
         else:
@@ -281,6 +290,7 @@ class MainWindow(QMainWindow):
         for page in (self.reports, self.for_you, self.recap):
             page.refresh_later()
         self.make_recaps()
+        self.offer_past_recaps()
         self.settings.refresh_status()
 
     # -- recaps -------------------------------------------------------------
@@ -293,6 +303,8 @@ class MainWindow(QMainWindow):
             return None
         if self.auto_recap is not None and self.auto_recap.isRunning():
             return None
+        if self.past_worker is not None and self.past_worker.isRunning():
+            return None  # never two drawings of one recap at once; it runs after the batch
         worker = RecapWorker(pid, self.ctx.art.cache, self.ctx.now())
         worker.made.connect(self._on_recaps_made)  # a bound method: Qt drops it with the window
         self.auto_recap = worker
@@ -304,6 +316,86 @@ class MainWindow(QMainWindow):
         worker = self.sender()
         if worker is not None:
             self._recaps_made(worker.profile_id)
+
+    def offer_past_recaps(self) -> None:
+        """The first launch (or the first sync of a new profile) offers recaps for every
+        past month and year (2.3). A batch the app closed in the middle of goes on."""
+        pid = self.current_profile()
+        if pid is None or (self.past_worker is not None and self.past_worker.isRunning()):
+            return
+        conn = self.ctx.connect(pid)
+        try:
+            state = recap.past_state(conn)
+            periods = recap.past_periods(conn, self.ctx.now()) if state in ("", "making") else []
+            if state == "making" and not periods:
+                recap.set_past_state(conn, "done")
+        finally:
+            conn.close()
+        if state == "making" and periods:
+            self._start_past(periods)
+        elif state == "" and periods:
+            self.dashboard.past.offer(recap.offer_text(periods))
+
+    def _make_past_recaps(self) -> None:
+        pid = self.current_profile()
+        if pid is None:
+            return
+        conn = self.ctx.connect(pid)
+        try:
+            recap.set_past_state(conn, "making")
+            periods = recap.past_periods(conn, self.ctx.now())
+        finally:
+            conn.close()
+        self._start_past(periods)
+
+    def _decline_past_recaps(self) -> None:
+        pid = self.current_profile()
+        if pid is None:
+            return
+        conn = self.ctx.connect(pid)
+        try:
+            recap.set_past_state(conn, "declined")  # each month is still a click away on Rev
+        finally:
+            conn.close()
+
+    def _start_past(self, periods: list[Period]) -> None:
+        self.dashboard.past.making(0, len(periods))
+        if self.auto_recap is not None and self.auto_recap.isRunning():
+            # One drawing at a time: start once the automatic check is done.
+            self._past_waiting = periods
+            self.auto_recap.finished.connect(self._start_waiting_past)
+            return
+        worker = RecapWorker(
+            self.current_profile(), self.ctx.art.cache, self.ctx.now(), batch=periods
+        )
+        worker.progress.connect(self.dashboard.past.making)
+        worker.finished.connect(self._past_finished)
+        self.past_worker = worker
+        self.ctx.track(worker)
+        worker.start()
+
+    def _start_waiting_past(self) -> None:
+        periods, self._past_waiting = self._past_waiting, None
+        if periods:
+            self._start_past(periods)
+
+    def _past_finished(self) -> None:
+        worker = self.sender()
+        if worker is None or worker.profile_id != self.current_profile():
+            return  # another profile's batch, stopped by the switch
+        conn = self.ctx.connect(worker.profile_id)
+        try:
+            done = recap.past_state(conn) == "done"
+        finally:
+            conn.close()
+        if done:
+            self.dashboard.past.finished(worker.made_count)
+        else:
+            self.dashboard.past.hide_notice()  # stopped; it goes on next time
+        self.recap.refresh_later()
+
+    def _open_rev(self) -> None:
+        self.sidebar.setCurrentRow(PAGES.index("Rev"))
 
     def _recaps_made(self, profile_id: str) -> None:
         """Announce a recap made for the first time, once."""
@@ -448,6 +540,9 @@ class MainWindow(QMainWindow):
                 if worker.isRunning():
                     worker.cancel()
                     worker.wait(self.CLOSE_WAIT_MS)
+            for thread in self.ctx.threads:  # past recaps stop before their next period
+                if hasattr(thread, "cancel"):
+                    thread.cancel()
             for thread in self.ctx.threads:  # short jobs: recap drawing, Test connection
                 thread.wait(self.CLOSE_WAIT_MS)
         stuck = [w for w in [*workers, *self.ctx.threads] if w.isRunning()]

@@ -245,3 +245,64 @@ def test_saved_card_names_prefer_the_deck_they_were_saved_from(tmp_path):
     assert recap.saved_card_names(tmp_path) == ["cover", "music", "wrap"]
     recap.remember_saved_names(tmp_path, ["cover", "music", "books", "wrap"])
     assert recap.saved_card_names(tmp_path) == ["cover", "music", "books", "wrap"]
+
+
+def test_the_first_sync_offers_past_recaps_and_makes_them(window, qtbot):
+    """2.3, mockup A: the status line offers the months and years before, makes them in
+    the background with their progress there, and says when they're done."""
+    synced(window, qtbot)
+    notice = window.dashboard.past
+    qtbot.waitUntil(lambda: not notice.isHidden(), timeout=15000)
+    assert notice.text.text().startswith("Make recaps for your past months? ")
+    assert not notice.make_button.isHidden() and not notice.later_button.isHidden()
+    notice.make_button.click()
+    qtbot.waitUntil(lambda: notice.text.text().startswith(("Made ", "Your past")), timeout=60000)
+    conn = window.ctx.connect("me")
+    try:
+        assert recap.past_state(conn) == "done"
+        assert recap.past_periods(conn, window.ctx.now()) == []
+        assert recap.unannounced(conn) == []  # no banner for each one
+    finally:
+        conn.close()
+    assert notice.make_button.isHidden() and not notice.open_button.isHidden()
+    notice.open_button.click()
+    assert window.stack.currentWidget() is window.recap
+    # Offered once: the next sync doesn't ask again.
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        window.dashboard.start_sync("all")
+    assert window.dashboard.past.isHidden()
+
+
+def test_not_now_is_remembered(window, qtbot):
+    synced(window, qtbot)
+    notice = window.dashboard.past
+    qtbot.waitUntil(lambda: not notice.isHidden(), timeout=15000)
+    notice.later_button.click()
+    assert notice.isHidden()
+    conn = window.ctx.connect("me")
+    try:
+        assert recap.past_state(conn) == "declined"
+    finally:
+        conn.close()
+    window.reload_profiles(select="me")
+    assert window.dashboard.past.isHidden()
+
+
+def test_past_recaps_left_halfway_go_on_at_the_next_launch(window, qtbot):
+    """Closing the app stops the batch at the next period; switching back to the profile
+    (as a launch does) carries on without asking again."""
+    synced(window, qtbot)
+    qtbot.waitUntil(lambda: not window.auto_recap.isRunning(), timeout=15000)
+    conn = window.ctx.connect("me")
+    try:
+        recap.set_past_state(conn, "making")  # as if the app closed mid-batch
+    finally:
+        conn.close()
+    window.reload_profiles(select="me")
+    notice = window.dashboard.past
+    qtbot.waitUntil(lambda: notice.text.text().startswith(("Made ", "Your past")), timeout=60000)
+    conn = window.ctx.connect("me")
+    try:
+        assert recap.past_state(conn) == "done"
+    finally:
+        conn.close()

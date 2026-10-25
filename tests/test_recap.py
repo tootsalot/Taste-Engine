@@ -426,3 +426,79 @@ def test_a_recap_made_by_hand_is_never_announced(world):
     data = recap.build(conn, Period("month", "2026-03"), OCT_14)
     assert recap.record(conn, data, OCT_14, announced=True) is True
     assert recap.unannounced(conn) == []
+
+
+# ---------------------------------------------------------------------------
+# Past recaps: the first launch offers to make the months and years before (2.3)
+# ---------------------------------------------------------------------------
+
+
+def test_past_periods_are_every_finished_month_and_year_with_data(world):
+    conn = world["conn"]
+    # Data in December 2025 (an old list edit, a guess), August and September 2026, and
+    # October 2026 (the month in progress, so not offered). 2026 isn't over yet.
+    past = recap.past_periods(conn, OCT_14)
+    assert past == [
+        Period("month", "2025-12"),
+        Period("year", "2025"),
+        Period("month", "2026-08"),
+        Period("month", "2026-09"),
+    ]
+    # One already made is left out; so are years when yearly recaps are switched off.
+    recap.record(conn, recap.build(conn, Period("month", "2026-09"), OCT_14), OCT_14)
+    settings.set_value(conn, "recap_yearly", False)
+    assert Period("month", "2026-09") not in recap.past_periods(conn, OCT_14)
+    assert Period("year", "2025") not in recap.past_periods(conn, OCT_14)
+
+
+def test_the_offer_is_made_once(world):
+    conn = world["conn"]
+    offer = recap.past_offer(conn, OCT_14)
+    assert len(offer) == 4
+    assert recap.offer_text(offer) == (
+        "Make recaps for your past months? 3 months and 1 year, under a minute."
+    )
+    recap.set_past_state(conn, "declined")
+    assert recap.past_offer(conn, OCT_14) == []  # not asked again
+    years = ("2022", "2023", "2024", "2025")
+    many = [Period("month", f"{y}-{m:02d}") for y in years for m in range(1, 13)]
+    assert recap.offer_text(many + [Period("year", y) for y in years]) == (
+        "Make recaps for your past months? 48 months and 4 years, about a minute."
+    )
+
+
+def test_past_recaps_are_drawn_in_one_go_and_can_stop_and_go_on(world, qapp, tmp_path):
+    from taste import images
+    from taste.desktop.workers import RecapWorker
+    from tests.fake_images import FakeImageSession
+
+    conn = world["conn"]
+    db_file = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    cache = images.ImageCache(tmp_path / "img", session=FakeImageSession())
+
+    def batch(periods, cancel=False):
+        worker = RecapWorker("me", cache, OCT_14, batch=periods)
+        worker.path = db_file
+        steps = []
+        worker.progress.connect(lambda done, total, name: steps.append((done, total, name)))
+        if cancel:
+            worker.cancel()
+        worker.run()  # here, not in a thread
+        return worker, steps
+
+    periods = recap.past_offer(conn, OCT_14)
+    recap.set_past_state(conn, "making")
+    _, steps = batch(periods, cancel=True)  # the app closed first: nothing made yet
+    assert steps == [] and recap.past_state(conn) == "making"
+    worker, steps = batch(periods)
+    assert [s[:2] for s in steps] == [(1, 4), (2, 4), (3, 4), (4, 4)]
+    assert steps[0][2] == "December 2025"
+    # December 2025 and so all of 2025 hold only an old list-edit guess: nothing to recap.
+    assert worker.made_count == 2
+    assert recap.past_state(conn) == "done"
+    made = dict(conn.execute("SELECT period_key, final FROM recap_runs").fetchall())
+    # All recorded, the empty ones too; September is still open for late data on Oct 14.
+    assert made == {"2025-12": 1, "2025": 1, "2026-08": 1, "2026-09": 0}
+    assert recap.unannounced(conn) == []  # no banner for each of them
+    assert (recap.folder("me", Period("month", "2026-08")) / "01-cover.png").is_file()
+    assert recap.past_periods(conn, OCT_14) == []

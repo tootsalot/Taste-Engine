@@ -205,6 +205,7 @@ class RecapWorker(QThread):
     ready = Signal(str, str, object, list)  # kind, key, RecapData, [(card name, QImage)]
     made = Signal(list)  # [(kind, key)] recaps made for the first time
     failed = Signal(str)
+    progress = Signal(int, int, str)  # a batch: periods done, of how many, the latest's name
 
     def __init__(
         self,
@@ -216,6 +217,7 @@ class RecapWorker(QThread):
         record: bool = False,
         retry: bool = False,
         replace_in: Any = None,
+        batch: list | None = None,
     ) -> None:
         super().__init__()
         self.profile_id = profile_id
@@ -230,6 +232,13 @@ class RecapWorker(QThread):
         self.replaced = 0  # how many saved cards that replaced, read once `ready` arrives
         self.missing = 0  # pictures drawn as placeholders in the latest drawing
         self.old_names: list[str] | None = None  # card names in save_to before this drawing
+        self.batch = batch  # past recaps to make in one go, oldest first (2.3)
+        self.made_count = 0  # of the batch, the ones with something to recap
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Stop a batch before its next period (the app is closing); what's made stays."""
+        self._cancelled = True
 
     def pictures(self, url: str | None):
         path = self.cache.get(url, retry=self.retry) if url else None
@@ -244,6 +253,9 @@ class RecapWorker(QThread):
             if not self.path.is_file():
                 return  # the profile was deleted meanwhile; never create an empty one
             conn = db.connect(self.path, setup=False)
+            if self.batch is not None:
+                self._make_batch(conn)
+                return
             if self.period is None:
                 made = []
                 for period in recap.due(conn, self.now):
@@ -285,6 +297,28 @@ class RecapWorker(QThread):
         finally:
             if conn is not None:
                 conn.close()
+
+    def _make_batch(self, conn) -> None:
+        """Past recaps, oldest first, each final and already announced (no banner for each
+        one). A period made meanwhile (by the automatic check) is left as it is; one with
+        nothing to recap is recorded too, so it isn't offered again. Stopped by cancel(),
+        it goes on next launch: the state stays 'making' until the last one is done."""
+        total = len(self.batch)
+        for done, period in enumerate(self.batch, 1):
+            if self._cancelled:
+                return
+            if recap.stored_fingerprint(conn, period) is None:
+                data = recap.build(conn, period, self.now)
+                missing = 0
+                if recap.has_data(data):
+                    self.missing = 0
+                    cards = recap_cards.render(data, self.pictures)
+                    self._write(data, cards, recap.folder(self.profile_id, period))
+                    missing = self.missing
+                    self.made_count += 1
+                recap.record(conn, data, self.now, announced=True, missing=missing)
+            self.progress.emit(done, total, period.label)
+        recap.set_past_state(conn, "done")
 
     @staticmethod
     def _write(data, cards, folder) -> Path:

@@ -661,6 +661,85 @@ def write_json(data: RecapData, target: Path) -> Path:
     return path
 
 
+# ---------------------------------------------------------------------------
+# Past recaps: the first launch offers the months and years before (2.3)
+# ---------------------------------------------------------------------------
+
+PAST_STATE = "past_recaps"  # '' never offered, 'making', 'done', or 'declined'
+SECONDS_PER_RECAP = 1.3  # drawing one, measured on the made-up library (2026-10-19)
+
+
+def past_state(conn: sqlite3.Connection) -> str:
+    row = conn.execute(
+        "SELECT state_value FROM app_state WHERE state_key = ?", (PAST_STATE,)
+    ).fetchone()
+    return row[0] if row else ""
+
+
+def set_past_state(conn: sqlite3.Connection, value: str) -> None:
+    conn.execute(
+        "INSERT INTO app_state (state_key, state_value, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT (state_key) DO UPDATE SET state_value = excluded.state_value, "
+        "updated_at = excluded.updated_at",
+        (PAST_STATE, value, utc_now()),
+    )
+
+
+def past_periods(conn: sqlite3.Connection, now: datetime | None = None) -> list[Period]:
+    """Every finished month and year with something in it that has no recap yet, oldest
+    first (a year after its December). Months and years follow their Recaps settings.
+    "Something in it" is any event that month; some turn out to have nothing to recap
+    (an old list-edit guess only), and the drawing skips those."""
+    months = sorted(
+        {
+            r[0]
+            for r in conn.execute(
+                "SELECT local_month FROM core_event_local_times UNION "
+                "SELECT substr(occurred_at_utc, 1, 7) FROM core_behavior_events "
+                "WHERE occurred_at_unix IS NULL"
+            )
+            if r[0]
+        }
+    )
+    this_month = activity.current(conn, "month", now)
+    this_year = activity.current(conn, "year", now)
+    found: list[Period] = []
+    if settings.get(conn, "recap_monthly"):
+        found += [Period("month", m) for m in months if m < this_month.key]
+    if settings.get(conn, "recap_yearly"):
+        found += [Period("year", y) for y in sorted({m[:4] for m in months}) if y < this_year.key]
+    made = {(r[0], r[1]) for r in conn.execute("SELECT period_kind, period_key FROM recap_runs")}
+    found = [p for p in found if (p.kind, p.key) not in made]
+    return sorted(found, key=lambda p: (p.end, p.kind == "year"))
+
+
+def past_offer(conn: sqlite3.Connection, now: datetime | None = None) -> list[Period]:
+    """What to offer to make, or [] when it was offered already (or there's nothing).
+    Offered once per profile, to profiles that have recaps already too (only the rest)."""
+    if past_state(conn):
+        return []
+    return past_periods(conn, now)
+
+
+def offer_text(periods: list[Period]) -> str:
+    """ "Make recaps for your past months? 31 months and 3 years, about a minute." """
+    months = sum(1 for p in periods if p.kind == "month")
+    years = len(periods) - months
+    parts = [
+        f"{n} {word}{'' if n == 1 else 's'}"
+        for n, word in ((months, "month"), (years, "year"))
+        if n
+    ]
+    seconds = len(periods) * SECONDS_PER_RECAP
+    minutes = round(seconds / 60)
+    when = (
+        "under a minute"
+        if seconds < 60
+        else ("about a minute" if minutes <= 1 else f"about {minutes} minutes")
+    )
+    return f"Make recaps for your past months? {' and '.join(parts)}, {when}."
+
+
 def banner_text(period: Period) -> str:
     """ "Your October recap is ready." The month's name alone, as people say it."""
     return f"Your {period.short} recap is ready."

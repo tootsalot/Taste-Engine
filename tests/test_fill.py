@@ -121,6 +121,29 @@ def test_a_sync_never_makes_the_dashboard_scroll(library):
     banner = dash.scroll.verticalScrollBar().maximum()
     assert dash.strip.log.isHidden() and not dash.banner.isHidden()
     assert (running, problems, banner) == (0, 0, 0), "the Dashboard scrolls during a sync"
+    # 2.3: the past recaps offer joins them on the same line, then shows its progress. It
+    # adds nothing to the page's height (at 1920 x 1040 a full library scrolls anyway).
+    for width, height in ((2560, 1380), (1920, 1040)):
+        win.resize(width, height)
+        dash.past.hide_notice()
+        dash.strip.start()
+        dash.strip.message("Last.fm: page 3 of 40")
+        pump()
+        without = dash.scroll.verticalScrollBar().maximum()
+        dash.strip.start()
+        dash.strip.message("Last.fm: page 3 of 40")
+        dash.past.offer("Make recaps for your past months? 31 months and 3 years, about a minute.")
+        pump()
+        offered = dash.scroll.verticalScrollBar().maximum()
+        dash.past.making(7, 34, "March 2025")
+        pump()
+        making = dash.scroll.verticalScrollBar().maximum()
+        assert (offered, making) == (without, without), f"the notice adds height at {width}"
+        assert width != 2560 or without == 0
+        dash.strip.finish(True)
+    dash.past.hide_notice()
+    win.resize(2560, 1380)
+    pump()
     dash.banner.hide_banner()
     # Asked for, the log opens at full height in the page, even if that scrolls a little.
     dash.strip.show_log(True)
