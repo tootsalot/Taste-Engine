@@ -2,6 +2,10 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [2.4.1]
+
+Everything in 2.4.0 below. The 2.4.0 build stopped on a test limit before anything was published (Linux renders fonts a little differently, which nudged one layout measurement over its limit), so this is the first release with the 2.4 look.
+
 ## [2.4.0]
 
 A calmer, roomier look: the same colors and fonts, with more space, clearer titles, and fewer buttons competing for attention.
