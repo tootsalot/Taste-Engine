@@ -4,11 +4,29 @@ Each release's notes on GitHub come from its section here.
 
 ## [2.3.0] (unreleased)
 
+Rev
+- On the first launch with past history, or after a new profile's first sync, the Dashboard offers to make my missing monthly and yearly recaps
+- Progress stays on the sync line, and an interrupted batch continues next time without repeating recaps already made
+- Not now stops the offer; I can still open an older month or year on Rev
+
+Dashboard
+- Airing now sits beside This month for currently airing shows on my Watching list, with posters and the next weekly broadcast in my time zone
+- Each row says which episode is next for me, marks the final known episode, and puts shows with no set time last
+- The card follows my clock and time-zone settings without another sync, hides itself when empty, and leaves adult shows out while Include NSFW anime is off
+- Dashboard cards can turn it off, and a long airing list scrolls inside the card so the full-screen Dashboard still fits
+- Compact sync-line buttons and equal-height recap notices keep progress and banner changes from moving the page
+
 For You
 - TV has its own tab after Films, with picks from shows I rated above my own TV average and my watchlist
 - TV picks use the film model with my TV ratings, genre and creator leans, and the same caution on averages from few votes
 - Shows not out yet stay out, watchlist picks are marked, and Not interested hides a TV pick without hiding a film with the same TMDB id
 - The TMDB vote setting now says it covers both film and TV suggestions
+
+Fixes
+- TV picks explain the reason in one sentence instead of repeating the same lines under Behind the score
+- TV runtimes say episodes; unknown episode lengths stay out, and film runtimes keep their wording
+- Raw-page pruning keeps responses still used by TV recommendations and uses an index to find those references
+- TV candidates get their raw page link in the insert, and film and TV descriptions are backfilled once per refresh
 
 ## [2.2.0]
 

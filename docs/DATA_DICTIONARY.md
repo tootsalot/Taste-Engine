@@ -90,6 +90,8 @@ One row per anime that has appeared on my list or was fetched as a recommendatio
 | start_season_year | INTEGER | Year of the premiere season. |
 | start_season | TEXT | `winter`, `spring`, `summer`, `fall`. |
 | airing_status | TEXT | MAL `status`, for example `finished_airing` or `currently_airing`. |
+| broadcast_day | TEXT | MAL `broadcast.day_of_the_week`, a weekday such as `saturday`. Added through `ADDED_COLUMNS` for existing profiles. NULL when absent. |
+| broadcast_time | TEXT | MAL `broadcast.start_time` as `HH:MM` in Asia/Tokyo. A recurring Japan-time slot, not a UTC timestamp. Added through `ADDED_COLUMNS`; NULL when absent. |
 | start_date | TEXT | Air start date, possibly partial. |
 | end_date | TEXT | Air end date, possibly partial. |
 | content_rating | TEXT | MAL `rating`, for example `pg_13`. |
@@ -103,6 +105,10 @@ One row per anime that has appeared on my list or was fetched as a recommendatio
 | loaded_at | TEXT | When this row was last written. |
 | num_list_users, popularity_rank, score_rank | INTEGER | How many MAL users list it, and its place in MAL's popularity and score rankings. Kept when a later response leaves them out. |
 | synopsis | TEXT | MAL's synopsis, from a details fetch (the list doesn't send it). Shown on For You. |
+
+A list sync requests `broadcast` along with the anime fields and keeps the original response in `raw_api_pages`. A later absent or empty broadcast clears these fields. `taste/airing.py` uses the two fields only for non-removed Watching entries whose `airing_status` is `currently_airing`, converting the next weekly slot to the profile's time zone with daylight saving rules. It sorts by the actual instant, then title and MAL id; unknown or invalid slots sort last. Episode progress is `num_episodes_watched + 1`, not an inferred broadcast episode. Hidden adult shows are removed with `activity.hidden_items()` before a title or poster reaches the card.
+
+The new Dashboard card is enabled once when a profile gains the broadcast columns, preserving its other card choices. Later opens respect turning the card off. Clock and time-zone changes only recompute the display; they do not need another MAL request.
 
 ### `stg_mal_anime_genres`
 Genres per anime. MAL mixes true genres, themes (Isekai), and demographics (Shounen) in one list and doesn't label which is which.
@@ -355,7 +361,7 @@ Details per title: title (name), original title, release or first air date, runt
 TMDB's recommendations for films I rated above my own average: the film suggestion candidates. Key `(tmdb_id, recommended_id)`, plus recommended_title and position (0 is TMDB's first). `stg_tmdb_fetches` records when each list was fetched, so it's asked again only after 30 days.
 
 ### `stg_tmdb_tv_recommendations`
-TV suggestions from `/3/tv/{id}/recommendations`, for shows I rated above my own TV average. The key is `(tmdb_id, recommended_id)`. `recommended_title` and `position` (starting at 0) have the same meaning as in the film table. `source` is `tmdb`, and `raw_page_id` links the row to the response kept in `raw_api_pages`. Refreshing replaces a seed's list idempotently; details are fetched for the strongest 120 candidates per medium. Recommendation responses use page 1, as film picks already do.
+TV suggestions from `/3/tv/{id}/recommendations`, for shows I rated above my own TV average. The key is `(tmdb_id, recommended_id)`. `recommended_title` and `position` (starting at 0) have the same meaning as in the film table. `source` is `tmdb`, and `raw_page_id` links the row to the response kept in `raw_api_pages`. It is written in the INSERT, registered in `taste/raw.py` `REFERENCES`, and indexed by `ix_stg_tmdb_tv_recommendations_raw (raw_page_id)`. Pruning and discard keep pages still referenced here, including superseded responses. Refreshing replaces a seed's list idempotently; details are fetched for the strongest 120 candidates per medium. Recommendation responses use page 1, as film picks already do.
 
 ### `stg_tmdb_fetches`
 Key `(tmdb_id, method)`, plus `fetched_at` as UTC text. Film recommendation lists use method `recommendations`, TV lists use `tv_recommendations`, so the same numeric id in both media cannot share a cache entry. Both expire after 30 days. Missing details use `gone_movie` or `gone_tv` to avoid repeatedly asking for titles that returned 404.
@@ -628,6 +634,9 @@ The suggestions in a run, best first.
 ---
 
 ## Recaps
+
+### `app_state`
+Per-profile app state, separate from editable settings. Columns: `state_key` (TEXT primary key), `state_value` (TEXT), and `updated_at` (UTC TEXT). Key `past_recaps` stays absent until I start or decline the offer, then holds `making`, `done`, or `declined`. The app uses it to resume an interrupted batch or stop repeating a declined offer; finished recap output remains in `recap_runs` and the recap files.
 
 ### `recap_runs`
 One row per recap the app made by itself (the Rev page). A month's recap is made on the first launch or sync after the month ends and rebuilt during the next 14 days whenever its numbers change; after that it's final. Years work the same way, in January.
