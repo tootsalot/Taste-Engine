@@ -32,7 +32,7 @@ from taste.sync_log import SyncRun
 REFRESH_DAYS = 30
 MAL_MIN_INTERVAL = 0.5  # 2 requests a second; backoff slows it further if MAL pushes back
 MAL_DETAIL_FIELDS = ",".join([*mal.ANIME_FIELDS, "synopsis", "recommendations", "related_anime"])
-DETAIL_FIELDS_VERSION = 2  # bump when MAL_DETAIL_FIELDS gains something cached rows lack
+DETAIL_FIELDS_VERSION = 3  # bump when MAL_DETAIL_FIELDS gains something cached rows lack
 # Relations worth suggesting. Summaries, character crossovers, and "other" aren't.
 RELATED_KINDS = {
     "sequel",

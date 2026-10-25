@@ -104,6 +104,9 @@ class World:
             status = (
                 "completed" if i < 360 else rng.choice(("watching", "plan_to_watch", "dropped"))
             )
+            if status == "watching":
+                node["status"] = "currently_airing"
+                node["broadcast"] = {"day_of_the_week": "saturday", "start_time": "17:30"}
             score = 0
             if i < 343:  # 343 of the 400 are scored
                 genre_bias = sum(bias[g["name"]] for g in node["genres"]) / len(node["genres"])

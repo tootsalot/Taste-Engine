@@ -52,6 +52,7 @@ DASHBOARD_CARDS = {
     "crowd": "You vs the crowd",
     "scores": "Your scores",
     "month": "This month",
+    "airing": "Airing now",
     "recent": "Recently finished",
     "repeat": "On repeat",
     "weeks": "Plays per week",

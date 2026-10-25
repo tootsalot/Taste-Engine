@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from taste import (
     activity,
+    airing,
     bookstats,
     charts,
     local_time,
@@ -71,6 +72,7 @@ TRAITS_IN_ONE_ROW = 2100  # page width from which Your taste's traits fit in one
 COLUMNS = 12  # grid columns: thirds are 4, halves 6
 WEEKS_MIN_BAR = 18
 RECAP_NAME = "Rev"  # the recap page's name in the sidebar
+NOTICE_HEIGHT = 32  # compact buttons, padding, and border on the single sync line
 
 
 def polish(widget: QWidget) -> None:
@@ -94,6 +96,7 @@ class SyncStrip(QFrame):
         layout.setContentsMargins(14, 8, 10, 8)
         layout.setSpacing(8)
         row = QHBoxLayout()
+        row.addStrut(NOTICE_HEIGHT)
         row.setSpacing(10)
         self.row = row  # the Dashboard puts its recap notice on this line too
         self.dot = QFrame()
@@ -109,6 +112,7 @@ class SyncStrip(QFrame):
         self.progress.setVisible(False)
         row.addWidget(self.progress, 0, Qt.AlignmentFlag.AlignVCenter)
         self.toggle = QPushButton("Show log")
+        self.toggle.setProperty("compact", True)
         self.toggle.setProperty("role", "link")
         self.toggle.clicked.connect(lambda: self.show_log(self.log.isHidden()))
         self.toggle.setVisible(False)
@@ -325,6 +329,74 @@ class Shelf(Card):
         super().resizeEvent(event)
         self._grow()
         self._fit()
+
+
+class AiringRow(QWidget):
+    """A poster and two plain-text lines, drawn with the shared background art loader."""
+
+    def __init__(self, ctx: AppContext, show: airing.AiringShow) -> None:
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+        self.art = ArtTile(ctx.art, QSize(30, 42), accent=theme.LILAC)
+        row.addWidget(self.art)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        self.title = label(show.title, wrap=True)
+        self.caption = label(show.caption, role="caption", wrap=True)
+        text.addWidget(self.title)
+        text.addWidget(self.caption)
+        row.addLayout(text, 1)
+        self.setToolTip(plain_tip(f"{show.title}\n{show.caption}"))
+        self.art.set_art(show.poster_url, show.title)
+
+
+class AiringCard(Card):
+    """Weekly broadcast slots. The list scrolls inside the card when it has many shows."""
+
+    def __init__(self, ctx: AppContext) -> None:
+        super().__init__()
+        self.ctx = ctx
+        self.shows: list[airing.AiringShow] = []
+        self.items: list[AiringRow] = []
+        self.body.addWidget(section("Airing now"))
+        self.setToolTip(
+            plain_tip(
+                "MAL's weekly broadcast time, in your profile's time zone. "
+                "Episode numbers are next for you, not a claim about which episode airs."
+            )
+        )
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        holder = QWidget()
+        self.rows = QVBoxLayout(holder)
+        self.rows.setContentsMargins(0, 0, 4, 0)
+        self.rows.setSpacing(8)
+        self.rows.addStretch()
+        self.scroll.setWidget(holder)
+        self.body.addWidget(self.scroll, 1)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt naming)
+        # The scroll area's contents may be long. They must not make the whole
+        # Dashboard taller; the other cards in this row decide its height.
+        return QSize(super().sizeHint().width(), self.minimumSizeHint().height())
+
+    def set_shows(self, shows: list[airing.AiringShow]) -> None:
+        if shows == self.shows:
+            return
+        self.shows = shows
+        for item in self.items:
+            self.rows.removeWidget(item)
+            item.hide()
+            item.deleteLater()
+        self.items = []
+        for show in shows:
+            item = AiringRow(self.ctx, show)
+            self.rows.insertWidget(len(self.items), item)
+            self.items.append(item)
 
 
 class MonthCard(Card):
@@ -683,6 +755,8 @@ class DashboardPage(LazyPage, QWidget):
         self.score_chart.setMinimumHeight(80)
         self.scores.body.addWidget(self.score_chart, 1)
 
+        self.airing = AiringCard(ctx)
+        self.airing_shown = False
         self.month = MonthCard()
         self.month.open_recap.connect(lambda: self.open_page.emit(RECAP_NAME))
 
@@ -715,6 +789,7 @@ class DashboardPage(LazyPage, QWidget):
             self.crowd,
             self.scores,
             self.month,
+            self.airing,
             self.recent,
             self.repeat,
             self.weeks,
@@ -725,6 +800,7 @@ class DashboardPage(LazyPage, QWidget):
             "crowd": self.crowd,
             "scores": self.scores,
             "month": self.month,
+            "airing": self.airing,
             "recent": self.recent,
             "repeat": self.repeat,
             "weeks": self.weeks,
@@ -754,17 +830,31 @@ class DashboardPage(LazyPage, QWidget):
         side = self.genres if wide and "genres" in self.cards_on else None
         if wide:
             rows = [
-                ([(self.crowd, 4), (self.scores, 4), (self.month, 4)], 2, COLUMNS),
+                (
+                    [(self.crowd, 3), (self.scores, 2), (self.month, 4), (self.airing, 3)]
+                    if self.airing_shown
+                    else [(self.crowd, 4), (self.scores, 4), (self.month, 4)],
+                    2,
+                    COLUMNS,
+                ),
                 ([(self.recent, 8)], 3, COLUMNS - 4 if side else COLUMNS),
                 ([(self.repeat, 5), (self.weeks, 3)], 3, COLUMNS - 4 if side else COLUMNS),
             ]
         else:
             rows = [
                 ([(self.crowd, 6), (self.scores, 6)], 2, COLUMNS),
-                ([(self.month, 6), (self.weeks, 6)], 2, COLUMNS),
+                (
+                    [(self.month, 6), (self.airing, 6)]
+                    if self.airing_shown
+                    else [(self.month, 6), (self.weeks, 6)],
+                    2,
+                    COLUMNS,
+                ),
                 ([(self.recent, 12)], 3, COLUMNS),
                 ([(self.repeat, 6), (self.genres, 6)], 3, COLUMNS),
             ]
+            if self.airing_shown:
+                rows.append(([(self.weeks, 12)], 2, COLUMNS))
         if self.taste_shown:
             rows.insert(0, ([(self.taste, COLUMNS)], 2, COLUMNS))
         # Wide: books, films, and TV side by side in one row, so a full screen fits
@@ -804,6 +894,8 @@ class DashboardPage(LazyPage, QWidget):
     def _card_on(self, card: QWidget) -> bool:
         """Whether the profile's "Dashboard cards" setting shows this card. Your taste
         is already left out when hidden (taste_shown)."""
+        if card is self.airing and not self.airing_shown:
+            return False
         return card is self.taste or any(
             card is shown and key in self.cards_on for key, shown in self.keyed.items()
         )
@@ -854,6 +946,7 @@ class DashboardPage(LazyPage, QWidget):
             sources = source_status.load(conn, self.profile_id, self.ctx.store)
             interrupted = count("SELECT COUNT(*) FROM sync_lastfm_windows WHERE status = 'open'")
             distribution = overview.score_distribution(conn)
+            broadcasts = airing.load(conn, now)
             finished = overview.recently_finished(conn, limit=SHELF_MAX)
             albums = overview.on_repeat(conn, now, limit=SHELF_MAX)
             generous, harsh = overview.genre_lean(conn)
@@ -878,11 +971,19 @@ class DashboardPage(LazyPage, QWidget):
             if items and key in cards_on
         ]  # fmt: skip
         taste = profile is not None and "taste" in cards_on
-        if shown != self.extra_shown or taste != self.taste_shown or cards_on != self.cards_on:
+        airing_shown = bool(broadcasts) and "airing" in cards_on
+        if (
+            shown != self.extra_shown
+            or taste != self.taste_shown
+            or cards_on != self.cards_on
+            or airing_shown != self.airing_shown
+        ):
+            self.airing_shown = airing_shown
             self.extra_shown = shown
             self.taste_shown = taste
             self.cards_on = cards_on
             self._arrange(bool(self.wide), force=True)
+        self.airing.set_shows(broadcasts if airing_shown else [])
         self.taste.set_persona(profile, self._trait_columns())
         self.show_cards(bool(entries or plays or books or films or shows))
         self.books.set_items(
@@ -1044,6 +1145,7 @@ class Banner(QFrame):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setFixedHeight(NOTICE_HEIGHT)
         self.setProperty("role", "banner")
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 2, 6, 2)
@@ -1052,9 +1154,11 @@ class Banner(QFrame):
         row.addWidget(self.text)
         self.open_button = QPushButton("Open")
         self.open_button.setProperty("role", "link")
+        self.open_button.setProperty("compact", True)
         self.open_button.clicked.connect(self._open)
         row.addWidget(self.open_button)
         close = QPushButton("Dismiss")
+        close.setProperty("compact", True)
         close.setProperty("role", "link")
         close.clicked.connect(self.hide_banner)
         row.addWidget(close)
@@ -1084,6 +1188,7 @@ class PastRecaps(QFrame):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setFixedHeight(NOTICE_HEIGHT)
         self.setProperty("role", "banner")
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 2, 6, 2)
@@ -1106,9 +1211,11 @@ class PastRecaps(QFrame):
             button.setProperty("compact", True)  # no taller than the status line
         self.open_button = QPushButton("Open Rev")
         self.open_button.setProperty("role", "link")
+        self.open_button.setProperty("compact", True)
         self.open_button.clicked.connect(self._open)
         row.addWidget(self.open_button)
         self.dismiss_button = QPushButton("Dismiss")
+        self.dismiss_button.setProperty("compact", True)
         self.dismiss_button.setProperty("role", "link")
         self.dismiss_button.clicked.connect(self.hide_notice)
         row.addWidget(self.dismiss_button)

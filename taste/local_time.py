@@ -82,9 +82,9 @@ def hour_text(hour: int, short: bool = False) -> str:
     return f"{twelve} {'AM' if hour < 12 else 'PM'}"
 
 
-def time_text(hour: int, minute: int) -> str:
-    """A time of day: "10:52 PM" or "22:52"."""
-    if _clock["format"] == "24h":
+def time_text(hour: int, minute: int, clock_format: str | None = None) -> str:
+    """A time of day, using an explicit profile clock or the desktop's current clock."""
+    if (clock_format or _clock["format"]) == "24h":
         return f"{hour:02d}:{minute:02d}"
     return f"{hour % 12 or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}"
 

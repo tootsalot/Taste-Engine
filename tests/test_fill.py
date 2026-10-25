@@ -310,8 +310,8 @@ def test_dashboard_cards_can_be_hidden_and_the_rest_share_the_room(library):
     page = dash.scroll.viewport().width()
     # Without the genres down the right, Recently finished takes the whole width.
     assert dash.recent.width() > page * 0.9
-    # Crowd and This month share the first row between them.
-    assert dash.crowd.width() + dash.month.width() > page * 0.9
+    # Crowd, This month, and Airing now share the first row between them.
+    assert dash.crowd.width() + dash.month.width() + dash.airing.width() > page * 0.9
     assert dash.films.width() > page * 0.4  # books and films share their row
     assert bare_share(win.stack.currentWidget()) < LIMIT
 
@@ -327,3 +327,46 @@ def test_tv_suggestions_fill_the_window(library):
         pump()
         assert bare_share(page) <= LIMITS["For You"]
         assert empty_share(page, ignore=CHARTS) <= EMPTY_LIMITS["For You"]
+
+
+def test_airing_card_fits_beside_this_month_without_moving_the_page(library):
+    win = library
+    win.sidebar.setCurrentRow(PAGES.index("Dashboard"))
+    dash = win.dashboard
+    assert dash.airing.items and not dash.airing.isHidden()
+    for width, height in SIZES:
+        win.resize(width, height)
+        pump()
+        air_row = dash.grid.getItemPosition(dash.grid.indexOf(dash.airing))[0]
+        month_row = dash.grid.getItemPosition(dash.grid.indexOf(dash.month))[0]
+        assert air_row == month_row
+        assert bare_share(dash) <= LIMIT
+        assert empty_share(dash, ignore=CHARTS) <= EMPTY_LIMITS["Dashboard"]
+        assert dash.scroll.horizontalScrollBar().maximum() == 0
+        if width == 2560:
+            assert dash.scroll.verticalScrollBar().maximum() == 0
+        for state in ("sync", "error", "banner"):
+            before = dash.scroll.verticalScrollBar().maximum()
+            if state == "sync":
+                dash.strip.start()
+            elif state == "error":
+                dash.strip.finish(False)
+            else:
+                dash.banner.show_text("Your October recap is ready.")
+            pump()
+            assert dash.scroll.verticalScrollBar().maximum() == before
+        dash.strip.clear()
+        dash.banner.hide_banner()
+    conn = win.ctx.connect(win.current_profile())
+    conn.execute("UPDATE stg_mal_anime SET airing_status = 'finished_airing'")
+    conn.close()
+    dash.refresh()
+    assert dash.airing.isHidden() and dash.grid.indexOf(dash.airing) == -1
+    for width, height in SIZES:
+        win.resize(width, height)
+        pump()
+        assert bare_share(dash) <= LIMIT
+        assert empty_share(dash, ignore=CHARTS) <= EMPTY_LIMITS["Dashboard"]
+        assert dash.scroll.horizontalScrollBar().maximum() == 0
+        if width == 2560:
+            assert dash.scroll.verticalScrollBar().maximum() == 0

@@ -55,6 +55,7 @@ ANIME_FIELDS = [
     "media_type",
     "num_episodes",
     "start_season",
+    "broadcast",
     "genres",
     "studios",
     "mean",
@@ -260,14 +261,15 @@ def upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: int
     """Upsert one anime from a list entry's node or a details response (same shape)."""
     alt = node.get("alternative_titles") or {}
     season = node.get("start_season") or {}
+    broadcast = node.get("broadcast") or {}
     anime_id = node["id"]
     conn.execute(
         "INSERT INTO stg_mal_anime (mal_anime_id, title, title_en, title_ja, synonyms_json, "
         "media_type, num_episodes, start_season_year, start_season, airing_status, start_date, "
         "end_date, content_rating, source_material, avg_episode_seconds, community_mean, "
         "num_scoring_users, main_picture_url, nsfw_rating, last_raw_page_id, loaded_at, "
-        "num_list_users, popularity_rank, score_rank, synopsis) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "num_list_users, popularity_rank, score_rank, synopsis, broadcast_day, broadcast_time) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (mal_anime_id) DO UPDATE SET title = excluded.title, "
         "title_en = excluded.title_en, title_ja = excluded.title_ja, "
         "synonyms_json = excluded.synonyms_json, media_type = excluded.media_type, "
@@ -285,7 +287,8 @@ def upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: int
         "popularity_rank = COALESCE(excluded.popularity_rank, stg_mal_anime.popularity_rank), "
         "score_rank = COALESCE(excluded.score_rank, stg_mal_anime.score_rank), "
         # The list doesn't send synopses (details do), so a list sync keeps the one we have.
-        "synopsis = COALESCE(excluded.synopsis, stg_mal_anime.synopsis)",
+        "synopsis = COALESCE(excluded.synopsis, stg_mal_anime.synopsis), "
+        "broadcast_day = excluded.broadcast_day, broadcast_time = excluded.broadcast_time",
         (
             anime_id,
             node["title"],
@@ -312,6 +315,8 @@ def upsert_stg_anime(conn: sqlite3.Connection, node: dict[str, Any], raw_id: int
             node.get("popularity"),
             node.get("rank"),
             _none_if_blank((node.get("synopsis") or "").strip()),
+            _none_if_blank(broadcast.get("day_of_the_week")),
+            _none_if_blank(broadcast.get("start_time")),
         ),
     )
     conn.execute("DELETE FROM stg_mal_anime_genres WHERE mal_anime_id = ?", (anime_id,))

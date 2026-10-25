@@ -40,6 +40,8 @@ def connect(path: str | Path, *, setup: bool = True) -> sqlite3.Connection:
 # them to an existing database, so they're added here. ALTER TABLE ... ADD ports to
 # SQL Server; reading PRAGMA table_info is SQLite-only and stays in Python.
 ADDED_COLUMNS = [
+    ("stg_mal_anime", "broadcast_day", "TEXT"),
+    ("stg_mal_anime", "broadcast_time", "TEXT"),
     ("stg_tmdb_tv", "overview", "TEXT"),
     ("stg_mal_anime", "main_picture_url", "TEXT"),
     ("stg_mal_anime", "nsfw_rating", "TEXT"),
@@ -61,11 +63,14 @@ ADDED_COLUMNS = [
 ]
 
 
-def _add_missing_columns(conn: sqlite3.Connection) -> None:
+def _add_missing_columns(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    added = set()
     for table, column, decl in ADDED_COLUMNS:
         existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            added.add((table, column))
+    return added
 
 
 # Books came from a Goodreads export, with Open Library covers, until Hardcover
@@ -130,9 +135,15 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     from taste import local_time, settings
 
     conn.executescript((SQL_DIR / "schema.sql").read_text(encoding="utf-8"))
-    _add_missing_columns(conn)
+    added = _add_missing_columns(conn)
     _retire_old_sources(conn)
     settings.ensure_defaults(conn)
+    if ("stg_mal_anime", "broadcast_day") in added:
+        # Enable the new card once on upgrade, preserving every other card choice.
+        # Later opens must respect someone turning Airing now off.
+        cards = settings.get(conn, "dashboard_cards").split(",")
+        if "airing" not in cards:
+            settings.set_value(conn, "dashboard_cards", [*cards, "airing"])
     settings.apply_source_notes(conn)
     # One transaction, so another connection reading a report while this one starts
     # sees the old views or the new ones, never a moment with the view missing.
