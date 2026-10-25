@@ -107,3 +107,51 @@ def test_pruning_and_saving_use_indexes_not_full_scans(conn):
         ("lastfm", "user.getrecenttracks", "{}"),
     )
     assert "ix_raw_api_pages_request" in latest and "TEMP B-TREE" not in latest, latest
+
+
+def test_prune_keeps_a_page_only_tv_recommendations_reference(conn):
+    run = SyncRun(conn, "tmdb", "enrich")
+
+    def response(version):
+        return raw.store_page(
+            conn,
+            sync_run_id=run.run_id,
+            source="tmdb",
+            endpoint="/3/tv/{id}/recommendations",
+            params={"id": 31, "page": 1},
+            page_number=1,
+            http_status=200,
+            payload={"version": version},
+        )
+
+    unused = response(1)
+    referenced = response(2)
+    latest = response(3)
+    conn.execute("UPDATE raw_api_pages SET fetched_at = '2020-01-01 00:00:00'")
+    conn.execute(
+        "INSERT INTO stg_tmdb_tv_recommendations "
+        "(tmdb_id, recommended_id, recommended_title, position, raw_page_id) "
+        "VALUES (31, 41, 'Example River', 0, ?)",
+        (referenced,),
+    )
+    assert raw.prune(conn, 1, now=datetime(2026, 10, 24, tzinfo=timezone.utc)) == 1
+    remaining = {r[0] for r in conn.execute("SELECT raw_page_id FROM raw_api_pages")}
+    assert remaining == {referenced, latest}
+    assert not raw.discard_if_unused(conn, referenced)
+    assert unused not in remaining
+
+
+def test_tv_raw_reference_has_an_index_after_upgrading_a_profile(conn):
+    from taste.db import apply_schema
+
+    # Simulate a profile created before the new index shipped.
+    conn.execute("DROP INDEX IF EXISTS ix_stg_tmdb_tv_recommendations_raw")
+    apply_schema(conn)
+    plan = " | ".join(
+        row[3]
+        for row in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT 1 FROM stg_tmdb_tv_recommendations WHERE raw_page_id = ?",
+            (1,),
+        )
+    )
+    assert "ix_stg_tmdb_tv_recommendations_raw" in plan and "SCAN" not in plan, plan

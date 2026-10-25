@@ -641,7 +641,10 @@ def _screen_recommendations(
             image_url=tmdb.poster_url(f["poster_path"]),
             url=tmdb.TITLE_URL[kind].format(tmdb_id),
         )
-        parts = [(f["release_date"] or "")[:4], _runtime(f["runtime"])]
+        length = _runtime(f["runtime"])
+        if kind == "tv" and length:
+            length += " episodes"
+        parts = [(f["release_date"] or "")[:4], length]
         if f["studios"]:
             parts.append(f["studios"][0])
         rec.subtitle = " · ".join(p for p in parts if p)
@@ -658,12 +661,9 @@ def _screen_recommendations(
         best = sorted(sources.get(tmdb_id, []), reverse=True)[:MAX_REASON_SEEDS]
         seeds = [(title, rating) for _, title, rating in best]
         liked, harsh = _genre_leans(model, f["genres"])
-        if kind == "movie":
-            rec.reasons.extend(_because(seeds, liked, harsh, noun="films"))
-        else:
-            rec.reasons.extend(
-                f"TMDB recommends it alongside {t}, which you rated {r:g}." for t, r in seeds
-            )
+        rec.reasons.extend(
+            _because(seeds, liked, harsh, noun="films" if kind == "movie" else "shows")
+        )
         details = [f"TMDB recommends it alongside {t}, which you rated {r:g}." for t, r in seeds]
         if abs(crowd - f["vote_average"]) >= 0.1:
             details.append(

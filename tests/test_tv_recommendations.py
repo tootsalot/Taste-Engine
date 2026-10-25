@@ -94,8 +94,9 @@ def test_tv_list_uses_tv_ratings_caution_watchlist_and_dismissal(conn, library, 
     assert picks["41"].url == "https://www.themoviedb.org/tv/41"
     assert "Lu Writer" in picks["41"].subtitle
     assert picks["41"].facts["about"] == "An invented series about a river."
-    assert "TMDB recommends it alongside Example Harbor Series, which you rated 8.5." in (
-        picks["41"].reasons
+    assert (
+        "TMDB recommends it alongside Example Harbor Series, which you rated 8.5."
+        in (picks["41"].facts["details"])
     )
     settings.set_value(conn, "film_prior_votes", 0)
     uncautious = {r.item_key: r for r in recommend.tv_recommendations(conn, NOW.date())[0]}
@@ -186,3 +187,69 @@ def test_tv_upgrade_adds_overview_and_recovers_cached_synopsis(conn, library):
     assert conn.execute("SELECT overview FROM stg_tmdb_tv WHERE tmdb_id = 31").fetchone()[0] == (
         "An invented harbor story."
     )
+
+
+def test_tv_reason_is_a_sentence_without_repeating_the_score_details(conn, library):
+    _, client = library
+    tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None, now=NOW)
+    recs, _ = recommend.tv_recommendations(conn, NOW.date())
+    pick = next(r for r in recs if r.item_key == "41")
+    assert pick.reasons == [
+        "Because you really liked Example Harbor Series, and you tend to enjoy drama shows."
+    ]
+    assert (
+        "TMDB recommends it alongside Example Harbor Series, which you rated 8.5."
+        in (pick.facts["details"])
+    )
+    assert set(pick.reasons).isdisjoint(pick.facts["details"])
+
+
+def test_refresh_backfills_overviews_once_for_both_media(conn, library, monkeypatch):
+    _, client = library
+    calls = []
+    original = tmdb.backfill_overviews
+
+    def count_backfill(connection):
+        calls.append(connection)
+        return original(connection)
+
+    monkeypatch.setattr(tmdb, "backfill_overviews", count_backfill)
+    tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None, now=NOW)
+    assert calls == [conn]
+    calls.clear()
+    # Even a fully cached refresh should recover old overviews exactly once.
+    tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None, now=NOW)
+    assert calls == [conn]
+
+
+@pytest.mark.parametrize(
+    ("runtime", "expected"),
+    [(45, "2019 · 45m episodes · Lu Writer"), (None, "2019 · Lu Writer")],
+)
+def test_tv_subtitle_says_the_length_is_per_episode(conn, library, runtime, expected):
+    _, client = library
+    tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None, now=NOW)
+    conn.execute("UPDATE stg_tmdb_tv SET episode_run_time = ? WHERE tmdb_id = 41", (runtime,))
+    recs, _ = recommend.tv_recommendations(conn, NOW.date())
+    pick = next(r for r in recs if r.item_key == "41")
+    assert pick.subtitle == expected
+    films, _ = recommend.film_recommendations(conn, NOW.date())
+    film = next(r for r in films if r.item_key == "21")
+    assert film.subtitle == "2022 · 1h 50m · Ida Director"
+
+
+def test_tv_candidates_have_raw_provenance_at_insertion(conn, library):
+    _, client = library
+    # Reject a candidate before it can exist without its source response.
+    conn.execute(
+        "CREATE TEMP TRIGGER require_tv_raw_page BEFORE INSERT ON stg_tmdb_tv_recommendations "
+        "WHEN NEW.raw_page_id IS NULL BEGIN "
+        "SELECT RAISE(ABORT, 'TV candidate has no raw page'); END"
+    )
+    tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None, now=NOW)
+    rows = conn.execute(
+        "SELECT r.source, p.source, p.endpoint FROM stg_tmdb_tv_recommendations r "
+        "JOIN raw_api_pages p ON p.raw_page_id = r.raw_page_id"
+    ).fetchall()
+    assert len(rows) == 5
+    assert all(tuple(row) == ("tmdb", "tmdb", "/3/tv/{id}/recommendations") for row in rows)

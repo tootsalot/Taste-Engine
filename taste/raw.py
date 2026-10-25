@@ -37,6 +37,7 @@ REFERENCES = [
     ("stg_tmdb_account_ratings", "last_raw_page_id"),
     ("stg_tmdb_movies", "raw_page_id"),
     ("stg_tmdb_tv", "raw_page_id"),
+    ("stg_tmdb_tv_recommendations", "raw_page_id"),
 ]
 
 

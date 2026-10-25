@@ -748,6 +748,8 @@ def enrich_recommendations(
     now: datetime | None = None,
 ) -> int:
     """Cache film and TV recommendation lists and fetch the strongest 120 of each."""
+    with transaction(conn):
+        backfill_overviews(conn)
     return sum(
         _enrich_recommendations(conn, client, cfg, out, now=now, kind=kind)
         for kind in ("movie", "tv")
@@ -778,8 +780,6 @@ def _enrich_recommendations(
         )
     }
     todo = [i for i in recommendation_seeds(conn, kind) if i not in fresh]
-    with transaction(conn):
-        backfill_overviews(conn)
     run = SyncRun(conn, SOURCE, "enrich")
     try:
         for i, tmdb_id in enumerate(todo, 1):
@@ -805,18 +805,17 @@ def _enrich_recommendations(
                 for position, item in enumerate(response.data.get("results") or []):
                     if not isinstance(item, dict) or "id" not in item:
                         continue
-                    conn.execute(
-                        f"INSERT INTO {table} (tmdb_id, recommended_id, "
-                        "recommended_title, position) VALUES (?, ?, ?, ?) "
-                        "ON CONFLICT (tmdb_id, recommended_id) DO NOTHING",
-                        (tmdb_id, item["id"], _title(item), position),
-                    )
+                    columns = "tmdb_id, recommended_id, recommended_title, position"
+                    values = (tmdb_id, item["id"], _title(item), position)
                     if kind == "tv":
-                        conn.execute(
-                            f"UPDATE {table} SET raw_page_id = ? WHERE tmdb_id = ? "
-                            "AND recommended_id = ?",
-                            (raw_id, tmdb_id, item["id"]),
-                        )
+                        columns += ", raw_page_id"
+                        values += (raw_id,)
+                    marks = ", ".join("?" for _ in values)
+                    conn.execute(
+                        f"INSERT INTO {table} ({columns}) VALUES ({marks}) "
+                        "ON CONFLICT (tmdb_id, recommended_id) DO NOTHING",
+                        values,
+                    )
                     _seed_details(conn, kind, item, raw_id)
                 conn.execute(
                     "INSERT INTO stg_tmdb_fetches (tmdb_id, method, fetched_at) VALUES (?, ?, ?) "

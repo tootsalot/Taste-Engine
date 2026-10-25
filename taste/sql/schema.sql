@@ -695,6 +695,8 @@ CREATE INDEX IF NOT EXISTS ix_stg_tmdb_account_ratings_raw
     ON stg_tmdb_account_ratings (last_raw_page_id);
 CREATE INDEX IF NOT EXISTS ix_stg_tmdb_movies_raw ON stg_tmdb_movies (raw_page_id);
 CREATE INDEX IF NOT EXISTS ix_stg_tmdb_tv_raw ON stg_tmdb_tv (raw_page_id);
+CREATE INDEX IF NOT EXISTS ix_stg_tmdb_tv_recommendations_raw
+    ON stg_tmdb_tv_recommendations (raw_page_id);
 CREATE INDEX IF NOT EXISTS ix_stg_hardcover_user_books_raw
     ON stg_hardcover_user_books (last_raw_page_id);
 CREATE INDEX IF NOT EXISTS ix_stg_hardcover_reads_raw ON stg_hardcover_reads (last_raw_page_id);
