@@ -29,8 +29,9 @@ LIMIT = 0.15
 # emptier. For You's 30 picks fill three rows at full screen and can't grow without a
 # fourth; Settings in Simple mode has less to show than a full screen holds.
 # The 2.4 spacing (gaps, card padding) moved For You from 33% to 37% and the Dashboard
-# from 13% to 16%.
-EMPTY_LIMITS = {"For You": 0.37, "Rev": 0.30, "Settings": 0.55, "Dashboard": 0.16}
+# from 13% to 16% on Windows; Linux's font rendering measures the Dashboard about a point
+# higher (16.5% to 17% in CI), so its limit is 18%.
+EMPTY_LIMITS = {"For You": 0.37, "Rev": 0.30, "Settings": 0.55, "Dashboard": 0.18}
 EMPTY_LIMIT = 0.27  # the four Reports pages (0.25 before the 2.4 spacing)
 CHARTS = (BarChart, BandChart, LeanBar, RankList, CoverWall)
 
