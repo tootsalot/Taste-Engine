@@ -10,6 +10,7 @@ from pathlib import Path
 from taste import __version__, backup, db, profiles, reports, runner
 from taste.config import load_env, reports_dir
 from taste.profiles import DEFAULT_PROFILE, ProfileError
+from taste.recommend import lab
 
 
 def cmd_sync(conn: sqlite3.Connection, profile_id: str, source: str) -> int:
@@ -20,6 +21,63 @@ def cmd_sync(conn: sqlite3.Connection, profile_id: str, source: str) -> int:
 def cmd_report(conn: sqlite3.Connection, out_dir: Path) -> int:
     reports.run(conn, out_dir)
     return 0
+
+
+def cmd_lab(conn: sqlite3.Connection, medium: str) -> int:
+    """Print aggregate holdout checks, with no profile or title information."""
+    media = lab.MEDIA if medium == "all" else (medium,)
+    tables = []
+    for kind in media:
+        headers = ["candidate", "count", "mae"]
+        if kind == "anime":
+            headers.append("whole_mae")
+        headers.extend(("spearman", "top_hits", "vs_usual [interval]", "verdict", "seconds"))
+        rows = []
+        for result in lab.evaluate(conn, kind):
+            metrics = ["mae"]
+            if kind == "anime":
+                metrics.append("whole_mae")
+            metrics.extend(("spearman", "top_hits"))
+            cells = [result["candidate"], str(result["count"])]
+            cells.extend("n/a" if result[key] is None else f"{result[key]:.3f}" for key in metrics)
+            interval = result["interval"]
+            cells.append(
+                "n/a"
+                if interval is None
+                else f"{result['vs_usual']:+.3f} [{interval[0]:+.3f}, {interval[1]:+.3f}]"
+            )
+            cells.extend(
+                (
+                    result["verdict"] or "n/a",
+                    "n/a" if result["seconds"] is None else f"{result['seconds']:.3f}",
+                )
+            )
+            rows.append(cells)
+        widths = [max(len(row[i]) for row in [headers, *rows]) for i in range(len(headers))]
+        heading = "book (doubled stars)" if kind == "book" else kind
+        lines = [heading]
+        for row in [headers, *rows]:
+            lines.append(
+                "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True))
+            )
+        tables.append("\n".join(lines))
+    print("\n\n".join(tables))
+    return 0
+
+
+def _lab(args: argparse.Namespace) -> int:
+    """Open only an existing database, skipping schema setup and legacy migration."""
+    try:
+        path = args.db if args.db else profiles.db_path(args.profile)
+        if not path.is_file():
+            print("The requested profile database does not exist.", file=sys.stderr)
+            return 2
+        with profiles._readonly(path) as conn:
+            conn.row_factory = sqlite3.Row
+            return cmd_lab(conn, args.medium)
+    except (ProfileError, OSError, sqlite3.Error):
+        print("The lab could not read the profile database.", file=sys.stderr)
+        return 2
 
 
 def status_lines(conn: sqlite3.Connection) -> list[str]:
@@ -116,6 +174,8 @@ def build_parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("report", help="print a summary and write CSV files")
     rep.add_argument("--out", type=Path, help="folder for CSV files (default reports/<profile>)")
     sub.add_parser("status", help="row counts and last sync per source")
+    model_lab = sub.add_parser("lab", help="compare rating models without changing the database")
+    model_lab.add_argument("--medium", choices=(*lab.MEDIA, "all"), default="all")
     back = sub.add_parser("backup", help="back up this profile without its keys")
     back.add_argument("path", type=Path)
     restore = sub.add_parser("restore", help="restore a backup as a new profile")
@@ -151,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     load_env()
+    if args.command == "lab":
+        return _lab(args)
     if profiles.migrate_legacy():
         print("Moved data/taste.db to the 'default' profile.")
     try:
