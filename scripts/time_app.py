@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import QApplication
 from taste import db, profiles, raw, runner
 from taste.desktop import motion, theme
 from taste.desktop.main_window import PAGES
+from taste.recommend import lab
 from tests.fake_images import FakeImageSession
 from tests.fill_world import NOW_DT, World
 from tests.test_desktop import set_up_profile
@@ -44,6 +46,13 @@ def wait_for(signal, start) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--models",
+        action="store_true",
+        help="also time each experimental model fit and predictions",
+    )
+    args = parser.parse_args()
     with (
         tempfile.TemporaryDirectory(prefix="taste-timing-") as folder,
         pytest.MonkeyPatch.context() as patch,
@@ -119,6 +128,20 @@ def main() -> None:
                 if hasattr(raw, "compress_old_pages"):
                     raw.compress_old_pages(conn, now=NOW_DT)
                 timings["Raw compression"] = time.perf_counter() - start
+                if args.models:
+                    for medium in lab.MEDIA:
+                        rows, facts, context = lab.load_data(conn, medium)
+                        for candidate in lab.DEFAULT_CANDIDATES:
+                            if candidate.name not in ("details", "similar", "blend"):
+                                continue
+                            start = time.perf_counter()
+                            predict = candidate.fit(rows, facts, context)
+                            for key in sorted(context.crowd):
+                                predict(key)
+                            title = f"Model {medium}/{candidate.name}"
+                            timings[f"{title} (fit + {len(context.crowd)} predictions)"] = (
+                                time.perf_counter() - start
+                            )
             finally:
                 conn.close()
         finally:

@@ -8,7 +8,7 @@ from datetime import date
 import pytest
 
 from taste import credentials, recommend, runner, settings
-from taste.recommend import experiments, lab
+from taste.recommend import candidates, experiments, lab
 from taste.recommend.anime import _anime_facts, _scored
 from taste.recommend.books import _book_facts, _book_scored
 from taste.recommend.model import build_model, holdout_residuals, whole_score
@@ -72,7 +72,14 @@ def test_library_metrics_and_usual_residuals_match_the_existing_model(library, m
     assert [mine - guess for _, mine, guess in held_out] == holdout_residuals(rows, facts)
     assert sorted(key for key, _, _ in held_out) == sorted(key for key, _, _ in rows)
     results = lab.evaluate(library, medium, lab.DEFAULT_CANDIDATES)
-    assert [r["candidate"] for r in results] == ["usual", "dismissals", "recency"]
+    assert [r["candidate"] for r in results] == [
+        "usual",
+        "dismissals",
+        "recency",
+        "details",
+        "similar",
+        "blend",
+    ]
     for result, candidate in zip(results, lab.DEFAULT_CANDIDATES, strict=True):
         predictions = lab.holdout_predictions(rows, facts, context, candidate)
         errors = [abs(mine - guess) for _, mine, guess in predictions]
@@ -211,12 +218,13 @@ def test_experiments_are_isolated_from_profile_switches_and_match_existing_apply
         ("2026-10-14 00:00:00",),
     )
     rows, facts, context = lab.load_data(library, "anime")
-    before = [lab.holdout_predictions(rows, facts, context, c) for c in lab.DEFAULT_CANDIDATES]
+    original = lab.DEFAULT_CANDIDATES[:3]
+    before = [lab.holdout_predictions(rows, facts, context, c) for c in original]
     assert before[0] != before[1]
     assert before[0] != before[2]
     for key in ("rec_dismissal_signal", "rec_recent_ratings", "rec_theme_transfer"):
         settings.set_value(library, key, True)
-    for candidate, expected in zip(lab.DEFAULT_CANDIDATES, before, strict=True):
+    for candidate, expected in zip(original, before, strict=True):
         actual = lab.holdout_predictions(rows, facts, context, candidate)
         assert actual == expected
         switches = {
@@ -295,3 +303,21 @@ def test_lab_leaves_every_table_and_saved_recommendation_unchanged(library):
     assert {
         table: library.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in tables
     } == before_counts
+
+
+def test_default_recompute_keeps_identical_picks_and_metrics_without_fitting_candidates(
+    library, monkeypatch
+):
+    kinds = ("anime", "music", "film", "tv", "book", "everything")
+    recommend.compute_all(library, NOW_DT, kinds)
+    before = {kind: recommend.latest(library, kind)[:2] for kind in recommend.LIST_KINDS}
+
+    def refuse(*args, **kwargs):
+        pytest.fail("Default lists must not fit or evaluate experimental models")
+
+    for name in ("build_model", "fit_details", "fit_similar", "fit_blend"):
+        monkeypatch.setattr(candidates, name, refuse)
+    monkeypatch.setattr(lab, "evaluate", refuse)
+    monkeypatch.setattr(lab, "holdout_predictions", refuse)
+    recommend.compute_all(library, NOW_DT, kinds)
+    assert {kind: recommend.latest(library, kind)[:2] for kind in recommend.LIST_KINDS} == before

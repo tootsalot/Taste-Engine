@@ -11,7 +11,6 @@ import math
 import random
 import sqlite3
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from datetime import date
 from statistics import mean, quantiles
 from time import perf_counter
@@ -21,22 +20,12 @@ from taste import settings
 from taste.recommend import experiments
 from taste.recommend.anime import _anime_facts, _scored
 from taste.recommend.books import _book_facts, _book_scored
+from taste.recommend.candidates import Context, Facts, Rows, fit_blend, fit_details, fit_similar
 from taste.recommend.model import MIN_RESIDUALS, build_model, shrunk, whole_score
 from taste.recommend.screen import _screen_facts, _screen_scored, _typical_tmdb_average
 
 MEDIA = ("anime", "film", "tv", "book")
-Rows = list[tuple[int, float, float]]
-Facts = dict[int, dict[str, Any]]
 Predictions = list[tuple[int, float, float]]  # source id, actual rating, held-out prediction
-
-
-@dataclass(frozen=True)
-class Context:
-    conn: sqlite3.Connection
-    medium: str
-    crowd: dict[int, float]
-    # Freeze recency to the latest stored rating date, not the day the lab is run.
-    now: date
 
 
 Fit = Callable[[Rows, Facts, Context], Callable[[int], float]]
@@ -89,6 +78,9 @@ DEFAULT_CANDIDATES = (
     Candidate("usual", fit_usual),
     Candidate("dismissals", fit_dismissals),
     Candidate("recency", fit_recency),
+    Candidate("details", fit_details),
+    Candidate("similar", fit_similar),
+    Candidate("blend", fit_blend),
 )
 
 
