@@ -1,4 +1,8 @@
-"""Usual keeps the full invented saved runs captured before model settings existed."""
+"""Usual keeps the pre-3.1 captures apart from 4.0's anime film routing.
+
+The fixture's base_sha records the original capture. Only its film and everything
+hashes changed when Japanese animation stopped appearing in film suggestions.
+"""
 
 import hashlib
 import json
