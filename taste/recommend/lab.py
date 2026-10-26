@@ -17,7 +17,7 @@ from time import perf_counter
 from typing import Any, NamedTuple
 
 from taste import settings
-from taste.recommend import experiments
+from taste.recommend import candidates, experiments
 from taste.recommend.anime import _anime_facts, _scored
 from taste.recommend.books import _book_facts, _book_scored
 from taste.recommend.candidates import Context, Facts, Rows, fit_blend, fit_details, fit_similar
@@ -125,16 +125,7 @@ def holdout_predictions(
     Fold-major order matches holdout_residuals exactly. Predictions remain
     available to tests and later callers; the CLI never prints item identifiers.
     """
-    if len(rows) < MIN_RESIDUALS:
-        return []
-    result = []
-    for fold in range(5):
-        train = [row for row in rows if row[0] % 5 != fold]
-        predict = candidate.fit(train, facts, context)
-        for key, mine, _ in rows:
-            if key % 5 == fold:
-                result.append((key, mine, predict(key)))
-    return result
+    return candidates.holdout_predictions(rows, facts, context, candidate.fit)
 
 
 def _ranks(values: Sequence[float]) -> list[float]:

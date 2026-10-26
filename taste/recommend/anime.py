@@ -9,7 +9,7 @@ from statistics import mean
 from typing import Any
 
 from taste import enrich, settings
-from taste.recommend import experiments
+from taste.recommend import experiments, selection
 from taste.recommend.model import (
     MAX_REASON_SEEDS,
     Rec,
@@ -115,8 +115,10 @@ def anime_recommendations(
     cfg = settings.get_all(conn)
     facts = _anime_facts(conn)
     scored = _scored(conn)
+    choice = cfg["rec_model_anime"]
     model = build_model(scored, facts)
-    model = experiments.apply(conn, "anime", model, scored, facts, now)
+    if choice == "usual":
+        model = experiments.apply(conn, "anime", model, scored, facts, now)
     mine = enrich.my_mean_score(conn)
     support = enrich.candidate_support(conn)
     dismissed = _dismissed(conn, "anime")
@@ -167,9 +169,17 @@ def anime_recommendations(
     candidates = set(support)
     if cfg["rec_include_plan_to_watch"]:
         candidates |= plan_to_watch
-    residuals = sorted(holdout_residuals(scored, facts))
-    if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"]:
-        residuals = sorted(experiments.residuals(conn, "anime", scored, facts, now))
+    chosen = None
+    if choice == "usual":
+        residuals = sorted(holdout_residuals(scored, facts))
+        if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"]:
+            residuals = sorted(experiments.residuals(conn, "anime", scored, facts, now))
+    else:
+        crowd = {
+            key: f["community_mean"] for key, f in facts.items() if f["community_mean"] is not None
+        }
+        chosen = selection.fit_selected(conn, "anime", choice, scored, facts, crowd)
+        residuals = chosen.residuals
     recs: list[Rec] = []
     predictions: dict[str, float] = {}
     for anime_id in candidates:
@@ -182,7 +192,11 @@ def anime_recommendations(
             continue
         if not cfg["include_nsfw"] and f.get("nsfw_rating") == "black":
             continue
-        predicted = model.predict(f["community_mean"], f["genres"], f["studios"])
+        predicted = (
+            chosen.predict(anime_id)
+            if chosen
+            else model.predict(f["community_mean"], f["genres"], f["studios"])
+        )
         rec = Rec(
             kind="anime",
             item_key=str(anime_id),
@@ -233,6 +247,8 @@ def anime_recommendations(
         for genre in filter(None, (liked, harsh)):
             details.append(f"You rate {genre} shows {model.genre[genre]:+.2f} vs your usual.")
         rec.reasons.extend(_because(seeds, liked, harsh))
+        if chosen:
+            details.append(chosen.detail)
         rec.facts["details"] = details
         recs.append(rec)
 
@@ -243,6 +259,10 @@ def anime_recommendations(
         chance = chance_at_least(predictions[rec.item_key], residuals, 8)
         if chance is not None:
             rec.facts["chance_8_plus"] = round(chance, 3)
-    metrics = {"model_overall_bias": round(model.overall, 3), **evaluate(conn, facts, scored)}
-    metrics.update(experiments.metrics(conn, "anime", scored, facts, now))
+    metrics = {"model_overall_bias": round(model.overall, 3)}
+    if chosen:
+        metrics.update({"rated": len(scored), "model": chosen.metrics})
+    else:
+        metrics.update(evaluate(conn, facts, scored))
+        metrics.update(experiments.metrics(conn, "anime", scored, facts, now))
     return recs, metrics

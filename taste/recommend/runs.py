@@ -130,6 +130,10 @@ REC_SETTINGS = [
     "rec_seed_artists",
     "include_nsfw",
     "film_prior_votes",
+    "rec_model_anime",
+    "rec_model_film",
+    "rec_model_tv",
+    "rec_model_book",
 ]
 
 

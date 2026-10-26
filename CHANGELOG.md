@@ -2,6 +2,23 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [3.1.0] - Unreleased
+
+Rating models I can compare before choosing one for a list.
+
+For You
+- Four Advanced settings select a model independently for anime, films, TV, and books; Usual remains the default
+- More details learns from saved metadata, Similar titles learns from nearby rated titles, and Blend learns a mix of both with Usual
+- Experimental lists name their model and compare its held-out error with Usual, with chances based on that model's own misses
+- Seed and genre reasons keep describing real ratings; the three 3.0 model switches apply to Usual only
+- Across everything keeps reranking the saved lists, and music keeps its listening model
+
+Lab and checks
+- A read-only `lab` command compares all candidates on the same five held-out folds without printing titles or writing recommendation runs
+- Average error, rank agreement, top-fifth recovery, and paired bootstrap intervals show whether a model beats Usual; small samples show counts without accuracy numbers
+- Feature vocabularies, scaling, penalties, neighbors, and blend weights are fitted inside training folds, including nested tuning
+- `scripts/time_app.py --models` measures fits, predictions, and calibrated list recomputes on the invented library
+
 ## [3.0.0]
 
 Backup and restore, a Rev card on how my taste changed over the year, an experimental list that mixes all my media, and a smaller database.

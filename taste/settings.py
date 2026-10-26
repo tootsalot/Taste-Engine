@@ -47,6 +47,12 @@ CLOCK_FORMATS = {"12h": "12-hour (10:52 PM)", "24h": "24-hour (22:52)"}
 WEEK_STARTS = {"sunday": "Sunday", "monday": "Monday"}
 SYNC_ON_LAUNCH = {"off": "Off", "launch": "Every time the app opens", "daily": "Once a day"}
 REPORT_SPANS = {"all": "All time", "year": "The latest year"}
+REC_MODELS = {
+    "usual": "Usual",
+    "details": "More details",
+    "similar": "Similar titles",
+    "blend": "Blend",
+}
 DASHBOARD_CARDS = {
     "taste": "Your taste",
     "crowd": "You vs the crowd",
@@ -319,12 +325,56 @@ SETTINGS: list[Setting] = [
         advanced=True,
     ),
     Setting(
+        "rec_model_anime",
+        "Anime rating model",
+        "choice",
+        "usual",
+        "Learn from your anime ratings and cached genres, studios, and show details. "
+        "Other models are experimental; compare them in the lab before switching from Usual.",
+        choices=REC_MODELS,
+        group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
+        "rec_model_film",
+        "Film rating model",
+        "choice",
+        "usual",
+        "Learn from your film ratings and cached genres, directors, and film details. "
+        "Other models are experimental; compare them in the lab before switching from Usual.",
+        choices=REC_MODELS,
+        group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
+        "rec_model_tv",
+        "TV rating model",
+        "choice",
+        "usual",
+        "Learn from your TV ratings and cached genres, creators, networks, and show details. "
+        "Other models are experimental; compare them in the lab before switching from Usual.",
+        choices=REC_MODELS,
+        group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
+        "rec_model_book",
+        "Book rating model",
+        "choice",
+        "usual",
+        "Learn from your book ratings and cached genres, moods, authors, and book details. "
+        "Other models are experimental; compare them in the lab before switching from Usual.",
+        choices=REC_MODELS,
+        group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
         "rec_dismissal_signal",
         "Learn a little from Not interested (experimental)",
         "bool",
         False,
         "Pull down genres and credited people shared with dismissed picks. "
-        "Off keeps the usual model.",
+        "Only lists set to Usual use this signal.",
         group="Recommendations",
         advanced=True,
     ),
@@ -334,7 +384,7 @@ SETTINGS: list[Setting] = [
         "bool",
         False,
         "Weight dated ratings from the last two years 25% more. MAL uses the last list edit. "
-        "Undated ratings keep their usual weight.",
+        "Undated ratings keep their usual weight. Only lists set to Usual use this signal.",
         group="Recommendations",
         advanced=True,
     ),
@@ -344,7 +394,7 @@ SETTINGS: list[Setting] = [
         "bool",
         False,
         "Let sparse TV and book ratings borrow a little theme evidence from other media. "
-        "Off keeps their usual picks.",
+        "Only lists set to Usual use this signal.",
         group="Recommendations",
         advanced=True,
     ),

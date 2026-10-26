@@ -113,7 +113,7 @@ python -m taste profiles
 
 ## How the anime suggestions work
 
-Candidates are shows that MAL users recommend alongside shows I scored above my own average, plus sequels and related shows of things I liked. Each one gets a predicted score for me in two steps:
+Candidates are shows that MAL users recommend alongside shows I scored above my own average, plus sequels and related shows of things I liked. On Usual, each one gets a predicted score for me in two steps:
 
 1. **Start from the MAL mean.** With 30 or more scored shows, the app fits my score as a straight line in the MAL mean instead of just subtracting my usual difference. A harsh critic is often harsher on weak shows than on strong ones, and a line captures that. With fewer shows a fitted line swings too much, so it stays a plain shift.
 2. **Add my leans.** What's left after step 1 is averaged per genre and per studio, so a show gets a bump for genres and studios I rate above that baseline. Small samples are pulled toward zero, so one show can't swing a whole genre.
@@ -125,6 +125,43 @@ The averages themselves stay decimal: rounding the MAL mean before comparing wou
 Predictions are averages, so they rarely reach the top of the scale. That's why each card also says how likely I am to give the show an 8 or more. The app predicts each of my scored shows without its own score (in five rounds), looks at how far my real scores landed from those predictions, and applies the same spread to the new show. It's left out when I have fewer than 20 scored shows.
 
 The reason on each card names the shows I liked that point to it, using English titles when MAL has one. The vote counts and genre numbers behind it are in the card's tooltip.
+
+## Choosing a rating model
+
+**Usual** stays the default for anime, films, TV, and books. In Advanced settings I can
+choose a different model for each list. The other choices are experimental:
+
+- **More details** learns from genres and studios, directors, creators, or authors, plus
+  the details already saved for that medium. For anime those include format, source
+  material, year, episode count, members, and popularity rank. Films also use language,
+  decade, runtime, and vote count. TV uses language, decade, networks, season count, and
+  vote count. Books use moods, literary type, decade, pages, and rating count.
+- **Similar titles** looks for up to twenty similar titles I rated, using shared genres
+  and credited people, plus MAL's recommendation links or Hardcover's similar-book links.
+  It learns from how my ratings differ from the usual crowd line.
+- **Blend** combines Usual, More details, and Similar titles. It chooses the mix using
+  ratings held out inside its training part.
+
+I switch only after the lab says a model helps on my own ratings:
+
+```text
+python -m taste --profile me lab --medium all
+```
+
+The lab opens an existing profile read-only, uses the same five folds for every model,
+and prints aggregate numbers only, never titles, people, profile names, or item IDs. It
+shows average error, rank agreement, how often predictions recover my top fifth, and a
+paired interval against Usual. Only an interval wholly below zero counts as better. Books
+use doubled stars on the 1 to 10 scale. With fewer than twenty ratings for a medium, it
+prints the count without accuracy numbers. All fitting and tuning stay inside training
+ratings, and every run uses the same rules and bootstrap seed.
+
+The selected model uses the cache, without fetching more details. Its note in For You
+names it and compares its held-out error with Usual, and Behind the score names it too.
+Its chance of an 8 or more, or 4 stars, comes from that model's own held-out misses. The
+switches for learning from Not interested, recent ratings, and borrowed themes apply to
+Usual only. Dismissed picks stay hidden with every model. Across everything keeps
+reranking the saved lists, and music keeps its listening model.
 
 ## Known limitations
 

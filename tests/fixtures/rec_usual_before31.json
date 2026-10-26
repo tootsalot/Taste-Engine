@@ -1,0 +1,103 @@
+{
+  "base_sha": "696c7d7dbbf4944c108c548badd2ea1e5b799550",
+  "canonicalization": "SHA256 of UTF-8 json.dumps(run, ensure_ascii=False, sort_keys=True, separators=(comma, colon)); run includes recs, metrics, and pre-3.1 params.",
+  "cases": {
+    "default": {
+      "adult_anime_ids": [],
+      "dismissals": [],
+      "runs": {
+        "anime": "99053efe0f48db5f3204c1d69548221f31843065cf908db2d28143ff031f1d48",
+        "book": "2059881681f247923165354b4794eb72728778c7ad338ec048918fbe23ae9671",
+        "everything": "72379916be3c564a1816190a0235a389e8f7f41905a54065ed778fece67d0797",
+        "film": "08676481928d74a241396b9f88cf44316984aeeda1c89a34abcbfb5e6af590b6",
+        "music_discover": "7856bd12f8b13b0d38ca14bcbd672bc9e013c8e43e845d22b407ed8d9fcf30cd",
+        "music_rediscover": "51da4b93fa219dd07aca7fdd1c6147b2ed7d3d69a2ddf1bd85d17d10dca74677",
+        "tv": "fd6e5dfbdeae2253adbd470c635669c8bd9784c17a7f58ba783b2b047eab8d99"
+      },
+      "settings": {
+        "film_prior_votes": 1000,
+        "include_nsfw": true,
+        "rec_dismissal_signal": false,
+        "rec_recent_ratings": false,
+        "rec_theme_transfer": false
+      }
+    },
+    "experiments_on": {
+      "adult_anime_ids": [],
+      "dismissals": [
+        [
+          "anime",
+          "2001"
+        ],
+        [
+          "film",
+          "401"
+        ],
+        [
+          "tv",
+          "800"
+        ],
+        [
+          "book",
+          "8000"
+        ]
+      ],
+      "runs": {
+        "anime": "8ca44f651a48561fe7665c724f0ab5ad5679891c891a2873fe4b37cd155b10f3",
+        "book": "ba8acb927261e7b465fa268c10586e0f3b80e8e092ab43f01ed86446a5162a94",
+        "everything": "4c12e2976534739fe904881973cf7fd6c90158892c725784bdfc6b442d74ead5",
+        "film": "c5d43f7ba611d7713a377bfbcdac49c5ef243ec5aefd3f646c54710d4a459ef3",
+        "music_discover": "d3e93a9407d7f4d58cce15b7507428f46bbceb87ee6e8178fe2034793c31dd0e",
+        "music_rediscover": "91b9fda3c32d0dd7aa7598f881f2d1f3bc31ceb091fda4f7d4deffecb73e8e3c",
+        "tv": "1150a256546dd213bb86964e5d573b0cd487619e1c8b037c61ff664015e49d84"
+      },
+      "settings": {
+        "film_prior_votes": 1000,
+        "include_nsfw": true,
+        "rec_dismissal_signal": true,
+        "rec_recent_ratings": true,
+        "rec_theme_transfer": true
+      }
+    },
+    "nsfw_off_prior_zero": {
+      "adult_anime_ids": [
+        1
+      ],
+      "dismissals": [],
+      "runs": {
+        "anime": "b71d68f47cf8e0d0adc55c8acd125238d4b7d28cb94baa2fbe278aa4378d0b06",
+        "book": "db898c8937c368d1084ea30d9a3e86594ed3bac49dc3caeaf044e8882d643054",
+        "everything": "1dfac2d2ae3096c3b2f13b74876b84b3e66defbfddb8ec11731458671e96ec72",
+        "film": "7d051717ed097e50059faa6afde2f6d8825f45a936fe58d1a892050a63a68598",
+        "music_discover": "8a8ae742154b21206e8fb3b3a425d48916046977ac884079c2b3e8987032ce8c",
+        "music_rediscover": "c0ef7a1a8a8c7a716268b8aaba98143c7952dafe1e474b44070a075f40894e66",
+        "tv": "2a9d987cdd23cd1bafa563d22791ee2100f7fb2f420a32ead18f10b6e9841d1b"
+      },
+      "settings": {
+        "film_prior_votes": 0,
+        "include_nsfw": false,
+        "rec_dismissal_signal": false,
+        "rec_recent_ratings": false,
+        "rec_theme_transfer": false
+      }
+    }
+  },
+  "library_recipe": {
+    "now": "2026-10-14T18:00:00+00:00",
+    "profile_id": "example_user",
+    "refresh": "runner.refresh_recommendations(conn, profile_id, now=NOW_DT), fetch=True by default.",
+    "saved_lists": "Recompute anime, music, film, tv, book, everything at NOW_DT; compare all seven LIST_KINDS.",
+    "settings": {
+      "lastfm_capture_scope": "desktop_only",
+      "lastfm_username": "example_user",
+      "mal_username": "example_user"
+    },
+    "sync": "runner.sync_sources(conn, profile_id, 'all', now=lambda: NOW, page_limit=1000)",
+    "transport": "World.install(monkeypatch), World.client_factory, tests-only keys in FakeKeyring.",
+    "world": {
+      "plays": 20000,
+      "seed": 11,
+      "shows": 400
+    }
+  }
+}

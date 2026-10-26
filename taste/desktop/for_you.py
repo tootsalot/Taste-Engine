@@ -667,22 +667,25 @@ class ForYouPage(LazyPage, QWidget):
                     rated = metrics.get("rated", 0)
                     noun = "films" if kind == "film" else "TV shows"
                     person = "director" if kind == "film" else "creator"
-                    self.lists[kind].note.setText(
-                        f"Predicted from your TMDB ratings ({rated} rated {noun}), the same way "
-                        "as anime: the TMDB average, your usual difference from it, and your "
-                        f"genre and {person} leans."
-                        if created
-                        else ""
-                    )
+                    note = model_note(kind, metrics)
+                    if note is None:
+                        note = (
+                            f"Predicted from your TMDB ratings ({rated} rated {noun}), "
+                            "the same way as anime: the TMDB average, your usual difference "
+                            "from it, and your "
+                            f"genre and {person} leans."
+                        )
+                    self.lists[kind].note.setText(note if created else "")
                 if kind == "book":
                     rated = metrics.get("rated", 0)
-                    self.lists[kind].note.setText(
-                        f"Predicted from your Hardcover stars ({rated} rated books), the same "
-                        "way as anime: the Hardcover average, your usual difference from it, "
-                        "and your genre and author leans."
-                        if created
-                        else ""
-                    )
+                    note = model_note(kind, metrics)
+                    if note is None:
+                        note = (
+                            f"Predicted from your Hardcover stars ({rated} rated books), the same "
+                            "way as anime: the Hardcover average, your usual difference from it, "
+                            "and your genre and author leans."
+                        )
+                    self.lists[kind].note.setText(note if created else "")
                 if kind == "everything":
                     checks = []
                     for medium, check in metrics.get("holdouts", {}).items():
@@ -827,8 +830,30 @@ class ForYouPage(LazyPage, QWidget):
         self.refresh_finished.emit(counts)
 
 
+def model_note(kind: str, metrics: dict) -> str | None:
+    """Describe a saved experimental comparison, leaving Usual's existing notes alone."""
+    block = metrics.get("model")
+    if not isinstance(block, dict) or block.get("name") == "usual":
+        return None
+    name = settings.REC_MODELS.get(block.get("name"), "Selected model")
+    count = block.get("count", 0)
+    error, usual = block.get("mae"), block.get("usual_mae")
+    if error is None or usual is None:
+        noun = "title" if count == 1 else "titles"
+        return f"{name} (experimental): {count} rated {noun}; not enough ratings to compare errors."
+    scale = 2 if kind == "book" else 1
+    unit = " stars" if kind == "book" else ""
+    return (
+        f"{name} (experimental): off by {error / scale:.2f}{unit} on average on "
+        f"{count} held-out ratings, Usual {usual / scale:.2f}{unit}."
+    )
+
+
 def accuracy_text(metrics: dict) -> str:
     """The holdout check in one line (recommend.evaluate). accuracy_tip has the rest."""
+    chosen = model_note("anime", metrics)
+    if chosen is not None:
+        return chosen
     if metrics.get("model") is None:
         return "Accuracy: not enough scored shows yet to check (it needs about 25)."
     return (
@@ -838,6 +863,14 @@ def accuracy_text(metrics: dict) -> str:
 
 
 def accuracy_tip(metrics: dict) -> str:
+    chosen = model_note("anime", metrics)
+    if chosen is not None:
+        block = metrics["model"]
+        if block.get("mae") is None or block.get("usual_mae") is None:
+            return chosen + " Errors are shown only when enough rated titles can be held out."
+        return (
+            chosen + " Both errors use the same titles, held out over five folds. Lower is better."
+        )
     if metrics.get("model") is None:
         return (
             "The check holds back about a fifth of your scored shows and needs at least 5 "

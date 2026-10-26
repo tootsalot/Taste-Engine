@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from taste import settings, themes
-from taste.recommend import experiments
+from taste.recommend import experiments, selection
 from taste.recommend.model import (
     MAX_REASON_SEEDS,
     Rec,
@@ -66,9 +66,11 @@ def book_recommendations(
     cfg = settings.get_all(conn)
     facts = _book_facts(conn)
     scored = _book_scored(conn)
-    theme_taste = themes.profile(conn) if cfg["rec_theme_transfer"] else None
+    choice = cfg["rec_model_book"]
+    theme_taste = themes.profile(conn) if choice == "usual" and cfg["rec_theme_transfer"] else None
     model = build_model(scored, facts)
-    model = experiments.apply(conn, "book", model, scored, facts, now)
+    if choice == "usual":
+        model = experiments.apply(conn, "book", model, scored, facts, now)
     mine = hardcover.my_mean_rating(conn)
     support = hardcover.candidate_support(conn)
     dismissed = _dismissed(conn, "book")
@@ -89,9 +91,15 @@ def book_recommendations(
             for position, book_id in enumerate(json.loads(similar or "[]")):
                 weight = (rating - mine) / (1 + position / 10)
                 sources.setdefault(book_id, []).append((weight, title, rating))
-    residuals = sorted(holdout_residuals(scored, facts))  # chance_at_least needs them sorted
-    if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"] or (cfg["rec_theme_transfer"]):
-        residuals = sorted(experiments.residuals(conn, "book", scored, facts, now))
+    chosen = None
+    if choice == "usual":
+        residuals = sorted(holdout_residuals(scored, facts))
+        if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"] or cfg["rec_theme_transfer"]:
+            residuals = sorted(experiments.residuals(conn, "book", scored, facts, now))
+    else:
+        crowd = {key: f["rating"] * 2 for key, f in facts.items() if f["rating"] is not None}
+        chosen = selection.fit_selected(conn, "book", choice, scored, facts, crowd)
+        residuals = chosen.residuals
     recs: list[Rec] = []
     for book_id in set(support) | wanted:
         f = facts.get(book_id)
@@ -101,7 +109,11 @@ def book_recommendations(
             continue  # read, reading, paused, or given up
         if f["rating"] is None or (f["ratings_count"] or 0) < BOOK_MIN_RATINGS:
             continue
-        predicted = model.predict(f["rating"] * 2, f["genres"], f["studios"])
+        predicted = (
+            chosen.predict(book_id)
+            if chosen
+            else model.predict(f["rating"] * 2, f["genres"], f["studios"])
+        )
         if theme_taste is not None:
             shared = themes.candidate_themes(conn, "book", str(book_id), f)
             theme_shift = themes.transfer(theme_taste, "book", shared, len(scored))
@@ -153,10 +165,15 @@ def book_recommendations(
                 f"Experimental theme adjustment: {theme_shift / 2:+.2f} stars, "
                 f"shrunk over {len(scored)} own ratings."
             )
+        if chosen:
+            details.append(chosen.detail)
         rec.facts["details"] = details
         recs.append(rec)
     recs.sort(key=lambda r: (-(r.score + 0.08 * math.log1p(r.support)), r.title))
     metrics = {"model_overall_bias": round(model.overall / 2, 3), "rated": len(scored)}
-    metrics.update(experiments.metrics(conn, "book", scored, facts, now))
-    metrics["theme_transfer"] = experiments.transfer_metrics(conn, "book", scored, facts, now)
+    if chosen:
+        metrics["model"] = chosen.metrics
+    else:
+        metrics.update(experiments.metrics(conn, "book", scored, facts, now))
+        metrics["theme_transfer"] = experiments.transfer_metrics(conn, "book", scored, facts, now)
     return recs[: cfg["rec_count"]], metrics

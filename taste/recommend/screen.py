@@ -9,7 +9,7 @@ from datetime import date
 from typing import Any
 
 from taste import settings, themes
-from taste.recommend import experiments
+from taste.recommend import experiments, selection
 from taste.recommend.model import (
     FILM_PRIOR_VOTES,
     MAX_REASON_SEEDS,
@@ -133,9 +133,15 @@ def _screen_recommendations(
     typical = _typical_tmdb_average(conn, kind)
     scored = _screen_scored(conn, typical, prior, kind)
     raw = {tmdb_id: facts[tmdb_id]["vote_average"] for tmdb_id, _, _ in scored}
-    theme_taste = themes.profile(conn) if cfg["rec_theme_transfer"] and kind == "tv" else None
+    choice = cfg[f"rec_model_{item_kind}"]
+    theme_taste = (
+        themes.profile(conn)
+        if choice == "usual" and cfg["rec_theme_transfer"] and kind == "tv"
+        else None
+    )
     model = build_model(scored, facts)
-    model = experiments.apply(conn, item_kind, model, scored, facts, today)
+    if choice == "usual":
+        model = experiments.apply(conn, item_kind, model, scored, facts, today)
     mine = tmdb.my_rating_mean(conn, kind)
     support = tmdb.candidate_support(conn, kind)
     dismissed = _dismissed(conn, item_kind)
@@ -166,13 +172,23 @@ def _screen_recommendations(
     ):
         weight = (rating - (mine or 0)) / (1 + position / 10)
         sources.setdefault(rec_id, []).append((weight, title, rating))
-    residuals = sorted(holdout_residuals(scored, facts))  # chance_at_least needs them sorted
-    if (
-        cfg["rec_dismissal_signal"]
-        or cfg["rec_recent_ratings"]
-        or (cfg["rec_theme_transfer"] and kind == "tv")
-    ):
-        residuals = sorted(experiments.residuals(conn, item_kind, scored, facts, today))
+    chosen = None
+    if choice == "usual":
+        residuals = sorted(holdout_residuals(scored, facts))
+        if (
+            cfg["rec_dismissal_signal"]
+            or cfg["rec_recent_ratings"]
+            or (cfg["rec_theme_transfer"] and kind == "tv")
+        ):
+            residuals = sorted(experiments.residuals(conn, item_kind, scored, facts, today))
+    else:
+        crowd_values = {
+            key: shrunk(f["vote_average"], f["vote_count"], typical, prior)
+            for key, f in facts.items()
+            if f["vote_average"] is not None
+        }
+        chosen = selection.fit_selected(conn, item_kind, choice, scored, facts, crowd_values)
+        residuals = chosen.residuals
     recs: list[Rec] = []
     for tmdb_id in (set(support) | watchlist) - rated:
         f = facts.get(tmdb_id)
@@ -185,7 +201,9 @@ def _screen_recommendations(
         if kind == "tv" and is_anime(f):
             continue  # MAL and the Anime tab cover anime
         crowd = shrunk(f["vote_average"], f["vote_count"], typical, prior)
-        predicted = model.predict(crowd, f["genres"], f["studios"])
+        predicted = (
+            chosen.predict(tmdb_id) if chosen else model.predict(crowd, f["genres"], f["studios"])
+        )
         if theme_taste is not None:
             shared = themes.candidate_themes(conn, item_kind, str(tmdb_id), f)
             theme_shift = themes.transfer(theme_taste, item_kind, shared, len(scored))
@@ -235,6 +253,8 @@ def _screen_recommendations(
                 f"Experimental theme adjustment: {theme_shift:+.2f} points, "
                 f"shrunk over {len(scored)} own ratings."
             )
+        if chosen:
+            details.append(chosen.detail)
         rec.facts["details"] = details
         recs.append(rec)
     recs.sort(key=lambda r: (-(r.score + 0.15 * math.log1p(r.support)), r.title))
@@ -244,9 +264,12 @@ def _screen_recommendations(
         "typical_tmdb_average": round(typical, 2),
         **holdout_check(scored, residuals, raw),
     }
-    metrics.update(experiments.metrics(conn, item_kind, scored, facts, today))
-    if kind == "tv":
-        metrics["theme_transfer"] = experiments.transfer_metrics(
-            conn, item_kind, scored, facts, today
-        )
+    if chosen:
+        metrics["model"] = chosen.metrics
+    else:
+        metrics.update(experiments.metrics(conn, item_kind, scored, facts, today))
+        if kind == "tv":
+            metrics["theme_transfer"] = experiments.transfer_metrics(
+                conn, item_kind, scored, facts, today
+            )
     return recs[: cfg["rec_count"]], metrics

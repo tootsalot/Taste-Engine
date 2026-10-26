@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from taste.recommend.model import TasteModel, build_model
+from taste.recommend.model import MIN_RESIDUALS, TasteModel, build_model
 
 Rows = list[tuple[int, float, float]]
 Facts = dict[int, dict[str, Any]]
@@ -28,6 +28,25 @@ class Context:
     crowd: dict[int, float]
     # The lab freezes recency to stored data; new models do not use rating dates.
     now: date
+
+
+def holdout_predictions(
+    rows: Rows,
+    facts: Facts,
+    context: Context,
+    fit: Callable[[Rows, Facts, Context], Callable[[int], float]],
+) -> list[tuple[int, float, float]]:
+    """Predict every rating once outside its source-id fold, shared by lab and lists."""
+    if len(rows) < MIN_RESIDUALS:
+        return []
+    result = []
+    for fold in range(5):
+        train = [row for row in rows if row[0] % 5 != fold]
+        predict = fit(train, facts, context)
+        for key, mine, _ in rows:
+            if key % 5 == fold:
+                result.append((key, mine, predict(key)))
+    return result
 
 
 def _clamp(value: float) -> float:

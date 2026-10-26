@@ -17,7 +17,7 @@ import requests
 from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
-from taste import db, profiles, raw, runner
+from taste import db, profiles, raw, recommend, runner, settings
 from taste.desktop import motion, theme
 from taste.desktop.main_window import PAGES
 from taste.recommend import lab
@@ -50,7 +50,7 @@ def main() -> None:
     parser.add_argument(
         "--models",
         action="store_true",
-        help="also time each experimental model fit and predictions",
+        help="also time experimental fits, predictions, and calibrated list recomputes",
     )
     args = parser.parse_args()
     with (
@@ -142,6 +142,17 @@ def main() -> None:
                             timings[f"{title} (fit + {len(context.crowd)} predictions)"] = (
                                 time.perf_counter() - start
                             )
+                            key = f"rec_model_{medium}"
+                            previous = settings.get(conn, key)
+                            try:
+                                settings.set_value(conn, key, candidate.name)
+                                start = time.perf_counter()
+                                recommend.compute_all(conn, NOW_DT, (medium,))
+                                timings[f"{title} list (fit + calibration + save)"] = (
+                                    time.perf_counter() - start
+                                )
+                            finally:
+                                settings.set_value(conn, key, previous)
             finally:
                 conn.close()
         finally:

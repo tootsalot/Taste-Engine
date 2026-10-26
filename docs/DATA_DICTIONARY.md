@@ -585,7 +585,7 @@ One row per setting. Types, defaults, and validation live in `taste/settings.py`
 
 | Column | Type | Description |
 |---|---|---|
-| setting_key | TEXT PK | Profile: `display_name`, `mal_username`, `lastfm_username`, `timezone`, `include_nsfw`. Last.fm: `lastfm_capture_scope`, `lastfm_scope_note`. Reports: `genre_min_sample`, `in_line_threshold`, `top_n_all_time`, `top_n_per_year`, `top_n_per_month`. Recommendations: `rec_count`, `rec_min_raters`, `rec_media_types`, `rec_include_plan_to_watch`, `rec_seed_artists`. Syncing and storage: `lastfm_lookback_days`, `raw_retention_days`. |
+| setting_key | TEXT PK | Profile: `display_name`, `mal_username`, `lastfm_username`, `timezone`, `include_nsfw`. Last.fm: `lastfm_capture_scope`, `lastfm_scope_note`. Reports: `genre_min_sample`, `in_line_threshold`, `top_n_all_time`, `top_n_per_year`, `top_n_per_month`. Recommendations: `rec_count`, `rec_min_raters`, `rec_media_types`, `rec_include_plan_to_watch`, `rec_seed_artists`, `rec_model_anime`, `rec_model_film`, `rec_model_tv`, `rec_model_book`. Syncing and storage: `lastfm_lookback_days`, `raw_retention_days`. |
 | setting_value | TEXT | The value as text (booleans are `1` / `0`, `rec_media_types` is a comma-separated list such as `tv,movie,ona,ova`). Views `CAST` the numeric ones. |
 | updated_at | TEXT | When it was last changed (UTC). |
 
@@ -601,10 +601,10 @@ One row per computed list.
 | Column | Type | Description |
 |---|---|---|
 | rec_run_id | INTEGER PK | Surrogate key. |
-| kind | TEXT | `anime`, `music_discover` (artists I've never played), or `music_rediscover` (artists I played a lot who have gone quiet). |
+| kind | TEXT | `anime`, `film`, `tv`, `book`, `music_discover` (artists I've never played), `music_rediscover` (artists I played a lot who have gone quiet), or `everything` (the mixed list). |
 | created_at | TEXT | When it was computed (UTC). |
 | params_json | TEXT | The recommendation settings used, as JSON. |
-| metrics_json | TEXT | For `anime`: `model_overall_bias` (my usual difference from the MAL mean), and the holdout check: `held_out` (scored shows hidden from the model), and the average error in MAL points of `model`, `community` (the MAL mean alone), and `overall` (the MAL mean plus my usual difference). `{}` for music. |
+| metrics_json | TEXT | Accuracy and diagnostic numbers. Usual anime retains `model_overall_bias` (my usual difference from the MAL mean), `held_out` (scored shows hidden from the model), and average whole-score errors in `model`, `community` (MAL alone), and `overall` (MAL plus my usual difference). Non-Usual rated lists carry the `model` object described under Rating models and the lab below. `{}` for music. |
 
 ### `rec_items`
 The suggestions in a run, best first.
@@ -726,7 +726,8 @@ eight slides; months stay at most seven. `drift` follows the combined clock/year
 ## Optional recommendation experiments (3.0)
 
 `rec_dismissal_signal` and `rec_recent_ratings` are Advanced app_settings booleans, both false
-by default and included in rec_runs.params_json. The first subtracts 0.3 times a dismissed
+by default and included in rec_runs.params_json. They apply only to lists set to Usual.
+The first subtracts 0.3 times a dismissed
 feature's count divided by count + shrinkage (genres 5, people 3), with the existing half
 weight on people. Studios, directors, creators, and authors use the same feature slot.
 No dismissal becomes a core_rating. The second gives samples with known dates in the last
@@ -734,13 +735,71 @@ two calendar years weight 1.25 in the same slope, shift, and feature fit. Future
 unknown dates keep weight 1. MAL uses its last list edit as a proxy; TMDB uses its rating
 date; Hardcover's core source_updated_at is absent, so it is not assigned a made-up date.
 
-Each rated list's metrics_json has `experiments.dismissal` and `experiments.recency`, each
+Each list set to Usual saves `experiments.dismissal` and `experiments.recency` in metrics_json, each
 with `enabled`, `off`, and `on`. Each check records `count` and `mae` on the existing 1 to 10
 model scale, including doubled book stars. Each experiment is compared independently against
 both off. All use the same five folds by source id, fitting without held-out ratings. Under
 20 ratings, count is 0 and mae is null, rather than an invented accuracy. The ordinary
 accuracy fields describe the usual model. Chance estimates use the active experiment fit.
 Music has no personal rating holdout and keeps its listening model.
+
+
+## Rating models and the lab (3.1)
+
+Four Advanced choice settings in the Recommendations group select a model independently
+for each rated list. They live in `app_settings` and are included in
+`rec_runs.params_json`; changing one recomputes recommendations from the cache.
+
+| Setting | List | Default |
+|---|---|---|
+| `rec_model_anime` | Anime | `usual` |
+| `rec_model_film` | Films | `usual` |
+| `rec_model_tv` | TV | `usual` |
+| `rec_model_book` | Books | `usual` |
+
+Each accepts `usual` (Usual), `details` (More details), `similar` (Similar titles), or
+`blend` (Blend). The latter three are experimental. Usual keeps the existing scores,
+reasons, chances, and accuracy fields. The 3.0 dismissal, recency, and theme-transfer
+switches apply to Usual only.
+
+On another model, `rec_runs.metrics_json.model` is an object:
+
+| Field | Meaning |
+|---|---|
+| `name` | `details`, `similar`, or `blend`. |
+| `count` | Eligible rated titles. At twenty or more, each was predicted once outside its training fold. |
+| `mae` | Mean absolute error of the selected model on those held-out titles, on the 1 to 10 scale. |
+| `usual_mae` | Plain Usual's mean absolute error on the same titles and folds, with the three 3.0 switches off. |
+
+Book errors use doubled stars, matching the lab. For You divides book errors by two and
+labels them as stars; stored values and lab output stay on the doubled scale. Below
+twenty eligible ratings, `count` still records the actual number, both errors are null,
+and no chance estimate is shown. Usual does not gain this block. In particular, anime's
+existing numeric `model` field remains its old single-fold whole-score error on Usual;
+only a non-Usual anime run replaces that value with the object above.
+
+`rec_items.facts_json.details` gains a sentence such as `Predicted by Similar titles,
+experimental.` on non-Usual lists. Seed and genre reasons still describe real ratings.
+Their `chance_8_plus`, or `chance_4_plus` for books, uses residuals from the selected
+model's own five folds, including hidden adult anime in the counts. Hidden adult titles
+and pictures are still withheld. Across everything reranks the saved lists as before;
+its baseline error summary reads `usual_mae` and `count` from a selected model's block.
+
+`taste.recommend.lab.evaluate` and the read-only `lab` command compare `usual`,
+`dismissals`, `recency`, `details`, `similar`, and `blend` on identical source-id-modulo-five
+folds. Lab results are not written to `rec_runs` or another table. Every fitted base,
+vocabulary, numeric scale, penalty, neighbor leftover, and blend weight uses training
+ratings only; tuning uses inner folds. Item metadata may include held-out titles.
+
+The lab records decimal MAE, whole-score MAE for anime, Spearman correlation with average
+ranks for ties, and top-fifth recovery. Top-fifth sets contain `ceil(count / 5)` titles;
+source ID breaks ties. This rule can favor constant predictions. Undefined rank
+correlation is null. Candidate-minus-Usual absolute-error differences use 1,000 paired
+bootstrap resamples with `random.Random(0)` and a 95% percentile interval. An interval
+wholly below zero means better, wholly above zero means worse, and otherwise means same.
+Below twenty ratings, only the count is reported. Runtime seconds are observational;
+numeric model results are deterministic. The lab's recency reference is the medium's
+latest stored rating date, with a fixed epoch reference when no dates are known.
 
 
 ## Shared themes and mixed suggestions (3.0)
@@ -766,7 +825,8 @@ stamp, and each rated medium's five-fold baseline holdout on the 1 to 10 model s
 records count 0, mae null, and a note that it has plays rather than personal ratings.
 
 `rec_theme_transfer` is an Advanced app_settings boolean, false by default, recorded with
-run parameters. When on, TV/books predictions add 5 times the other media's mean theme lean,
+run parameters. It applies only to TV and book lists set to Usual. When on, those predictions
+add 5 times the other media's mean theme lean,
 multiplied by 10/(own rated count + 10). The shift is on the 1 to 10 model scale and clipped
 to its limits, with book stars converted back afterwards. facts_json details state the shift.
 `metrics_json.theme_transfer` stores enabled/off/on checks. Each fold removes held-out core
