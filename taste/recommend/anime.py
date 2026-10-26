@@ -20,7 +20,6 @@ from taste.recommend.model import (
     about_text,
     build_model,
     chance_at_least,
-    holdout_residuals,
     short_count,
     whole_score,
 )
@@ -183,7 +182,8 @@ def anime_recommendations(
         eligible[anime_id] = f
     chosen = None
     if choice == "usual":
-        residuals = sorted(holdout_residuals(scored, facts))
+        calibration = selection.calibration(conn, "anime", "usual", scored, facts)
+        residuals = sorted(mine - guess for _, mine, guess in calibration["selected"])
         if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"]:
             residuals = sorted(experiments.residuals(conn, "anime", scored, facts, now))
     else:

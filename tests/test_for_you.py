@@ -10,10 +10,10 @@ from taste.desktop.context import AppContext
 from taste.desktop.for_you import (
     LISTS,
     RecCard,
-    accuracy_text,
-    accuracy_tip,
     chance_text,
     columns_for,
+    model_note,
+    model_tip,
     safe_link,
     score_text,
 )
@@ -148,9 +148,7 @@ def test_for_you_is_second_in_the_sidebar(window):
     assert page.updated.text() == "Never refreshed"
     assert page.status.isHidden()  # no empty band between the heading and the tabs
     assert "Sync MyAnimeList, then press Refresh" in page.lists["anime"].empty.text()
-    assert page.lists["anime"].note.text() == (
-        "Accuracy: not enough scored shows yet to check (it needs about 25)."
-    )
+    assert page.lists["anime"].note.text() == ""
 
 
 def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
@@ -422,11 +420,9 @@ def test_helpers():
     assert score_text("anime", Rec("anime", "1", "T")) == ("-", "")
     assert chance_text(0.684) == "68% chance you'd give it an 8 or more"
     metrics = {"held_out": 87, "community": 1.43, "overall": 1.40, "model": 1.35}
-    # One line on the page; the full comparison is in its tooltip.
-    assert accuracy_text(metrics) == (
-        "Accuracy: off by 1.35 points on average on 87 shows it hadn't seen (MAL alone: 1.43)."
-    )
-    assert "MAL score plus your usual difference by 1.40" in accuracy_tip(metrics)
+    # Old numeric checks remain readable; the page requests the new plain check.
+    assert model_note("anime", metrics).startswith("Usual: recompute")
+    assert "off by" not in model_tip("anime", metrics)
     assert settings.BY_KEY["rec_count"].default == 30
 
 
@@ -545,7 +541,7 @@ def test_tv_tab_follows_films_and_dismisses_tv_only(window):
     page.tabs.setCurrentWidget(page.lists["tv"])
     assert page.lists["tv"].detail.score.text() == "8.2"
     assert "TMDB 7.8" in page.lists["tv"].detail.caption.text()
-    assert "creator" in page.lists["tv"].note.text()
+    assert "Not enough ratings to check yet" in page.lists["tv"].note.text()
     page.lists["tv"].detail.dismiss_button.click()
     conn = window.ctx.connect("me")
     assert recommend.latest(conn, "tv")[0] == []

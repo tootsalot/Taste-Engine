@@ -21,7 +21,6 @@ from taste.recommend.model import (
     build_model,
     chance_at_least,
     holdout_check,
-    holdout_residuals,
     short_count,
     shrunk,
 )
@@ -189,7 +188,8 @@ def _screen_recommendations(
         eligible[tmdb_id] = f
     chosen = None
     if choice == "usual":
-        residuals = sorted(holdout_residuals(scored, facts))
+        calibration = selection.calibration(conn, item_kind, "usual", scored, facts)
+        residuals = sorted(mine - guess for _, mine, guess in calibration["selected"])
         if (
             cfg["rec_dismissal_signal"]
             or cfg["rec_recent_ratings"]

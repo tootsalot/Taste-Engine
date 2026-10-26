@@ -19,7 +19,6 @@ from taste.recommend.model import (
     about_text,
     build_model,
     chance_at_least,
-    holdout_residuals,
     short_count,
 )
 from taste.sources import hardcover
@@ -103,7 +102,8 @@ def book_recommendations(
         eligible[book_id] = f
     chosen = None
     if choice == "usual":
-        residuals = sorted(holdout_residuals(scored, facts))
+        calibration = selection.calibration(conn, "book", "usual", scored, facts)
+        residuals = sorted(mine - guess for _, mine, guess in calibration["selected"])
         if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"] or cfg["rec_theme_transfer"]:
             residuals = sorted(experiments.residuals(conn, "book", scored, facts, now))
     else:

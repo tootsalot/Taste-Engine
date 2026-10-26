@@ -13,14 +13,64 @@ from typing import Any
 
 from PySide6.QtCore import QSize, QThread, Signal
 
-from taste import backup, db, profiles, recap, runner
+from taste import backup, db, profiles, recap, recommend, runner
 from taste.desktop import recap_cards
 from taste.desktop.art import decode
+from taste.recommend import comparison
 from taste.secrets_store import SecretStore
 
 
 class SyncCancelled(Exception):
     """Raised inside the sync when the user quits mid-sync."""
+
+
+class ModelCheckWorker(QThread):
+    """Compare rating models using a connection owned by this short background job."""
+
+    message = Signal(str)
+
+    def __init__(self, profile_id: str) -> None:
+        super().__init__()
+        self.profile_id = profile_id
+        self.path = profiles.db_path(profile_id).resolve()
+        self.file_identity = self.identity()
+        self.version = recommend.MODEL_SET_VERSION
+        self.generation = 0  # assigned by the window that starts this job
+        self.result: dict | None = None
+        self._cancelled = False
+
+    def identity(self) -> tuple[int, int] | None:
+        try:
+            info = self.path.stat()
+            return info.st_dev, info.st_ino
+        except FileNotFoundError:
+            return None
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled
+
+    def run(self) -> None:
+        self.result = None
+        if self._cancelled or not self.path.is_file() or self.identity() != self.file_identity:
+            return
+        conn = None
+        try:
+            conn = db.connect(self.path, setup=False)
+            result = comparison.check_models(
+                conn, cancelled=self.is_cancelled, progress=self.message.emit
+            )
+            if not self._cancelled:
+                self.result = result
+        except Exception as exc:
+            self.message.emit(
+                f"The rating check stopped on an unexpected error ({type(exc).__name__})."
+            )
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 class SyncWorker(QThread):

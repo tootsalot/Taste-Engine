@@ -26,7 +26,7 @@ from taste.activity import Period
 from taste.desktop import motion, theme, ui_state
 from taste.desktop.context import AppContext
 from taste.desktop.dashboard import DashboardPage
-from taste.desktop.dialogs import NewProfileDialog
+from taste.desktop.dialogs import ModelChoiceDialog, NewProfileDialog
 from taste.desktop.for_you import ForYouPage
 from taste.desktop.nav import NavList, nav_button
 from taste.desktop.profile_switcher import ProfileSwitcher, save_picture
@@ -34,8 +34,9 @@ from taste.desktop.recap_page import RecapPage
 from taste.desktop.reports_page import ReportsPage
 from taste.desktop.settings_page import SettingsPage
 from taste.desktop.widgets import heading, label
-from taste.desktop.workers import RecapWorker
+from taste.desktop.workers import ModelCheckWorker, RecapWorker
 from taste.profiles import ProfileError
+from taste.recommend import comparison
 from taste.settings import SettingError
 
 # The everyday pages, then the Reports section, then Settings at the bottom.
@@ -66,6 +67,15 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.ctx = ctx or AppContext()
         self._closing = False  # the close was confirmed; it finishes once threads end
+        self._first_paint = False
+        self._launch_sync_decided = False
+        self._starting_launch_sync = False
+        self._model_generation = 0
+        self.model_worker: ModelCheckWorker | None = None
+        self.model_dialog: ModelChoiceDialog | None = None
+        self._model_offer: tuple[ModelCheckWorker, dict] | None = None
+        self._model_seen: set[tuple[Path, tuple[int, int] | None, int]] = set()
+        self._pending_model_choice: str | None = None
         self.setWindowTitle("Taste Engine")
         self.setWindowIcon(theme.app_icon())
         self.resize(1180, 820)
@@ -240,6 +250,7 @@ class MainWindow(QMainWindow):
         self._on_profile_changed()
 
     def _on_profile_changed(self, _index: int = 0) -> None:
+        self._cancel_model_check()
         pid = self.current_profile()
         has_profile = pid is not None
         self.sidebar.setEnabled(has_profile)
@@ -263,6 +274,7 @@ class MainWindow(QMainWindow):
             # Without a profile the page list was disabled, so focus fell to the switcher
             # and would sit ringed there; the page list takes it back.
             self.sidebar.focus_current()
+        QTimer.singleShot(0, self._maybe_check_rating_model)
 
     def _on_page_changed(self, row: int) -> None:
         if self.current_profile() is None or row < 0:
@@ -432,6 +444,15 @@ class MainWindow(QMainWindow):
     def sync_on_launch(self) -> bool:
         """Start a Sync everything if the profile asks for one on launch: every time, or
         when the last sync was a day ago or more. Returns whether it started."""
+        self._starting_launch_sync = True
+        try:
+            return self._start_launch_sync()
+        finally:
+            self._starting_launch_sync = False
+            self._launch_sync_decided = True
+            QTimer.singleShot(0, self._maybe_check_rating_model)
+
+    def _start_launch_sync(self) -> bool:
         pid = self.current_profile()
         if self._closing or pid is None or not profiles.exists(pid) or self.is_busy():
             return False
@@ -453,16 +474,25 @@ class MainWindow(QMainWindow):
         return self.dashboard.is_syncing()
 
     def _blocks_sync(self) -> bool:
-        return self.for_you.is_refreshing() or self.settings.is_transferring()
+        return (
+            self.for_you.is_refreshing()
+            or self.settings.is_transferring()
+            or self.model_worker is not None
+        )
 
     def _blocks_recs(self) -> bool:
-        return self.dashboard.is_syncing() or self.settings.is_transferring()
+        return (
+            self.dashboard.is_syncing()
+            or self.settings.is_transferring()
+            or self.model_worker is not None
+        )
 
     def is_busy(self) -> bool:
         return (
             self.dashboard.is_syncing()
             or self.for_you.is_refreshing()
             or self.settings.is_transferring()
+            or self.model_worker is not None
         )
 
     def _update_busy(self, *_args) -> None:
@@ -475,6 +505,161 @@ class MainWindow(QMainWindow):
         if had_focus and not enabled:
             # Qt would hand focus to the next control, the sidebar toggle, and ring it.
             self.sidebar.focus_current()
+        QTimer.singleShot(0, self._maybe_check_rating_model)
+
+    # -- first-launch rating model choice -----------------------------------
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().paintEvent(event)
+        if not self._first_paint:
+            self._first_paint = True
+            QTimer.singleShot(0, self._maybe_check_rating_model)
+
+    def _dismiss_model_dialog(self) -> None:
+        dialog, self.model_dialog = self.model_dialog, None
+        if dialog is not None:
+            dialog.reject()
+            dialog.deleteLater()
+
+    def _cancel_model_check(self) -> None:
+        self._model_generation += 1
+        worker, self.model_worker = self.model_worker, None
+        if worker is not None:
+            worker.cancel()
+        self._model_offer = None
+        self._pending_model_choice = None
+        self._dismiss_model_dialog()
+        self._update_busy()
+
+    def _current_model_check(self, worker: ModelCheckWorker) -> bool:
+        pid = self.current_profile()
+        return (
+            not self._closing
+            and not worker.is_cancelled()
+            and worker.generation == self._model_generation
+            and pid == worker.profile_id
+            and worker.version == recommend.MODEL_SET_VERSION
+            and profiles.exists(pid)
+            and profiles.db_path(pid).resolve() == worker.path
+            and worker.identity() == worker.file_identity
+        )
+
+    def _maybe_check_rating_model(self) -> None:
+        if (
+            self._closing
+            or not self._first_paint
+            or not self.isVisible()
+            or not self._launch_sync_decided
+            or self._starting_launch_sync
+            or self.is_busy()
+            or self.model_dialog is not None
+        ):
+            return
+        if self._model_offer is not None:
+            self.ask_rating_model(answer=self._pending_model_choice)
+            return
+        pid = self.current_profile()
+        if pid is None or not profiles.exists(pid):
+            return
+        path = profiles.db_path(pid).resolve()
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            return
+        key = (path, (info.st_dev, info.st_ino), recommend.MODEL_SET_VERSION)
+        if key in self._model_seen:
+            return
+        conn = self.ctx.connect(pid)
+        try:
+            if comparison.asked_version(conn) >= recommend.MODEL_SET_VERSION:
+                return
+        finally:
+            conn.close()
+        worker = ModelCheckWorker(pid)
+        worker.generation = self._model_generation
+        worker.message.connect(self._model_check_message)
+        worker.finished.connect(self._model_check_finished)
+        self.model_worker = worker
+        self.ctx.track(worker)
+        worker.start()
+        self._update_busy()
+
+    def _model_check_message(self, text: str) -> None:
+        worker = self.sender()
+        if worker is not None and worker is self.model_worker and self._current_model_check(worker):
+            self.say(text)
+
+    def _model_check_finished(self) -> None:
+        worker = self.sender()
+        if worker is None or worker is not self.model_worker:
+            return
+        self.model_worker = None
+        if self._current_model_check(worker) and worker.result is not None:
+            if worker.result["count"] == 0:
+                conn = self.ctx.connect(worker.profile_id)
+                try:
+                    comparison.mark_asked(conn, version=worker.version)
+                finally:
+                    conn.close()
+                self._model_seen.add((worker.path, worker.file_identity, worker.version))
+            else:
+                self._model_offer = worker, worker.result
+        else:
+            # A failed check gets another chance next launch, without a retry loop.
+            self._model_seen.add((worker.path, worker.file_identity, worker.version))
+        self._update_busy()
+
+    def ask_rating_model(self, answer: str | None = None) -> bool:
+        """Open the startup choice; an explicit answer bypasses the dialog for tests."""
+        if self._model_offer is None:
+            return False
+        worker, checks = self._model_offer
+        if not self._current_model_check(worker):
+            self._cancel_model_check()
+            return False
+        if answer is not None and answer not in (*settings.REC_MODELS, "later"):
+            raise ValueError("Unknown rating model choice")
+        if answer is None:
+            if self.model_dialog is not None or self.is_busy():
+                return False
+            conn = self.ctx.connect(worker.profile_id)
+            try:
+                selected = settings.get(conn, "rec_model_anime")
+            finally:
+                conn.close()
+            dialog = ModelChoiceDialog(checks, selected=selected, parent=self)
+            self.model_dialog = dialog
+            self._model_seen.add((worker.path, worker.file_identity, worker.version))
+            dialog.accepted.connect(self._model_choice_accepted)
+            dialog.rejected.connect(self._model_choice_later)
+            dialog.open()
+            return True
+        self._dismiss_model_dialog()
+        self._model_seen.add((worker.path, worker.file_identity, worker.version))
+        if answer != "later" and self.is_busy():
+            self._pending_model_choice = answer
+            return True
+        self._model_offer = None
+        self._pending_model_choice = None
+        if answer != "later":
+            conn = self.ctx.connect(worker.profile_id)
+            try:
+                changed = comparison.apply_choice(conn, answer, version=worker.version)
+            finally:
+                conn.close()
+            # Choosing the existing default still refreshes the saved suggestions.
+            keys = {f"rec_model_{medium}" for medium in ("anime", "film", "tv", "book")}
+            self._after_settings_saved(sorted(changed | keys))
+        return True
+
+    def _model_choice_accepted(self) -> None:
+        dialog = self.sender()
+        if dialog is not None and dialog is self.model_dialog:
+            self.ask_rating_model(answer=dialog.choice())
+
+    def _model_choice_later(self) -> None:
+        if self.sender() is self.model_dialog:
+            self.ask_rating_model(answer="later")
 
     def _ask_new_profile(self) -> tuple[str, str] | None:
         dialog = NewProfileDialog(self)
@@ -562,6 +747,8 @@ class MainWindow(QMainWindow):
             conn.close()
 
     def _after_settings_saved(self, changed: list[str]) -> None:
+        # Release the model-check blocker before starting this settings recompute.
+        self._cancel_model_check()
         pid = self.current_profile()
         if "clock_format" in changed or "week_start" in changed:
             self._apply_preferences(pid)
@@ -613,6 +800,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self._closing = True
+            self._cancel_model_check()
             # Stops after the page in flight; committed pages stay and the next run resumes.
             for worker in workers:
                 if worker.isRunning():

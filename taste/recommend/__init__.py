@@ -65,3 +65,5 @@ from taste.recommend.screen import _typical_tmdb_average as _typical_tmdb_averag
 from taste.recommend.screen import film_recommendations as film_recommendations
 from taste.recommend.screen import is_anime as is_anime
 from taste.recommend.screen import tv_recommendations as tv_recommendations
+
+MODEL_SET_VERSION = 1

@@ -15,6 +15,7 @@ from taste.desktop.dialogs import ConfirmDeleteDialog, NewProfileDialog
 from taste.desktop.main_window import PAGES, MainWindow
 from taste.desktop.settings_page import FORM_SETTINGS
 from taste.http_client import HttpClient
+from taste.recommend import comparison
 from taste.secrets_store import SecretStore
 from tests.conftest import FakeKeyring, FakeResponse, FakeTransport, load_fixture
 from tests.test_lastfm_sync import FakeLastfm
@@ -77,6 +78,11 @@ def visible_text(win) -> str:
 
 def set_up_profile(win, pid="me"):
     assert win.new_profile((pid, "Me"))
+    conn = win.ctx.connect(pid)
+    try:
+        comparison.mark_asked(conn)
+    finally:
+        conn.close()
     page = win.settings
     for source, key in (("mal", MAL_KEY), ("lastfm", LASTFM_KEY)):
         page.sources.usernames[source].setText("example_user")

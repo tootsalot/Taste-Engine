@@ -42,7 +42,7 @@ from taste.desktop.widgets import (
     section,
 )
 from taste.desktop.workers import RecsWorker
-from taste.recommend import Rec, whole_score
+from taste.recommend import Rec, comparison, whole_score
 
 LISTS = (
     ("anime", "Anime"),
@@ -663,29 +663,15 @@ class ForYouPage(LazyPage, QWidget):
                 text = f"{title} · {len(recs)}" if created else title
                 self.tabs.setTabText(index, text)
                 self.switch.set_text(kind, text)
-                if kind in ("film", "tv"):
-                    rated = metrics.get("rated", 0)
-                    noun = "films" if kind == "film" else "TV shows"
-                    person = "director" if kind == "film" else "creator"
-                    note = model_note(kind, metrics)
-                    if note is None:
-                        note = (
-                            f"Predicted from your TMDB ratings ({rated} rated {noun}), "
-                            "the same way as anime: the TMDB average, your usual difference "
-                            "from it, and your "
-                            f"genre and {person} leans."
-                        )
-                    self.lists[kind].note.setText(note if created else "")
-                if kind == "book":
-                    rated = metrics.get("rated", 0)
-                    note = model_note(kind, metrics)
-                    if note is None:
-                        note = (
-                            f"Predicted from your Hardcover stars ({rated} rated books), the same "
-                            "way as anime: the Hardcover average, your usual difference from it, "
-                            "and your genre and author leans."
-                        )
-                    self.lists[kind].note.setText(note if created else "")
+                if kind in ("anime", "film", "tv", "book"):
+                    model = metrics.get("selected_model", {}).get("name", "usual")
+                    accuracy = comparison.saved_accuracy(conn, kind, model) if created else None
+                    self.lists[kind].note.setText(
+                        model_note(kind, metrics, accuracy) if created else ""
+                    )
+                    self.lists[kind].note.setToolTip(
+                        plain_tip(model_tip(kind, metrics, accuracy)) if created else ""
+                    )
                 if kind == "everything":
                     checks = []
                     for medium, check in metrics.get("holdouts", {}).items():
@@ -704,9 +690,6 @@ class ForYouPage(LazyPage, QWidget):
                         if created
                         else ""
                     )
-                if kind == "anime":
-                    self.lists[kind].note.setText(accuracy_text(metrics))
-                    self.lists[kind].note.setToolTip(plain_tip(accuracy_tip(metrics)))
                 newest = max(filter(None, (newest, created)), default=None)
             self.withheld = any(recommend.withheld(conn, k) for k in ("anime", "everything"))
             scope = settings.lastfm_scope_note(conn)
@@ -830,64 +813,30 @@ class ForYouPage(LazyPage, QWidget):
         self.refresh_finished.emit(counts)
 
 
-def model_note(kind: str, metrics: dict) -> str | None:
-    """Describe a saved experimental comparison, leaving Usual's existing notes alone."""
-    block = metrics.get("selected_model")
-    if block is None or block.get("name") == "usual":
-        return None
-    name = settings.REC_MODELS.get(block.get("name"), "Selected model")
-    count = block.get("count", 0)
-    if kind == "anime":
-        if "whole_mae" not in block:
-            return f"{name} (experimental): recompute this list to compare whole-score errors."
-        error, usual = block.get("whole_mae"), block.get("usual_whole_mae")
-    else:
-        error, usual = block.get("mae"), block.get("usual_mae")
-    if error is None or usual is None:
+def model_note(kind: str, metrics: dict, accuracy: dict | None = None) -> str:
+    """Describe the saved model using the same held-out words as the startup question."""
+    model = metrics.get("selected_model", {}).get("name", "usual")
+    title = settings.REC_MODELS.get(model, "Selected model")
+    prefix = title if model == "usual" else f"{title} (experimental)"
+    if accuracy is None:
+        return f"{prefix}: recompute this list to check its accuracy."
+    text = comparison.accuracy_text(kind, accuracy)
+    if accuracy.get("within_one") is None:
+        count = accuracy.get("count", 0)
         noun = "title" if count == 1 else "titles"
-        return f"{name} (experimental): {count} rated {noun}; not enough ratings to compare errors."
-    scale = 2 if kind == "book" else 1
-    unit = " stars" if kind == "book" else ""
+        return f"{prefix}: {count} rated {noun}. {text}"
+    verdict = comparison.VERDICT_TEXT.get(accuracy.get("verdict"), "") if model != "usual" else ""
+    verdict = verdict[:1].upper() + verdict[1:]
+    return f"{prefix}: {text}" + (f" {verdict}." if verdict else "")
+
+
+def model_tip(kind: str, metrics: dict, accuracy: dict | None = None) -> str:
+    note = model_note(kind, metrics, accuracy)
+    if accuracy is None:
+        return note + " No current held-out check is saved for this model."
+    if accuracy.get("within_one") is None:
+        return note + " Each list needs at least 20 eligible ratings for this check."
     return (
-        f"{name} (experimental): off by {error / scale:.2f}{unit} on average on "
-        f"{count} held-out ratings, Usual {usual / scale:.2f}{unit}."
-    )
-
-
-def accuracy_text(metrics: dict) -> str:
-    """The holdout check in one line (recommend.evaluate). accuracy_tip has the rest."""
-    chosen = model_note("anime", metrics)
-    if chosen is not None:
-        return chosen
-    if metrics.get("model") is None:
-        return "Accuracy: not enough scored shows yet to check (it needs about 25)."
-    return (
-        f"Accuracy: off by {metrics['model']:.2f} points on average on {metrics['held_out']} "
-        f"shows it hadn't seen (MAL alone: {metrics['community']:.2f})."
-    )
-
-
-def accuracy_tip(metrics: dict) -> str:
-    chosen = model_note("anime", metrics)
-    if chosen is not None:
-        block = metrics["selected_model"]
-        if "whole_mae" not in block:
-            return chosen + " Each guess is a whole score, like the ones you give."
-        if block.get("whole_mae") is None or block.get("usual_whole_mae") is None:
-            return chosen + " Errors are shown only when enough rated titles can be held out."
-        return (
-            chosen + " Both errors use the same titles, held out over five folds. "
-            "Each guess is a whole score, like the ones you give. Lower is better."
-        )
-    if metrics.get("model") is None:
-        return (
-            "The check holds back about a fifth of your scored shows and needs at least 5 "
-            "of them, so about 25 scored shows."
-        )
-    return (
-        f"On {metrics['held_out']} of your scored shows the model never saw, its predictions "
-        f"were off by {metrics['model']:.2f} points on average. The MAL score alone was off "
-        f"by {metrics['community']:.2f}, and the MAL score plus your usual difference by "
-        f"{metrics['overall']:.2f}. Each guess is a whole score, like the ones you give. "
-        "Lower is better."
+        note + f" Checked on {accuracy['count']} ratings using the same five folds as the lab. "
+        "Each prediction is fitted without that title's score."
     )

@@ -115,10 +115,13 @@ def load_data(conn: sqlite3.Connection, medium: str) -> tuple[Rows, Facts, Conte
         }
     else:
         raise ValueError("Unknown rating medium.")
-    latest = max(
-        (stamp[:10] for stamp in experiments._dates(conn, medium).values()), default="1970-01-01"
-    )
-    return rows, facts, Context(conn, medium, crowd, date.fromisoformat(latest))
+    dates = []
+    for stamp in experiments._dates(conn, medium).values():
+        try:
+            dates.append(date.fromisoformat(stamp[:10]))
+        except (ValueError, TypeError):
+            continue
+    return rows, facts, Context(conn, medium, crowd, max(dates, default=date(1970, 1, 1)))
 
 
 def holdout_predictions(

@@ -7,10 +7,13 @@ Each release's notes on GitHub come from its section here.
 Rating models I can compare before choosing one for a list.
 
 For You
+- A question after launch sync compares all four models on my own ratings, once per profile and model set, with Decide later for the next launch
+- Plain accuracy wording shows guesses within one point or half a star, recovery of my highest ratings, and a paired verdict against Usual; each list has its own breakdown
+- Use this applies one model to all four rated lists and recomputes from the cache; Advanced settings still choose each list separately
 - Four Advanced settings select a model independently for anime, films, TV, and books; Usual remains the default
 - More details learns from saved metadata, Similar titles learns from nearby rated titles, and Blend learns a mix of both with Usual
-- Experimental lists name their model and compare its held-out error with Usual, with chances based on that model's own misses
-- Anime model comparisons use whole-score errors for both models, matching the lab
+- Rated lists name their model and use the question's plain accuracy wording, with chances based on that model's own misses
+- Stored anime comparisons keep both models' whole-score errors, matching the lab; the chooser uses raw held-out guesses for its within-one-point check
 - Anime films are suggested through Anime only, including in Across everything; rated anime films stay in the film model and report
 - Seed and genre reasons keep describing real ratings; the three 3.0 model switches apply to Usual only
 - Across everything keeps reranking the saved lists, and music keeps its listening model

@@ -608,17 +608,17 @@ One row per computed list.
 
 ### `rec_model_calibrations`
 
-One replaceable row per rated medium and experimental model, at most twelve rows per
+One replaceable row per rated medium and model, at most sixteen rows per
 profile. Keeping calibration separate from `rec_runs` lets model switches reuse an
-unchanged check even after newer runs are saved. Only list recomputes write this cache;
-the lab remains read-only.
+unchanged check even after newer runs are saved. List recomputes and the startup model
+comparison worker write this cache; the lab remains read-only.
 
 | Column | Type | Description |
 |---|---|---|
 | medium | TEXT PK | `anime`, `film`, `tv`, or `book`. Never null. |
-| model_name | TEXT PK | `details`, `similar`, or `blend`. Never null; combined key with medium. |
-| fingerprint | TEXT | SHA-256 of the calibration version, medium, model name, rated rows (source id, personal score, crowd score), fitted rated metadata, and relevant similarity links between rated titles. Contains no titles or keys. |
-| predictions_json | TEXT | `selected` and `usual` arrays of `[source_id, actual_score, held_out_prediction]`, in fold-major order. Both use identical source-id-modulo-five folds with training-only fits. Empty arrays below twenty ratings. Books use doubled stars. |
+| model_name | TEXT PK | `usual`, `details`, `similar`, or `blend`. Never null; combined key with medium. |
+| fingerprint | TEXT | SHA-256 of the model set version, medium, model name, rated rows (source id, personal score, crowd score), fitted rated metadata, and relevant similarity links between rated titles. Contains no titles or keys. |
+| predictions_json | TEXT | `selected` and `usual` arrays of `[source_id, actual_score, held_out_prediction]`, in fold-major order, plus a cached `summary` and its `summary_fingerprint` checksum. Both prediction arrays use identical source-id-modulo-five folds with training-only fits. Empty arrays below twenty ratings. Books use doubled stars. |
 | updated_at | TEXT | When this cache entry was replaced, as UTC text. |
 
 The fingerprint includes genres and credited people, details-model features where used,
@@ -626,9 +626,24 @@ MAL recommendation votes between rated titles for Similar titles and Blend, and 
 Hardcover similar-book links for those models. Hidden adult anime remain in the rated
 rows and accuracy counts. A changed training input replaces the row; corrupt prediction
 JSON is discarded and rebuilt. New suggestions get a fresh full-data fit without
-invalidating held-out checks that do not use their metadata. A code-level calibration
-version invalidates older checks when fitting rules change. Predictions, residuals, and
+invalidating held-out checks that do not use their metadata. The model set version
+invalidates older checks when fitting rules change. Predictions, residuals, and
 accuracy numbers are identical whether the unchanged check is cached or fitted again.
+The `summary` object has these fields. Below twenty ratings, only `count` has a value;
+the other fields are null.
+
+| Field | Meaning |
+|---|---|
+| `count` | Number of eligible rated titles, including hidden adult anime. |
+| `within_one` | Share of raw held-out predictions within one point on the 1 to 10 scale, equivalent to half a star for books. |
+| `top_hits` | Share of the highest-rated fifth recovered in the predicted top fifth, using the lab's tie rules. |
+| `verdict` | `better`, `same`, or `worse` against plain Usual, according to the paired interval. |
+| `interval` | Two-element 95% paired-bootstrap interval for candidate minus Usual absolute error. Better requires both endpoints below zero. |
+
+The startup question combines eligible media by rated count; each list keeps its own
+summary. These cached summaries do not change saved recommendation metrics or scores.
+The summary checksum binds its fields to both prediction arrays. A damaged or missing
+summary is rebuilt from valid predictions in a worker, without refitting the folds.
 
 ### `rec_items`
 The suggestions in a run, best first.
@@ -663,6 +678,13 @@ The suggestions in a run, best first.
 
 ### `app_state`
 Per-profile app state, separate from editable settings. Columns: `state_key` (TEXT primary key), `state_value` (TEXT), and `updated_at` (UTC TEXT). Key `past_recaps` stays absent until I start or decline the offer, then holds `making`, `done`, or `declined`. The app uses it to resume an interrupted batch or stop repeating a declined offer; finished recap output remains in `recap_runs` and the recap files.
+
+Key `rec_model_asked` stores the answered rating-model set version as decimal text.
+`recommend.MODEL_SET_VERSION` starts at 1. Choosing a model stores this version along
+with the four `rec_model_*` settings. A profile with fewer than twenty usable ratings in
+every medium stores the version silently. Decide later leaves it unanswered for the
+next launch; an in-memory guard prevents repeat offers in the same window. Raising the
+model set version makes the question eligible again without changing saved settings.
 
 ### `recap_runs`
 One row per recap the app made by itself (the Rev page). A month's recap is made on the first launch or sync after the month ends and rebuilt during the next 14 days whenever its numbers change; after that it's final. Years work the same way, in January.
@@ -797,16 +819,16 @@ On another model, `rec_runs.metrics_json.selected_model` is an object:
 | `whole_mae` | Anime only: selected-model error after converting each held-out prediction with `whole_score`, as the lab does. |
 | `usual_whole_mae` | Anime only: plain Usual's whole-score error on those same five folds. |
 
-Book errors use doubled stars, matching the lab. For You divides book errors by two and
-labels them as stars; stored values and lab output stay on the doubled scale. Below
+Book errors use doubled stars, matching the lab. Stored values and lab output stay on
+the doubled scale. Below
 twenty eligible ratings, `count` still records the actual number, all errors are null,
 and no chance estimate is shown. Usual does not gain this block. In particular, anime's
 existing numeric `model` field remains its old single-fold whole-score error on Usual.
-Anime's selected-model note and tooltip use `whole_mae` and `usual_whole_mae`; other
-media use `mae` and `usual_mae`. Saved 3.1 runs that used an object under `model` are
+For You reads the cached plain accuracy summary described above, using raw held-out
+errors within one point or half a star instead of showing raw MAE. Missing summaries
+request a recompute. Saved 3.1 runs that used an object under `model` are
 translated to `selected_model` when read, without rewriting the run. An old anime
-comparison has no whole-score fields, so its note requests a recompute instead of
-presenting its raw errors as whole-score errors.
+comparison without a cached summary also requests a recompute.
 
 `rec_items.facts_json.details` gains a sentence such as `Predicted by Similar titles,
 experimental.` on non-Usual lists. Seed and genre reasons still describe real ratings.
@@ -829,7 +851,8 @@ bootstrap resamples with `random.Random(0)` and a 95% percentile interval. An in
 wholly below zero means better, wholly above zero means worse, and otherwise means same.
 Below twenty ratings, only the count is reported. Runtime seconds are observational;
 numeric model results are deterministic. The lab's recency reference is the medium's
-latest stored rating date, with a fixed epoch reference when no dates are known.
+latest valid stored rating date, ignoring malformed dates and using a fixed epoch
+reference when no valid dates are known.
 
 
 ## Shared themes and mixed suggestions (3.0)

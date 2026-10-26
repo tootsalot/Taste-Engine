@@ -132,8 +132,23 @@ The reason on each card names the shows I liked that point to it, using English 
 
 ## Choosing a rating model
 
-**Usual** stays the default for anime, films, TV, and books. In Advanced settings I can
-choose a different model for each list. The other choices are experimental:
+After the first page appears and launch sync finishes or is skipped, the app asks how
+For You should guess my ratings. It asks once per profile for this set of models, then
+asks again only when the set changes. Decide later leaves it for my next launch. If no
+list has twenty rated titles yet, it skips the question until a new model set arrives.
+
+The question checks all four models against ratings hidden during fitting. Each row
+shows how often it guessed within one point, how many of my highest-rated titles it
+ranked near the top, and whether the paired check finds it better or worse than Usual.
+Books use half a star instead of one point. The summary weights each list by its rated
+count; See each list opens the separate results. Titles and pictures are never part of
+this check, including adult anime when I hide them.
+
+Use this applies my choice to anime, films, TV, and books and rebuilds the lists from
+the cache. **Usual** stays the default until I choose. It starts from the crowd's score
+and learns my usual difference, including the genres and credited people I rate higher
+or lower. Advanced settings can still choose a different model for each list. The other
+choices are experimental:
 
 - **More details** learns from genres and studios, directors, creators, or authors, plus
   the details already saved for that medium. For anime those include format, source
@@ -146,7 +161,7 @@ choose a different model for each list. The other choices are experimental:
 - **Blend** combines Usual, More details, and Similar titles. It chooses the mix using
   ratings held out inside its training part.
 
-I switch only after the lab says a model helps on my own ratings:
+I can also compare the models in the lab:
 
 ```text
 python -m taste --profile me lab --medium all
@@ -161,10 +176,11 @@ prints the count without accuracy numbers. All fitting and tuning stay inside tr
 ratings, and every run uses the same rules and bootstrap seed.
 
 The selected model uses the cache, without fetching more details. Its note in For You
-names it and compares its held-out error with Usual, and Behind the score names it too.
-For anime, both errors round each guess to a whole score, like the scores I give. The
-five-fold check is reused until my ratings or the facts the model reads change, so
-recomputing an unchanged list does not repeat that check.
+uses the same plain accuracy wording as the question, and Behind the score names it too.
+The within-one-point check uses raw guesses on the 1 to 10 scale; the anime lab also
+shows whole-score errors, like the scores I give. The five-fold check is reused until my
+ratings or the facts the model reads change, so recomputing an unchanged list does not
+repeat that check.
 Its chance of an 8 or more, or 4 stars, comes from that model's own held-out misses. The
 switches for learning from Not interested, recent ratings, and borrowed themes apply to
 Usual only. Dismissed picks stay hidden with every model. Across everything keeps

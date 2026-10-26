@@ -5,8 +5,8 @@ from datetime import date
 
 import pytest
 
-from taste import db
-from taste.recommend import candidates, selection
+from taste import db, recommend
+from taste.recommend import candidates, lab, selection
 
 
 def inputs():
@@ -81,7 +81,7 @@ def test_cache_tracks_model_metadata_and_links(conn, monkeypatch, change):
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize("damage", ("object", "invalid_json", "nan", "huge_integer"))
+@pytest.mark.parametrize("damage", ("object", "invalid_json", "nan", "huge_integer", "deep_json"))
 def test_cache_survives_reopening_and_checks_payload(conn, monkeypatch, damage):
     rows, facts, crowd = inputs()
     first = selection.fit_selected(conn, "anime", "details", rows, facts, crowd)
@@ -97,7 +97,11 @@ def test_cache_survives_reopening_and_checks_payload(conn, monkeypatch, damage):
             again = selection.fit_selected(reopened, "anime", "details", rows, facts, crowd)
             assert again.metrics == first.metrics
             assert again.residuals == first.residuals
-        payload = {"object": "{}", "invalid_json": "broken"}.get(damage)
+        payload = {
+            "object": "{}",
+            "invalid_json": "broken",
+            "deep_json": "[" * 20000 + "]" * 20000,
+        }.get(damage)
         if payload is None:
             saved = json.loads(
                 reopened.execute("SELECT predictions_json FROM rec_model_calibrations").fetchone()[
@@ -121,7 +125,61 @@ def test_cache_and_uncached_folds_have_identical_predictions(conn):
     usual = candidates.holdout_predictions(rows, facts, context, candidates.fit_usual)
     selection.fit_selected(conn, "anime", "blend", rows, facts, crowd)
     saved = conn.execute("SELECT predictions_json FROM rec_model_calibrations").fetchone()[0]
-    assert json.loads(saved) == {
+    payload = json.loads(saved)
+    assert payload.pop("summary")["count"] == len(rows)
+    assert len(payload.pop("summary_fingerprint")) == 64
+    assert payload == {
         "selected": [list(row) for row in selected],
         "usual": [list(row) for row in usual],
     }
+
+
+@pytest.mark.parametrize("damage", ("legacy", "count", "boolean", "nan", "false_better"))
+def test_summary_damage_rebuilds_accuracy_without_refitting_predictions(conn, monkeypatch, damage):
+    rows, facts, _ = inputs()
+    first = selection.calibration(conn, "anime", "blend", rows, facts)
+    saved = json.loads(
+        conn.execute("SELECT predictions_json FROM rec_model_calibrations").fetchone()[0]
+    )
+    if damage == "legacy":
+        saved.pop("summary")
+        saved.pop("summary_fingerprint")
+    elif damage == "count":
+        saved["summary"]["count"] = True
+    elif damage == "boolean":
+        saved["summary"]["within_one"] = True
+    elif damage == "nan":
+        saved["summary"]["top_hits"] = float("nan")
+    else:
+        saved["summary"].update(verdict="better", interval=[-1.0, -0.5])
+    conn.execute("UPDATE rec_model_calibrations SET predictions_json = ?", (json.dumps(saved),))
+    assert selection.saved_calibration(conn, "anime", "blend", rows, facts)["summary"] is None
+
+    def refuse(*args):
+        pytest.fail("A summary upgrade must reuse the existing held-out predictions")
+
+    monkeypatch.setattr(candidates, "holdout_predictions", refuse)
+    rebuilt = selection.calibration(conn, "anime", "blend", rows, facts)
+    assert rebuilt == first
+
+
+def test_model_set_version_invalidates_calibration(conn, monkeypatch):
+    rows, facts, _ = inputs()
+    selection.calibration(conn, "anime", "usual", rows, facts)
+    monkeypatch.setattr(recommend, "MODEL_SET_VERSION", recommend.MODEL_SET_VERSION + 1)
+    assert selection.saved_calibration(conn, "anime", "usual", rows, facts) is None
+
+
+def test_plain_usual_calibration_is_cached_without_a_candidate_fit(conn, monkeypatch):
+    rows, facts, _ = inputs()
+    first = selection.calibration(conn, "anime", "usual", rows, facts)
+    assert first["selected"] == first["usual"]
+    assert first["summary"]["interval"] == [0.0, 0.0]
+    assert first["summary"]["verdict"] == "same"
+
+    def refuse(*args):
+        pytest.fail("Warm accuracy must not fit folds or repeat the paired bootstrap")
+
+    monkeypatch.setattr(candidates, "holdout_predictions", refuse)
+    monkeypatch.setattr(lab, "paired_bootstrap", refuse)
+    assert selection.calibration(conn, "anime", "usual", rows, facts) == first

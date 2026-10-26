@@ -53,6 +53,27 @@ REC_MODELS = {
     "similar": "Similar titles",
     "blend": "Blend",
 }
+REC_MODEL_DESCRIPTIONS = {
+    "usual": (
+        "Starts from the crowd's score and adjusts for how you usually differ from it, "
+        "plus the genres and studios you rate higher or lower."
+    ),
+    "details": (
+        "Also learns from the kind of title: its length, era, source, popularity, "
+        "and the people behind it."
+    ),
+    "similar": "Looks at the titles you rated that are most like this one.",
+    "blend": "Mixes the three above, weighted by how well each did on your ratings.",
+}
+REC_MODEL_HELP = " ".join(
+    f"{REC_MODELS[name]}: {description}" for name, description in REC_MODEL_DESCRIPTIONS.items()
+)
+REC_MODEL_HELP += (
+    " The three alternatives to Usual are experimental. "
+    "Checks use cached ratings and details, as in the lab. "
+    "The startup question chooses one model for all four lists. "
+    "This Advanced setting changes only this list."
+)
 DASHBOARD_CARDS = {
     "taste": "Your taste",
     "crowd": "You vs the crowd",
@@ -329,8 +350,7 @@ SETTINGS: list[Setting] = [
         "Anime rating model",
         "choice",
         "usual",
-        "Learn from your anime ratings and cached genres, studios, and show details. "
-        "Other models are experimental; compare them in the lab before switching from Usual.",
+        REC_MODEL_HELP,
         choices=REC_MODELS,
         group="Recommendations",
         advanced=True,
@@ -340,8 +360,7 @@ SETTINGS: list[Setting] = [
         "Film rating model",
         "choice",
         "usual",
-        "Learn from your film ratings and cached genres, directors, and film details. "
-        "Other models are experimental; compare them in the lab before switching from Usual.",
+        REC_MODEL_HELP,
         choices=REC_MODELS,
         group="Recommendations",
         advanced=True,
@@ -351,8 +370,7 @@ SETTINGS: list[Setting] = [
         "TV rating model",
         "choice",
         "usual",
-        "Learn from your TV ratings and cached genres, creators, networks, and show details. "
-        "Other models are experimental; compare them in the lab before switching from Usual.",
+        REC_MODEL_HELP,
         choices=REC_MODELS,
         group="Recommendations",
         advanced=True,
@@ -362,8 +380,7 @@ SETTINGS: list[Setting] = [
         "Book rating model",
         "choice",
         "usual",
-        "Learn from your book ratings and cached genres, moods, authors, and book details. "
-        "Other models are experimental; compare them in the lab before switching from Usual.",
+        REC_MODEL_HELP,
         choices=REC_MODELS,
         group="Recommendations",
         advanced=True,

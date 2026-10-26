@@ -1,18 +1,27 @@
-"""New profile and delete confirmation dialogs."""
+"""Profile dialogs and the question about choosing a rating model."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRegularExpression
-from PySide6.QtGui import QRegularExpressionValidator
+from PySide6.QtCore import QRegularExpression, Qt
+from PySide6.QtGui import QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QHBoxLayout,
     QLineEdit,
+    QPushButton,
+    QRadioButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
-from taste.desktop.widgets import heading, label
+from taste import settings
+from taste.desktop import theme
+from taste.desktop.widgets import Card, card_title, heading, label
+from taste.recommend import comparison
 
 
 class NewProfileDialog(QDialog):
@@ -85,3 +94,121 @@ class ConfirmDeleteDialog(QDialog):
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+
+
+class ModelChoiceDialog(QDialog):
+    """One choice for the four rated lists, with each held-out check in plain words."""
+
+    def __init__(self, checks: dict, selected: str = "usual", parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Choose a rating model")
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.resize(900, 740)
+        self.setMinimumSize(640, 460)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(theme.GAP)
+        title = heading("How should For You guess your ratings?", 24)
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(
+            label(
+                "Sets Anime, Films, TV, and Books together. "
+                "Advanced settings can change each list.",
+                role="muted",
+                wrap=True,
+            )
+        )
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        rows = QVBoxLayout(content)
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(theme.GAP // 2)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.choices = {}
+        self.expanders = {}
+        self.details = {}
+        models = checks.get("models", {})
+        for name, title in settings.REC_MODELS.items():
+            card = Card(content)
+            card.body.setContentsMargins(14, 10, 14, 10)
+            card.body.setSpacing(4)
+            row = QHBoxLayout()
+            radio = QRadioButton(title, card)
+            radio.setFont(theme.heading_font(theme.CARD_TITLE_PX, QFont.Weight.DemiBold))
+            radio.setProperty("model_name", name)
+            self.group.addButton(radio)
+            self.choices[name] = radio
+            row.addWidget(radio, 1)
+            summary = models.get(name, {})
+            verdict = comparison.VERDICT_TEXT.get(summary.get("verdict"), "")
+            if name != "usual" and verdict:
+                row.addWidget(label(verdict, role="muted", wrap=True))
+            expander = QPushButton("See each list", card)
+            expander.setCheckable(True)
+            expander.setProperty("model_name", name)
+            expander.toggled.connect(self._toggle_lists)
+            self.expanders[name] = expander
+            row.addWidget(expander)
+            card.body.addLayout(row)
+            card.body.addWidget(label(settings.REC_MODEL_DESCRIPTIONS[name], wrap=True))
+            card.body.addWidget(
+                label(comparison.accuracy_text("all", summary), role="muted", wrap=True)
+            )
+            details = QWidget(card)
+            detail_layout = QVBoxLayout(details)
+            detail_layout.setContentsMargins(0, 6, 0, 0)
+            detail_layout.setSpacing(10)
+            for medium, medium_title in (
+                ("anime", "Anime"),
+                ("film", "Films"),
+                ("tv", "TV"),
+                ("book", "Books"),
+            ):
+                medium_summary = summary.get("media", {}).get(medium, {})
+                medium_row = QHBoxLayout()
+                medium_row.addWidget(card_title(medium_title))
+                verdict = comparison.VERDICT_TEXT.get(medium_summary.get("verdict"), "")
+                if name != "usual" and medium_summary.get("within_one") is not None and verdict:
+                    medium_row.addWidget(label(verdict, role="muted", wrap=True), 1)
+                detail_layout.addLayout(medium_row)
+                detail_layout.addWidget(
+                    label(
+                        comparison.accuracy_text(medium, medium_summary),
+                        role="muted",
+                        wrap=True,
+                    )
+                )
+            self.details[name] = details
+            card.body.addWidget(details)
+            details.hide()
+            rows.addWidget(card)
+        rows.addStretch(1)
+        self.choices.get(selected, self.choices["usual"]).setChecked(True)
+        self.scroll.setWidget(content)
+        layout.addWidget(self.scroll, 1)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.later_button = QPushButton("Decide later", self)
+        self.later_button.clicked.connect(self.reject)
+        self.use_button = QPushButton("Use this", self)
+        self.use_button.setProperty("role", "primary")
+        self.use_button.clicked.connect(self.accept)
+        buttons.addWidget(self.later_button)
+        buttons.addWidget(self.use_button)
+        layout.addLayout(buttons)
+
+    def _toggle_lists(self, checked: bool) -> None:
+        button = self.sender()
+        if button is not None:
+            self.details[button.property("model_name")].setVisible(checked)
+
+    def choice(self) -> str | None:
+        if self.result() != QDialog.DialogCode.Accepted:
+            return None
+        selected = self.group.checkedButton()
+        return selected.property("model_name") if selected is not None else None
