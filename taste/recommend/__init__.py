@@ -54,6 +54,7 @@ from taste.recommend.runs import compute_all as compute_all
 from taste.recommend.runs import dismiss as dismiss
 from taste.recommend.runs import latest as latest
 from taste.recommend.runs import save_run as save_run
+from taste.recommend.runs import withheld as withheld
 from taste.recommend.screen import FILM_MIN_VOTES as FILM_MIN_VOTES
 from taste.recommend.screen import TYPICAL_FALLBACK as TYPICAL_FALLBACK
 from taste.recommend.screen import _runtime as _runtime

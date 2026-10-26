@@ -232,7 +232,7 @@ def _screen_recommendations(
             details.append(f"You rate {genre} {noun} {model.genre[genre]:+.2f} vs your usual.")
         if theme_taste is not None:
             details.append(
-                f"Experimental theme adjustment: {theme_shift / 1:+.2f} points, "
+                f"Experimental theme adjustment: {theme_shift:+.2f} points, "
                 f"shrunk over {len(scored)} own ratings."
             )
         rec.facts["details"] = details

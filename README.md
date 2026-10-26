@@ -40,9 +40,9 @@ not a rating holdout. The map describes broad overlaps, not the meaning of an in
 
 A third Advanced switch can let TV and books borrow theme leans from the other media while
 their own ratings are sparse. It defaults off and the influence fades as their ratings grow.
-Its separate off/on checks can get worse, so I check the numbers before using it. Dismissing
-a pick in the experimental mix hides it there. Dismissing it in its original list also hides
-it from the mix. Themes never link titles across sources.
+Its separate off/on checks can get worse, so I check the numbers before using it. Not
+interested on a pick hides it in both places, the mix and its own list, whichever one I press
+it in. Themes never link titles across sources.
 
 ## Experimental picks
 
@@ -67,9 +67,11 @@ are comparisons of saved history, not snapshots of how I rated something years a
 
 I keep raw responses so I can rebuild the staging data. Pages older than three days use
 zlib and base64 in the background after a sync. Readers handle both formats, identical pages
-still reuse the stored copy, and retention rules stay the same. To measure the app without
+still reuse the stored copy, and retention rules stay the same. When a quarter or more of the
+database file is left empty that way, the sync compacts the file too, so it gets smaller on
+disk (usually once, after the first compression). To measure the app without
 my data or live APIs, I run `python scripts/time_app.py`, which builds the made-up test library
-in a temporary folder and prints timings. These are local measurements, not a Windows benchmark.
+in a temporary folder and prints timings. They measure the made-up library, not my own.
 
 ## Back up a profile
 
@@ -78,8 +80,9 @@ I can use **Settings > Data > Back up this profile** to save a `.tasteprofile` f
 copy of my database, my retained recaps, and my profile picture. It contains personal history,
 so I keep it somewhere private. Keys and tokens stay out.
 
-**Restore a profile** imports it under an unused id and switches to it. I enter its source
-keys again on Settings. From the command line I use
+**Restore a profile** offers the backup's own id (what I want on a new computer), imports it
+under that id or one I type if it's taken here, and switches to it. A backup from a newer
+version of the app is refused. I enter its source keys again on Settings. From the command line I use
 `python -m taste restore example.tasteprofile --as restored`. An existing profile or retained
 recap folder is never replaced.
 
@@ -93,7 +96,7 @@ recap folder is never replaced.
    **Airing now** sits beside This month when a show on my Watching list is currently airing. Each row has its poster, title, and MAL's next weekly broadcast in my profile's time zone, followed by "next for you: ep 7" from my list progress. That isn't a claim about which episode airs next: MAL doesn't give that history. The last known episode is marked "final episode", and a show without a schedule says "no set time" and sorts last. If I've already recorded every known episode, it says so. The card updates after a MAL sync, and changing my clock or time zone changes its times without another sync. I can turn it off in Dashboard cards; when nothing is airing, it disappears by itself. Adult shows stay out while Include NSFW anime is off.
 5. **For You** is a grid of picks with a panel beside it for the one I've clicked. The panel says what the pick is (MAL's synopsis, the artist's Last.fm bio, the film or show's TMDB overview, or the book's Hardcover description) and how popular it is (MAL members and rank, Last.fm listeners, TMDB votes, Hardcover readers). Anime suggestions each come with the whole score I'd most likely give (the exact prediction and the MAL mean beside it), the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, each with how closely Last.fm says it matches (like "95%, Strong match"), and old favorites to rediscover. **Films** works like anime: TMDB's recommendations for the films I rated highest, each with a predicted rating for me next to the TMDB average. Films that aren't out yet are left out, and an average built on few votes counts for less, so a brand-new film's early hype doesn't top the list. **TV** has its own tab after Films. It uses the same model on my TV ratings, with creators instead of directors, and starts from TMDB's recommendations for shows I rated above my own TV average, plus my watchlist. Anime stays out of it (MAL and the Anime tab cover that), going by TMDB's animation genre and Japanese origin. Shows not out yet are left out, thin TMDB averages count for less, and watchlist picks are marked. The reason reads like a sentence; the individual shows and my ratings are kept under Behind the score. TV episode lengths say "45m episodes", so I do not mistake one episode for the whole show. A small library uses my usual difference from TMDB; the chance of an 8 or more appears only once there are at least 20 rated shows to check it against. **Books** too: Hardcover's similar books for the ones I rated highest (plus my Want to Read), with predicted stars next to the Hardcover average.
 6. **Reports** is all charts, one page per medium under Reports in the sidebar, and every page has the same shape: All time or any one year, six numbers across the top, the pictures beside the main chart, three more charts, then the people I keep coming back to. **Anime**: the shows I finished with my score on each, my average for shows at each level of the MAL mean, my scores 1 to 10, genres I rate closest to and furthest below MAL, where I tend to drop shows, and the studios I watch most. **Music**: the albums I played most, plays per week, month, or year (as many as fit the window), top tracks, plays by hour and day, and my top artists with their plays month by month. **Books** borrows from Hardcover's own stats page, for all time or any one year: books, pages, and hours listened, the covers I read (rereads marked), books per year, genres and moods, fiction against nonfiction, paper against ebook and audio, and how many I gave stars, my stars in half steps, my stars against Hardcover's average for books it rates about the same, and my most read authors with my stars for each of their books in reading order. **Films and TV** works like Books, for all time or a year: films and shows rated, hours of film, my average against TMDB's, the posters with my rating on each, my ratings (Films or TV), genres, decades, my rating against TMDB's average for titles it rates about the same, and the directors I keep coming back to. Short charts show their counts and long ones a scale. Every tile across the top has a number, never a dash, and a second line (like "+4 finished this month") and, for points against MAL, a small line by year. The numbers behind everything are in **Export CSV**, one report at a time or all at once.
-7. **Rev** is my month or year as a deck of up to seven phone-sized cards, swiped through with the arrows (or the arrow keys): the month at a glance, my music (plays, about how many hours, top artists and albums), when I listened, shows finished and how I scored them against MAL, books, films and TV, and a last card comparing it with the month before plus one closing sentence. On the first launch with past history (or the first sync of a new profile), the Dashboard offers to make my missing monthly and yearly recaps. **Make them** shows progress on the sync line; if I close the app partway through, it continues next time. **Not now** leaves them for me to open one at a time on Rev. Each recap makes itself after its month ends (on the next launch or sync) and keeps itself up to date for two weeks while late plays and dates come in, and the Dashboard says when one is ready. Beside the deck, every card is a thumbnail to jump to. **Save this card** asks for a folder the first time and saves straight there after that; **Save all** saves the whole deck. Nothing is uploaded; sharing a card is up to me.
+7. **Rev** is my month or year as a deck of up to seven phone-sized cards (eight for a year, with how my taste changed), swiped through with the arrows (or the arrow keys): the month at a glance, my music (plays, about how many hours, top artists and albums), when I listened, shows finished and how I scored them against MAL, books, films and TV, and a last card comparing it with the month before plus one closing sentence. On the first launch with past history (or the first sync of a new profile), the Dashboard offers to make my missing monthly and yearly recaps. **Make them** shows progress on the sync line; if I close the app partway through, it continues next time. **Not now** leaves them for me to open one at a time on Rev. Each recap makes itself after its month ends (on the next launch or sync) and keeps itself up to date for two weeks while late plays and dates come in, and the Dashboard says when one is ready. Beside the deck, every card is a thumbnail to jump to. **Save this card** asks for a folder the first time and saves straight there after that; **Save all** saves the whole deck. Nothing is uploaded; sharing a card is up to me.
 
 The sidebar has Dashboard, For You, and Rev at the top, then the four report pages under **Reports**. It collapses to icons with the button at its top or **Ctrl+B**, and the app remembers which way I left it. Settings sits at the bottom, with when I last synced just above it.
 

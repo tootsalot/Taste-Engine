@@ -688,8 +688,9 @@ A `.tasteprofile` is a ZIP archive, format 1. `manifest.json` records `format` (
 `app_version`, `profile_id`, `display_name`, and `created_at` (UTC text). `profile.db` is a
 consistent SQLite backup, `picture.png` is optional, and `recaps/` contains only that profile's
 recap files. Credential stores, fallback `.keys.json` files, reports, and shared caches are
-excluded. No database table is added. Restore upgrades the staged database through `db.connect`
-and installs only under an unused id. Retained recap files also reserve an id. Restore rejects
+excluded. No database table is added. Restore refuses a manifest whose `app_version` is newer
+than the app's, upgrades the staged database through `db.connect`, and installs only under an
+unused id (the desktop offers the backup's own id first). Retained recap files also reserve an id. Restore rejects
 unknown member names, duplicate paths, traversal, absolute paths, links, encryption, unsupported
 formats, more than 10,000 members, or more than 1 GiB unpacked. Manifests are capped at 64 KiB.
 
@@ -703,6 +704,9 @@ in batches of 100 after sync, inside the sync worker in the desktop app. Small p
 would grow stay plain. Decoding refuses damaged data, unknown encodings, or more than 64 MiB
 decoded from one compressed page. Identical-page detection compares decoded content. Existing
 retention, raw references, and pruning do not change. The column is upgraded through ADDED_COLUMNS.
+SQLite reuses freed space but never returns it to the disk, so after compressing, a sync runs
+VACUUM (then a WAL checkpoint) when at least a quarter of the file's pages are free. It's
+skipped if it fails, for example when the disk lacks about the file's size in free space.
 
 
 ## Yearly taste comparisons (3.0)
@@ -744,7 +748,7 @@ Music has no personal rating holdout and keeps its listening model.
 `taste/themes.py` holds a hand-written, case-insensitive map of MAL genres/themes, TMDB genres,
 Hardcover genres/moods, and Last.fm artist tags. Unknown terms contribute no evidence.
 It maps categories, never item titles. Cross-source item identity remains solely in
-core_item_external_ids. The synthetic Dream Pop alias is included for the offline fixture.
+core_item_external_ids.
 
 Profile evidence is computed from source-tagged core ratings paired with community ratings.
 Each theme records a medium's count, mean rating difference (normalized to that source's
@@ -769,8 +773,10 @@ to its limits, with book stars converted back afterwards. facts_json details sta
 items from the theme profile as well as the rating fit, including explicit cross-source links.
 The two earlier experiments' separate checks always exclude transfer.
 
-`rec_dismissed` accepts kind `everything` with the namespaced key. Those dismissals leave the
-ordinary lists alone. Original-list dismissals filter both fresh and saved mixed lists.
+A dismissal from the mix is stored under the pick's own kind and source key (`anime` and
+`101`, not `everything` and `anime:101`), so its original list hides it too and the dismissal
+experiment counts it. Original-list dismissals filter both fresh and saved mixed lists. The mix
+reranks the lists a refresh has just saved; it never predicts them a second time.
 Anime and mixed runs record `params_json.anime_visibility`: the NSFW setting plus a hash of
 adult classifications. A mismatch with current policy withholds the saved list, including old
 seed reasons, until recomputed. No core table or source-id link is added for themes.

@@ -2,17 +2,21 @@
 
 Each release's notes on GitHub come from its section here.
 
-## [3.0.0] - Unreleased
+## [3.0.0]
+
+Backup and restore, a Rev card on how my taste changed over the year, an experimental list that mixes all my media, and a smaller database.
 
 Profiles
 - I can back up a profile's history, recaps, and picture from Settings or the command line, without its keys
 - Restore makes a new profile, upgrades older databases, and leaves existing profiles and retained recaps alone
+- Restore offers the backup's own id, so moving to a new computer keeps it, and refuses a backup from a newer version of the app
 - Archives are checked before anything is installed, with limits on unpacked size and safe file names
 
 For You
 - Across everything mixes the existing lists with shared genre themes, keeps each pick's medium color and native score, and is marked Experimental
 - A third switch can let sparse TV and book ratings borrow themes from the other media, off by default, with separate holdout checks
-- The list pills wrap at narrow widths, and cached anime reasons are withheld if NSFW visibility or adult classifications change
+- Not interested on a mixed pick hides it in its own list too
+- The list pills wrap at narrow widths, and cached anime reasons are withheld if NSFW visibility or adult classifications change; a list held back this way (including every anime list saved by 2.5) is rebuilt from the cache when For You opens, without the network
 - Two Advanced switches can learn a little from dismissed picks or weight recent dated ratings more, both off to start
 - Saved metrics compare each idea off and on against the same held-out ratings, without treating dismissals or plays as ratings
 
@@ -22,7 +26,7 @@ Rev
 
 Storage and speed
 - Old raw pages are compressed after a sync, in small background batches, with one reader for plain and compressed JSON
-- I can time launch, page switches, sync, settings, and picks against the invented library with scripts/time_app.py
+- When that leaves a quarter of the database file empty, the sync compacts the file so it gets smaller on disk- I can time launch, page switches, sync, settings, and picks against the invented library with scripts/time_app.py
 
 Under the hood
 - Charts, report and Dashboard cards, recommendation lists, and Hardcover sign-in live in smaller modules

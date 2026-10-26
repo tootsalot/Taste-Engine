@@ -93,6 +93,8 @@ def sync_sources(
     if pruned:
         out(f"Cleaned up {pruned} old raw API pages.")
     raw.compress_old_pages(conn)
+    if raw.compact(conn):
+        out("Compacted the database file.")
     return results
 
 

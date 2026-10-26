@@ -258,7 +258,7 @@ def test_similar_artists_and_tags_are_cached(conn, make_client, music):
         "SELECT tag FROM stg_lastfm_artist_tags WHERE artist_key = 'example seed one' "
         "ORDER BY tag_count DESC"
     ).fetchall()
-    assert [r[0] for r in tags] == ["example dream pop", "night"]
+    assert [r[0] for r in tags] == ["dream pop", "night"]
 
     assert run_enrich_lastfm(conn, make_client, music, now=NOW_DT + timedelta(days=29)) == (0, [])
     count, calls = run_enrich_lastfm(conn, make_client, music, now=NOW_DT + timedelta(days=31))

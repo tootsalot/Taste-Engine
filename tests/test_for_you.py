@@ -313,6 +313,29 @@ def test_changing_a_rec_setting_recomputes_without_the_network(window, qtbot):
     assert not page.is_refreshing()
 
 
+def test_a_list_saved_before_3_0_comes_back_from_the_cache(window, qtbot):
+    synced(window, qtbot)
+    refreshed(window, qtbot)
+    page = window.for_you
+    # 2.5 saved anime runs without the adult-visibility stamp, so 3.0 holds them back.
+    conn = window.ctx.connect(window.current_profile())
+    try:
+        conn.execute("UPDATE rec_runs SET params_json = '{}' WHERE kind = 'anime'")
+    finally:
+        conn.close()
+    window.show()  # the page notices when it's shown
+    window.show_page("Dashboard")
+    page.reload()
+    assert page.withheld and not tiles(window, "anime")
+    assert not page.is_refreshing()  # off screen it waits, so a launch sync isn't blocked
+    with qtbot.waitSignal(page.refresh_finished, timeout=15000) as blocker:
+        window.show_page("For You")
+    assert blocker.args[0]["anime"] == 4
+    assert not page.withheld and len(tiles(window, "anime")) == 4
+    page.reload()
+    assert not page.is_refreshing()
+
+
 def test_rec_settings_sit_under_their_own_heading(window):
     window.new_profile(("me", "Me"))
     page = window.settings

@@ -143,15 +143,16 @@ def residuals(
     if len(scored) < MIN_RESIDUALS:
         return []
     use_transfer = settings.get(conn, "rec_theme_transfer") if transfer is None else transfer
+    use_transfer = use_transfer and kind in ("tv", "book")
+    evidence = themes.load(conn) if use_transfer else None  # read once, not once per fold
     result = []
     for fold in range(5):
         train = [row for row in scored if row[0] % 5 != fold]
         model = apply(conn, kind, build_model(train, facts), train, facts, now, **switches)
+        held_out = {k for k, _, _ in scored if k % 5 == fold}
         taste = (
-            themes.profile(
-                conn, themes.excluded_items(conn, kind, {k for k, _, _ in scored if k % 5 == fold})
-            )
-            if use_transfer and kind in ("tv", "book")
+            themes.profile(conn, themes.excluded_items(conn, kind, held_out), evidence)
+            if use_transfer
             else None
         )
         for key, mine, crowd in scored:

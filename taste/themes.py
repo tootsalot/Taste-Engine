@@ -61,7 +61,6 @@ MAP = {
     "hardcover": dict(COMMON),
     "lastfm": {
         "dream pop": ("dreamlike",),
-        "example dream pop": ("dreamlike",),
         "night": ("night",),
         "ambient": ("reflective",),
         "electronic": ("electronic",),
@@ -129,9 +128,8 @@ def excluded_items(conn: sqlite3.Connection, kind: str, keys: set[int]) -> set[i
     }
 
 
-def profile(conn: sqlite3.Connection, exclude: set[int] | None = None) -> dict:
-    """Theme evidence by medium, keeping ratings and music behavior distinct."""
-    exclude = exclude or set()
+def load(conn: sqlite3.Connection) -> dict:
+    """What `profile` reads, read once: a holdout builds a profile per fold from it."""
     item_tags: dict[tuple[int, str], list[str]] = defaultdict(list)
     for item, source, tag in conn.execute(
         "SELECT it.item_id, it.source, t.name FROM core_item_tags it "
@@ -139,12 +137,35 @@ def profile(conn: sqlite3.Connection, exclude: set[int] | None = None) -> dict:
         "WHERE t.tag_kind IN ('genre', 'theme', 'mood')"
     ):
         item_tags[item, source].append(tag)
-    samples, all_scores = defaultdict(list), defaultdict(list)
-    for item, source, media, mine, crowd in conn.execute(
+    ratings = conn.execute(
         "SELECT r.item_id, r.source, i.media_type, r.raw_score, cr.mean_score FROM core_ratings r "
         "JOIN core_items i ON i.item_id = r.item_id JOIN core_community_ratings cr "
         "ON cr.item_id = r.item_id AND cr.source = r.source"
-    ):
+    ).fetchall()
+    plays = dict(
+        conn.execute(
+            "SELECT lower(c.name), COUNT(*) FROM core_behavior_events e "
+            "JOIN core_item_creators ic ON ic.item_id = e.item_id "
+            "AND ic.source = 'lastfm' AND ic.role = 'artist' "
+            "JOIN core_creators c ON c.creator_id = ic.creator_id "
+            "WHERE e.source = 'lastfm' AND e.event_type = 'play' GROUP BY c.creator_id, c.name"
+        ).fetchall()
+    )
+    tags = defaultdict(list)
+    for key, tag in conn.execute("SELECT artist_key, tag FROM stg_lastfm_artist_tags"):
+        tags[key].append(tag)
+    return {"item_tags": item_tags, "ratings": ratings, "plays": plays, "artist_tags": tags}
+
+
+def profile(
+    conn: sqlite3.Connection, exclude: set[int] | None = None, data: dict | None = None
+) -> dict:
+    """Theme evidence by medium, keeping ratings and music behavior distinct."""
+    exclude = exclude or set()
+    data = data or load(conn)
+    item_tags = data["item_tags"]
+    samples, all_scores = defaultdict(list), defaultdict(list)
+    for item, source, media, mine, crowd in data["ratings"]:
         kind = MEDIA.get(media)
         if item in exclude or not kind or source != SOURCES[kind] or crowd is None:
             continue
@@ -162,18 +183,7 @@ def profile(conn: sqlite3.Connection, exclude: set[int] | None = None) -> dict:
             "unit": "rating difference",
         }
     # One artist's plays count once per shared theme, regardless of how many tags map to it.
-    plays = dict(
-        conn.execute(
-            "SELECT lower(c.name), COUNT(*) FROM core_behavior_events e "
-            "JOIN core_item_creators ic ON ic.item_id = e.item_id "
-            "AND ic.source = 'lastfm' AND ic.role = 'artist' "
-            "JOIN core_creators c ON c.creator_id = ic.creator_id "
-            "WHERE e.source = 'lastfm' AND e.event_type = 'play' GROUP BY c.creator_id, c.name"
-        ).fetchall()
-    )
-    tags = defaultdict(list)
-    for key, tag in conn.execute("SELECT artist_key, tag FROM stg_lastfm_artist_tags"):
-        tags[key].append(tag)
+    plays, tags = data["plays"], data["artist_tags"]
     total = sum(plays.values())
     counts = Counter()
     for artist, count in plays.items():

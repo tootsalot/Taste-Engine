@@ -34,6 +34,26 @@ def test_mixed_pages_round_trip_identical_check_and_second_pass(conn):
     assert rows[1]["raw_page_id"] == new
 
 
+def test_compact_gives_freed_space_back_to_the_disk(conn):
+    from pathlib import Path
+
+    path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    run = SyncRun(conn, "mal", "full")
+    for n in range(200):
+        store(conn, run, {"data": [f"Example title {i}" for i in range(500)], "n": n}, page=n)
+    conn.execute("UPDATE raw_api_pages SET fetched_at = '2020-01-01 00:00:00'")
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    before = path.stat().st_size
+    assert not raw.compact(conn)  # nothing free yet: no rewrite
+    assert raw.compress_old_pages(conn, now=NOW) == 200
+    assert path.stat().st_size >= before  # compressing alone never shrinks the file
+    assert raw.compact(conn)
+    assert path.stat().st_size < before / 2
+    assert not raw.compact(conn)  # once is enough
+    page = conn.execute("SELECT payload, payload_encoding FROM raw_api_pages").fetchone()
+    assert raw.read_page(*page)["data"][0] == "Example title 0"
+
+
 def test_reader_rejects_unknown_or_damaged_encoding():
     with pytest.raises(ValueError):
         raw.read_page("{}", "unknown")

@@ -4,33 +4,25 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
-from datetime import datetime
 
 from taste import settings, themes
-from taste.recommend.anime import _anime_facts, anime_recommendations
-from taste.recommend.books import _book_facts, book_recommendations
+from taste.recommend.anime import _anime_facts
+from taste.recommend.books import _book_facts
 from taste.recommend.model import _dismissed
-from taste.recommend.music import music_recommendations
-from taste.recommend.screen import _screen_facts, film_recommendations, tv_recommendations
+from taste.recommend.screen import _screen_facts
+
+POOLS = ("anime", "film", "tv", "book", "music_discover", "music_rediscover")
 
 
 def everything_recommendations(
-    conn: sqlite3.Connection, now: datetime | None = None
+    conn: sqlite3.Connection, saved: dict[str, tuple[list, dict]]
 ) -> tuple[list, dict]:
-    """Rerank eligible picks by within-list rank and a small theme adjustment."""
-    anime, anime_metrics = anime_recommendations(conn, now)
-    films, film_metrics = film_recommendations(conn, now.date() if now else None)
-    tv, tv_metrics = tv_recommendations(conn, now.date() if now else None)
-    books, book_metrics = book_recommendations(conn, now)
-    discover, rediscover = music_recommendations(conn, now)
-    pools = (
-        ("anime", anime),
-        ("film", films),
-        ("tv", tv),
-        ("book", books),
-        ("music_discover", discover),
-        ("music_rediscover", rediscover),
-    )
+    """Rerank eligible picks by within-list rank and a small theme adjustment.
+
+    `saved` holds each pool's latest (picks, metrics), the lists a refresh has just saved,
+    so nothing is predicted twice.
+    """
+    pools = [(list_kind, saved.get(list_kind, ([], {}))[0]) for list_kind in POOLS]
     facts = {
         "anime": _anime_facts(conn),
         "film": _screen_facts(conn),
@@ -67,15 +59,20 @@ def everything_recommendations(
             )
             ranked.append(pick)
     ranked.sort(key=lambda rec: (-rec.facts["mix_score"], rec.kind, rec.title, rec.item_key))
+
+    def holdout(list_kind: str) -> dict:
+        list_metrics = saved.get(list_kind, ([], {}))[1]
+        return list_metrics.get("experiments", {}).get("recency", {}).get("off", {})
+
     metrics = {
         "experimental": True,
         "visibility": themes.visibility(conn),
         "theme_evidence": taste,
         "holdouts": {
-            "anime": anime_metrics.get("experiments", {}).get("recency", {}).get("off", {}),
-            "film": film_metrics.get("experiments", {}).get("recency", {}).get("off", {}),
-            "tv": tv_metrics.get("experiments", {}).get("recency", {}).get("off", {}),
-            "book": book_metrics.get("experiments", {}).get("recency", {}).get("off", {}),
+            "anime": holdout("anime"),
+            "film": holdout("film"),
+            "tv": holdout("tv"),
+            "book": holdout("book"),
             "music": {"count": 0, "mae": None, "note": "Plays, no personal ratings."},
         },
     }

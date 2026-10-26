@@ -87,6 +87,22 @@ def test_rejects_newer_formats_and_oversize_and_links(tmp_path, monkeypatch):
         backup.restore(archive_file(tmp_path, [(link, b"/outside")]))
 
 
+def test_rejects_a_backup_from_a_newer_app(tmp_path):
+    path = archive_file(tmp_path, [("profile.db", b"example")])
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    manifest["app_version"] = "99.0.0"
+    newer = tmp_path / "newer.tasteprofile"
+    with zipfile.ZipFile(newer, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("profile.db", b"example")
+    with pytest.raises(backup.BackupError, match="newer"):
+        backup.restore(newer)
+    with pytest.raises(backup.BackupError, match="newer"):
+        backup.read_manifest(newer)
+    assert not profiles.exists("restored")
+
+
 def test_damaged_database_leaves_no_profile(tmp_path):
     with pytest.raises(backup.BackupError):
         backup.restore(archive_file(tmp_path, [("profile.db", b"not sqlite")]))
@@ -147,6 +163,40 @@ def test_desktop_backup_and_restore_with_paths(qtbot, tmp_path):
     assert win.settings.restore_profile(target, "restored")
     qtbot.waitUntil(lambda: win.current_profile() == "restored", timeout=10000)
     assert win.ctx.threads
+    win.close()
+
+
+def test_restore_offers_the_backups_own_id(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog, QInputDialog
+
+    from taste.desktop.context import AppContext
+    from taste.desktop.main_window import MainWindow
+
+    profiles.create("example_user", "Example")
+    target = tmp_path / "moving.tasteprofile"
+    backup.create("example_user", target)
+    asked = []
+
+    def answer(_parent, _title, prompt, _echo, text):
+        asked.append((prompt, text))
+        return "", True  # left as it was: keep the backup's own id
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(target), ""))
+    monkeypatch.setattr(QInputDialog, "getText", answer)
+    # Here the id is taken, so the prompt says so.
+    win = MainWindow(AppContext())
+    qtbot.addWidget(win)
+    assert win.settings.restore_profile()
+    qtbot.waitUntil(lambda: not win.settings.is_transferring(), timeout=10000)
+    assert asked[-1] == ("That id is already used here. Type a new one.", "example_user")
+    win.close()
+    # A new computer: the backup's id is offered and kept.
+    monkeypatch.setenv("TASTE_DATA_DIR", str(tmp_path / "new-computer"))
+    win = MainWindow(AppContext())
+    qtbot.addWidget(win)
+    assert win.settings.restore_profile()
+    qtbot.waitUntil(lambda: win.current_profile() == "example_user", timeout=10000)
+    assert asked[-1] == ("Profile id", "example_user")
     win.close()
 
 

@@ -11,7 +11,7 @@ from taste import settings, themes
 from taste.db import utc_now
 from taste.recommend.anime import anime_recommendations
 from taste.recommend.books import book_recommendations
-from taste.recommend.everything import everything_recommendations
+from taste.recommend.everything import POOLS, everything_recommendations
 from taste.recommend.model import Rec, _dismissed
 from taste.recommend.music import music_recommendations
 from taste.recommend.screen import film_recommendations, tv_recommendations
@@ -50,19 +50,34 @@ def save_run(
     return run_id
 
 
-def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, Any], str | None]:
-    """The most recent saved run of a kind, minus anything dismissed since."""
-    run = conn.execute(
+def _newest_run(conn: sqlite3.Connection, kind: str) -> sqlite3.Row | None:
+    return conn.execute(
         "SELECT rec_run_id, created_at, metrics_json, params_json FROM rec_runs WHERE kind = ? "
         "ORDER BY rec_run_id DESC LIMIT 1",
         (kind,),
     ).fetchone()
-    if run is None:
-        return [], {}, None
-    if kind in ("anime", "everything") and json.loads(run["params_json"]).get(
+
+
+def _hidden_run(conn: sqlite3.Connection, kind: str, run: sqlite3.Row) -> bool:
+    # Old reasons may name a seed that has since become hidden. Runs saved before 3.0
+    # carry no stamp, so they count as stale too.
+    return kind in ("anime", "everything") and json.loads(run["params_json"]).get(
         "anime_visibility"
-    ) != themes.visibility(conn):
-        return [], {}, None  # old reasons may name a seed that has since become hidden
+    ) != themes.visibility(conn)
+
+
+def withheld(conn: sqlite3.Connection, kind: str) -> bool:
+    """Whether `latest` holds back the newest saved run of a list. A recompute from the
+    cache (no network) brings the list back."""
+    run = _newest_run(conn, kind)
+    return run is not None and _hidden_run(conn, kind, run)
+
+
+def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, Any], str | None]:
+    """The most recent saved run of a kind, minus anything dismissed since."""
+    run = _newest_run(conn, kind)
+    if run is None or _hidden_run(conn, kind, run):
+        return [], {}, None
     item_kind = kind if kind in ("anime", "film", "tv", "book", "everything") else "artist"
     dismissed = _dismissed(conn, item_kind)
     recs = [
@@ -93,6 +108,10 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
 
 
 def dismiss(conn: sqlite3.Connection, kind: str, item_key: str) -> None:
+    if kind == "everything":
+        # Not interested in a mixed pick means the item itself: it's stored under its own
+        # list ("anime", "artist", ...), so that list hides it too.
+        kind, item_key = item_key.split(":", 1)
     conn.execute(
         "INSERT INTO rec_dismissed (kind, item_key, dismissed_at) VALUES (?, ?, ?) "
         "ON CONFLICT (kind, item_key) DO NOTHING",
@@ -141,7 +160,9 @@ def compute_all(
         books, metrics = book_recommendations(conn, now)
         save_run(conn, "book", books, metrics)
     if "everything" in kinds:
-        picks, metrics = everything_recommendations(conn, now)
+        # The mix reranks the lists saved above (or by an earlier refresh), never predicts again.
+        saved = {kind: latest(conn, kind)[:2] for kind in POOLS}
+        picks, metrics = everything_recommendations(conn, saved)
         save_run(conn, "everything", picks, metrics)
     return {kind: len(latest(conn, kind)[0]) for kind in LIST_KINDS}
 

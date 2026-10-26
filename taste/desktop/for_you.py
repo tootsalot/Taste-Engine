@@ -208,7 +208,7 @@ class PosterTile(QFrame):
             layout.addWidget(self.medium, 0, Qt.AlignmentFlag.AlignLeft)
         # The score sits beside the title (2.4), not under a two-line gap.
         number, caption = score_text(list_kind, rec)
-        self.score = label(number if list_kind != "music_rediscover" else f"{number} plays")
+        self.score = label(number if visual_kind != "music_rediscover" else f"{number} plays")
         self.score.setProperty("role", "tile-score")
         self.score.setProperty("accent", visual_kind.split("_")[0])
         self.score.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
@@ -583,6 +583,8 @@ class ForYouPage(LazyPage, QWidget):
         self.worker: RecsWorker | None = None
         self.fetching = False  # True while a refresh calls the APIs (minutes, not a second)
         self.is_blocked = lambda: False  # the main window points this at "is a sync running?"
+        self.withheld = False  # a saved list is held back until it's recomputed
+        self._rebuilt: set[str] = set()  # profiles whose held-back lists were recomputed
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
@@ -696,11 +698,14 @@ class ForYouPage(LazyPage, QWidget):
                     self.lists[kind].note.setText(
                         "Experimental. Genre themes mix the existing pools. "
                         "Baseline holdouts use the 1 to 10 scale. " + "; ".join(checks)
+                        if created
+                        else ""
                     )
                 if kind == "anime":
                     self.lists[kind].note.setText(accuracy_text(metrics))
                     self.lists[kind].note.setToolTip(plain_tip(accuracy_tip(metrics)))
                 newest = max(filter(None, (newest, created)), default=None)
+            self.withheld = any(recommend.withheld(conn, k) for k in ("anime", "everything"))
             scope = settings.lastfm_scope_note(conn)
             tz_name = settings.get(conn, "timezone")
         finally:
@@ -713,6 +718,22 @@ class ForYouPage(LazyPage, QWidget):
             else "Never refreshed"
         )
         self._render_current()
+        self.rebuild_withheld()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        super().showEvent(event)
+        self.rebuild_withheld()
+
+    def rebuild_withheld(self) -> None:
+        """A list saved before 3.0, or before an adult-visibility change, is held back; it
+        comes back from the cache (no network) once, while this page is in front."""
+        if (
+            self.withheld
+            and self.profile_id not in self._rebuilt
+            and self.isVisibleTo(self.window())
+            and self.start_refresh(fetch=False) is not None
+        ):
+            self._rebuilt.add(self.profile_id)
 
     def say(self, text: str) -> None:
         self.status.setText(text)

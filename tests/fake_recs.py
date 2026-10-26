@@ -314,7 +314,7 @@ class FakeLastfmApi:
                     "bio": {"summary": bio}}  # fmt: skip
             return FakeResponse(200, {"artist": info})
         if method == "artist.gettoptags":
-            tags = [{"name": "Example Dream Pop", "count": 100}, {"name": "Night", "count": 40}]
+            tags = [{"name": "Dream Pop", "count": 100}, {"name": "Night", "count": 40}]
             return FakeResponse(200, {"toptags": {"tag": tags}})
         if method == "artist.gettopalbums":
             name, cover = TOP_ALBUMS.get(artist, ("", None))

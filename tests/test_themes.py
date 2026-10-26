@@ -21,7 +21,7 @@ def test_map_covers_genres_and_moods_in_the_invented_library():
     for details in world.tmdb.catalog.values():
         for tag in details.get("genres", []):
             assert tag["name"].casefold() in themes.MAP["tmdb"]
-    for tag in ("Example Dream Pop", "Night"):
+    for tag in ("Dream Pop", "Night"):
         assert themes.mapped("lastfm", [tag])
 
 
@@ -79,10 +79,12 @@ def test_everything_builds_dismisses_and_keeps_usual_picks(conn, request):
     assert recommend.latest(conn, "anime")[0] == before
     recommend.dismiss(conn, "everything", picks[0].item_key)
     assert picks[0].item_key not in {r.item_key for r in recommend.latest(conn, "everything")[0]}
-    assert picks[0].item_key not in {
-        r.item_key for r in recommend.everything_recommendations(conn, NOW)[0]
-    }
-    assert recommend.anime_recommendations(conn, NOW)[0] == before
+    # Not interested means the show itself, so its own list drops it too.
+    show = picks[0].facts["source_item_key"]
+    assert show not in {r.item_key for r in recommend.latest(conn, "anime")[0]}
+    assert show not in {r.item_key for r in recommend.anime_recommendations(conn, NOW)[0]}
+    recommend.compute_all(conn, NOW, ("anime", "everything"))
+    assert picks[0].item_key not in {r.item_key for r in recommend.latest(conn, "everything")[0]}
     settings.set_value(conn, "include_nsfw", False)
     assert recommend.latest(conn, "everything")[0] == []  # stale reasons are also withheld
 
@@ -177,9 +179,34 @@ def test_mixed_page_shows_medium_colors_and_fits_both_window_sizes(qtbot, monkey
         win.ctx.shutdown()
 
 
+def test_the_mix_reranks_saved_lists_without_predicting_again(conn, request, monkeypatch):
+    from taste import enrich
+
+    request.getfixturevalue("anime_world")
+    recommend.compute_all(conn, NOW, ("anime", "everything"))
+    first = [r.item_key for r in recommend.latest(conn, "everything")[0]]
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the mix must not predict the anime list again")
+
+    monkeypatch.setattr(enrich, "candidate_support", refuse)  # every anime prediction asks
+    recommend.compute_all(conn, NOW, ("everything",))
+    assert [r.item_key for r in recommend.latest(conn, "everything")[0]] == first
+
+
+def test_transfer_holdout_reads_the_theme_evidence_once(conn, monkeypatch):
+    loads = []
+    original = themes.load
+    monkeypatch.setattr(themes, "load", lambda c: loads.append(1) or original(c))
+    scored = [(i, 8, 7) for i in range(1, 41)]
+    facts = {i: {"genres": ["Psychological"], "studios": []} for i, _, _ in scored}
+    experiments.transfer_metrics(conn, "tv", scored, facts, NOW)
+    assert len(loads) == 1  # the "on" check, for all five folds; "off" reads none
+
+
 def test_primary_dismissals_also_hide_saved_mixed_picks(conn, request):
     request.getfixturevalue("anime_world")
-    recommend.compute_all(conn, NOW, ("everything",))
+    recommend.compute_all(conn, NOW, ("anime", "everything"))
     pick = recommend.latest(conn, "everything")[0][0]
     recommend.dismiss(conn, "anime", pick.facts["source_item_key"])
     assert pick.item_key not in {r.item_key for r in recommend.latest(conn, "everything")[0]}

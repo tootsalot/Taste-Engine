@@ -179,3 +179,23 @@ def compress_old_pages(
                 ).rowcount
         after = rows[-1][0]
     return changed
+
+
+COMPACT_FREE_SHARE = 0.25
+
+
+def compact(conn: sqlite3.Connection) -> bool:
+    """Rewrite the database once a quarter or more of it is free space (pages compressed
+    or pruned). SQLite reuses free space but never gives it back to the disk on its own."""
+    pages = conn.execute("PRAGMA page_count").fetchone()[0]
+    free = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    if not pages or free / pages < COMPACT_FREE_SHARE:
+        return False
+    try:
+        conn.execute("VACUUM")
+        # With WAL the rewrite lands in the -wal file; this copies it back and empties it,
+        # or neither file would get smaller.
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        return False  # VACUUM needs about the file's size in free disk, or it was busy
+    return True

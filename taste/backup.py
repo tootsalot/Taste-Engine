@@ -121,6 +121,53 @@ def _members(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
     return members
 
 
+def _version(text: object) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(part) for part in str(text).split("."))
+    except ValueError:
+        return None
+
+
+def _manifest(archive: zipfile.ZipFile) -> dict:
+    manifest = json.loads(archive.read("manifest.json"))
+    if (
+        not isinstance(manifest, dict)
+        or type(manifest.get("format")) is not int
+        or manifest["format"] != FORMAT
+    ):
+        raise BackupError("This backup format is not supported.")
+    made_by = _version(manifest.get("app_version"))
+    if made_by and made_by > _version(__version__):
+        raise BackupError(
+            "This backup is from a newer version of Taste Engine. Update the app, then restore it."
+        )
+    return manifest
+
+
+def read_manifest(path: str | Path) -> dict:
+    """An archive's checked manifest, to offer its profile id before restoring."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            _members(archive)
+            return _manifest(archive)
+    except BackupError:
+        raise
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+        raise BackupError("This file isn't a profile backup, or it's damaged.") from None
+
+
+def id_in_use(profile_id: str, root: Path | None = None, recap_root: Path | None = None) -> bool:
+    """A profile, its picture, or a retained recap folder already has this id."""
+    root = root or profiles.profiles_dir()
+    recap_root = recap_root or data_dir() / "recaps"
+    paths = (
+        profiles.db_path(profile_id, root),
+        profiles.picture_path(profile_id, root),
+        recap_root / profile_id,
+    )
+    return any(p.exists() or p.is_symlink() for p in paths)
+
+
 def _check_database(path: Path) -> None:
     conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
@@ -153,20 +200,14 @@ def restore(
     try:
         with zipfile.ZipFile(path) as archive:
             members = _members(archive)
-            manifest = json.loads(archive.read("manifest.json"))
-            if (
-                not isinstance(manifest, dict)
-                or type(manifest.get("format")) is not int
-                or manifest["format"] != FORMAT
-            ):
-                raise BackupError("This backup format is not supported.")
+            manifest = _manifest(archive)
             pid = profiles.validate_id(
                 profile_id if profile_id is not None else manifest.get("profile_id")
             )
             database = profiles.db_path(pid, root)
             picture = profiles.picture_path(pid, root)
             recaps = recap_root / pid
-            if any(p.exists() or p.is_symlink() for p in (database, picture, recaps)):
+            if id_in_use(pid, root, recap_root):
                 raise profiles.ProfileError(
                     "That profile id already exists or has retained files. Choose a new id."
                 )

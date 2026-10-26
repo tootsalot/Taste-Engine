@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import __version__, profiles, settings
+from taste import __version__, backup, profiles, settings
 from taste.config import data_dir
 from taste.desktop import motion, theme, ui_state
 from taste.desktop.context import AppContext
@@ -564,11 +564,26 @@ class SettingsPage(QWidget):
             )
             if not path:
                 return False
-            # Always offer an id before launching the job, including archives whose old
-            # profile or retained recap folder is still on this computer.
-            profile_id, ok = QInputDialog.getText(self, "Restore a profile", "New profile id")
+            # Offer the backup's own id, which suits a new computer. One already used here
+            # (a profile or its retained recaps) needs a new one: restore never replaces.
+            try:
+                offered = profiles.validate_id(backup.read_manifest(path).get("profile_id"))
+            except backup.BackupError as exc:
+                self.message.emit(str(exc))
+                return False
+            except profiles.ProfileError:
+                offered = ""
+            prompt = (
+                "That id is already used here. Type a new one."
+                if offered and backup.id_in_use(offered)
+                else "Profile id"
+            )
+            profile_id, ok = QInputDialog.getText(
+                self, "Restore a profile", prompt, QLineEdit.EchoMode.Normal, offered
+            )
             if not ok:
                 return False
+            profile_id = profile_id.strip() or None  # blank keeps the backup's own id
         return self._start_transfer("restore", path, profile_id) if path else False
 
     def _start_transfer(self, operation: str, path, profile_id: str | None) -> bool:
