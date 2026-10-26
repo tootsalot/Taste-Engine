@@ -104,7 +104,11 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
     if kind == "everything":
         hidden = {tuple(r) for r in conn.execute("SELECT kind, item_key FROM rec_dismissed")}
         recs = [r for r in recs if (r.kind, r.facts.get("source_item_key")) not in hidden]
-    return recs, json.loads(run["metrics_json"]), run["created_at"]
+    metrics = json.loads(run["metrics_json"])
+    # 3.1 used model for both a numeric anime error and the selected-model block.
+    if isinstance(metrics.get("model"), dict):
+        metrics.setdefault("selected_model", metrics.pop("model"))
+    return recs, metrics, run["created_at"]
 
 
 def dismiss(conn: sqlite3.Connection, kind: str, item_key: str) -> None:

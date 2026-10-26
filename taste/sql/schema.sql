@@ -636,6 +636,17 @@ CREATE TABLE IF NOT EXISTS rec_runs (
     metrics_json TEXT NOT NULL DEFAULT '{}'
 );
 
+-- One reusable five-fold check per medium and selected model, replaced when its
+-- training inputs change. Recommendation runs remain the saved display history.
+CREATE TABLE IF NOT EXISTS rec_model_calibrations (
+    medium           TEXT NOT NULL,
+    model_name       TEXT NOT NULL,
+    fingerprint      TEXT NOT NULL,
+    predictions_json TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY (medium, model_name)
+);
+
 CREATE TABLE IF NOT EXISTS rec_items (
     rec_run_id   INTEGER NOT NULL REFERENCES rec_runs (rec_run_id) ON DELETE CASCADE,
     rank         INTEGER NOT NULL,

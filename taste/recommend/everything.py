@@ -62,8 +62,8 @@ def everything_recommendations(
 
     def holdout(list_kind: str) -> dict:
         list_metrics = saved.get(list_kind, ([], {}))[1]
-        model = list_metrics.get("model")
-        if isinstance(model, dict):
+        model = list_metrics.get("selected_model")
+        if model is not None:
             # The mix still reports plain Usual's baseline, already saved by that list.
             return {
                 "count": model["count"] if model["usual_mae"] is not None else 0,

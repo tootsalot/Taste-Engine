@@ -1,10 +1,11 @@
 """Nearest-title learning uses training leftovers and source metadata only."""
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
 
-from taste.recommend import candidates
+from taste.recommend import candidates, lab
 from taste.recommend.model import build_model
 
 
@@ -112,3 +113,69 @@ def test_prior_validation_refits_the_base_using_each_inner_training_part(conn, m
     assert seen == [{key for key, _, _ in rows if key % 5 != fold} for fold in range(5)] + [
         {key for key, _, _ in rows}
     ]
+
+
+def test_graph_omits_unrequested_stored_titles_but_keeps_inner_validation_targets(conn):
+    rows = [(key, float(key % 10 + 1), 7.0) for key in range(1, 21)]
+    facts = {key: {"genres": ["Drama"]} for key in range(1, 1001)}
+    ctx = context(conn, "film", rows, dict.fromkeys(range(21, 1001), 7.0))
+    full = candidates._similarity_graph(rows, facts, ctx)
+    requested = replace(ctx, prediction_ids=(101, 102))
+    graph = candidates._similarity_graph(rows, facts, requested)
+    assert set(graph) == {key for key, _, _ in rows} | {101, 102}
+    assert graph == {key: full[key] for key in graph}
+
+
+@pytest.mark.parametrize("fit", (candidates.fit_similar, candidates.fit_blend))
+def test_requested_predictions_and_later_predictions_match_the_full_graph(conn, fit):
+    rows = [(key, float(key % 10 + 1), 6.0 + key % 3) for key in range(1, 21)]
+    facts = {
+        key: {"genres": ["Drama" if key % 3 else "Comedy"], "studios": [str(key % 4)]}
+        for key in range(1, 121)
+    }
+    ctx = context(conn, "film", rows, dict.fromkeys(range(21, 121), 7.0))
+    full = fit(rows, facts, ctx)
+    requested = fit(rows, facts, replace(ctx, prediction_ids=(101, 102)))
+    assert [requested(key) for key in ctx.crowd] == [full(key) for key in ctx.crowd]
+    attribute = "prior" if fit is candidates.fit_similar else "weights"
+    assert getattr(requested, attribute) == getattr(full, attribute)
+
+
+@pytest.mark.parametrize("medium", lab.MEDIA)
+def test_lab_predictions_and_numbers_match_the_original_full_crowd_graph(conn, medium, monkeypatch):
+    rows = [(key, float(key % 10 + 1), 6.0 + key % 3) for key in range(1, 21)]
+    facts = {
+        key: {"genres": ["Drama" if key % 3 else "Comedy"], "studios": [str(key % 4)]}
+        for key in range(1, 121)
+    }
+    ctx = context(conn, medium, rows, dict.fromkeys(range(21, 121), 7.0))
+    monkeypatch.setattr(lab, "load_data", lambda *_: (rows, facts, ctx))
+    choices = tuple(c for c in lab.DEFAULT_CANDIDATES if c.name in ("similar", "blend"))
+    graph_function = candidates._similarity_graph
+    built = []
+
+    def capture(train, item_facts, candidate_context, *args):
+        graph = graph_function(train, item_facts, candidate_context, *args)
+        built.append(set(graph))
+        return graph
+
+    monkeypatch.setattr(candidates, "_similarity_graph", capture)
+    predictions = {
+        choice.name: lab.holdout_predictions(rows, facts, ctx, choice) for choice in choices
+    }
+    results = lab.evaluate(conn, medium, choices)
+    assert built
+    assert all(keys == {key for key, _, _ in rows} for keys in built)
+
+    def original_graph(train, item_facts, candidate_context, *args):
+        return graph_function(train, item_facts, replace(candidate_context, prediction_ids=None))
+
+    monkeypatch.setattr(candidates, "_similarity_graph", original_graph)
+    assert predictions == {
+        choice.name: lab.holdout_predictions(rows, facts, ctx, choice) for choice in choices
+    }
+    original_results = lab.evaluate(conn, medium, choices)
+    for result, original in zip(results, original_results, strict=True):
+        result.pop("seconds")
+        original.pop("seconds")
+    assert results == original_results

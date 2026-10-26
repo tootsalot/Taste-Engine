@@ -172,6 +172,18 @@ def _screen_recommendations(
     ):
         weight = (rating - (mine or 0)) / (1 + position / 10)
         sources.setdefault(rec_id, []).append((weight, title, rating))
+    eligible = {}
+    for tmdb_id in (set(support) | watchlist) - rated:
+        f = facts.get(tmdb_id)
+        if not f or f["vote_average"] is None or str(tmdb_id) in dismissed:
+            continue
+        if (f["vote_count"] or 0) < FILM_MIN_VOTES or not f["fetched_at"]:
+            continue  # unsettled, or only known from a list so far (no genres yet)
+        if (f["release_date"] or "") > today_text:
+            continue  # not out yet: its average is anticipation, not a verdict
+        if kind == "tv" and is_anime(f):
+            continue  # MAL and the Anime tab cover anime
+        eligible[tmdb_id] = f
     chosen = None
     if choice == "usual":
         residuals = sorted(holdout_residuals(scored, facts))
@@ -187,19 +199,12 @@ def _screen_recommendations(
             for key, f in facts.items()
             if f["vote_average"] is not None
         }
-        chosen = selection.fit_selected(conn, item_kind, choice, scored, facts, crowd_values)
+        chosen = selection.fit_selected(
+            conn, item_kind, choice, scored, facts, crowd_values, prediction_ids=tuple(eligible)
+        )
         residuals = chosen.residuals
     recs: list[Rec] = []
-    for tmdb_id in (set(support) | watchlist) - rated:
-        f = facts.get(tmdb_id)
-        if not f or f["vote_average"] is None or str(tmdb_id) in dismissed:
-            continue
-        if (f["vote_count"] or 0) < FILM_MIN_VOTES or not f["fetched_at"]:
-            continue  # unsettled, or only known from a list so far (no genres yet)
-        if (f["release_date"] or "") > today_text:
-            continue  # not out yet: its average is anticipation, not a verdict
-        if kind == "tv" and is_anime(f):
-            continue  # MAL and the Anime tab cover anime
+    for tmdb_id, f in eligible.items():
         crowd = shrunk(f["vote_average"], f["vote_count"], typical, prior)
         predicted = (
             chosen.predict(tmdb_id) if chosen else model.predict(crowd, f["genres"], f["studios"])
@@ -265,7 +270,7 @@ def _screen_recommendations(
         **holdout_check(scored, residuals, raw),
     }
     if chosen:
-        metrics["model"] = chosen.metrics
+        metrics["selected_model"] = chosen.metrics
     else:
         metrics.update(experiments.metrics(conn, item_kind, scored, facts, today))
         if kind == "tv":

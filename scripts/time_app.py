@@ -50,7 +50,7 @@ def main() -> None:
     parser.add_argument(
         "--models",
         action="store_true",
-        help="also time experimental fits, predictions, and calibrated list recomputes",
+        help="also time all four rating models and first and unchanged second list recomputes",
     )
     args = parser.parse_args()
     with (
@@ -132,7 +132,7 @@ def main() -> None:
                     for medium in lab.MEDIA:
                         rows, facts, context = lab.load_data(conn, medium)
                         for candidate in lab.DEFAULT_CANDIDATES:
-                            if candidate.name not in ("details", "similar", "blend"):
+                            if candidate.name not in settings.REC_MODELS:
                                 continue
                             start = time.perf_counter()
                             predict = candidate.fit(rows, facts, context)
@@ -147,8 +147,15 @@ def main() -> None:
                             try:
                                 settings.set_value(conn, key, candidate.name)
                                 start = time.perf_counter()
-                                recommend.compute_all(conn, NOW_DT, (medium,))
-                                timings[f"{title} list (fit + calibration + save)"] = (
+                                with db.transaction(conn):
+                                    recommend.compute_all(conn, NOW_DT, (medium,))
+                                timings[f"{title} list first (fit + calibration + save)"] = (
+                                    time.perf_counter() - start
+                                )
+                                start = time.perf_counter()
+                                with db.transaction(conn):
+                                    recommend.compute_all(conn, NOW_DT, (medium,))
+                                timings[f"{title} list second (unchanged ratings + save)"] = (
                                     time.perf_counter() - start
                                 )
                             finally:

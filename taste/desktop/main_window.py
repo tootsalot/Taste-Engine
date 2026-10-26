@@ -404,7 +404,7 @@ class MainWindow(QMainWindow):
 
     def _recaps_made(self, profile_id: str) -> None:
         """Announce a recap made for the first time, once."""
-        if profile_id != self.current_profile():
+        if self._closing or profile_id != self.current_profile() or not profiles.exists(profile_id):
             return
         conn = self.ctx.connect(profile_id)
         try:
@@ -433,7 +433,7 @@ class MainWindow(QMainWindow):
         """Start a Sync everything if the profile asks for one on launch: every time, or
         when the last sync was a day ago or more. Returns whether it started."""
         pid = self.current_profile()
-        if pid is None or self.is_busy():
+        if self._closing or pid is None or not profiles.exists(pid) or self.is_busy():
             return False
         conn = self.ctx.connect(pid)
         try:

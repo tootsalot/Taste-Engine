@@ -563,6 +563,42 @@ def test_sync_on_launch_every_time_or_once_a_day(window, qtbot):
         assert window.sync_on_launch() is True  # every launch
 
 
+def test_closed_windows_launch_callback_never_creates_a_profile_in_a_new_folder(
+    window, tmp_path, monkeypatch, qapp
+):
+    window.new_profile(("me", "Example"))
+    original = profiles.db_path("me")
+    window.close()
+    qapp.processEvents()
+    monkeypatch.setenv("TASTE_DATA_DIR", str(tmp_path / "new-computer"))
+    assert not window.sync_on_launch()
+    assert not profiles.exists("me")
+    assert original.is_file()
+
+
+def test_launch_sync_never_recreates_a_deleted_profile(window, qapp):
+    window.new_profile(("me", "Example"))
+    window.ctx.shutdown()
+    qapp.processEvents()
+    profiles.db_path("me").unlink()
+    assert not window.sync_on_launch()
+    assert not profiles.exists("me")
+
+
+@pytest.mark.parametrize("closed", (False, True))
+def test_late_recap_callback_never_recreates_a_profile(window, tmp_path, monkeypatch, qapp, closed):
+    window.new_profile(("me", "Example"))
+    window.ctx.shutdown()
+    qapp.processEvents()
+    if closed:
+        window.close()
+        monkeypatch.setenv("TASTE_DATA_DIR", str(tmp_path / "new-computer"))
+    else:
+        profiles.db_path("me").unlink()
+    window._recaps_made("me")
+    assert not profiles.exists("me")
+
+
 def test_report_pages_can_open_on_the_latest_year(window, qtbot):
     from taste import settings as registry
 

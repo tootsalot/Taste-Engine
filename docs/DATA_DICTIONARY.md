@@ -604,7 +604,31 @@ One row per computed list.
 | kind | TEXT | `anime`, `film`, `tv`, `book`, `music_discover` (artists I've never played), `music_rediscover` (artists I played a lot who have gone quiet), or `everything` (the mixed list). |
 | created_at | TEXT | When it was computed (UTC). |
 | params_json | TEXT | The recommendation settings used, as JSON. |
-| metrics_json | TEXT | Accuracy and diagnostic numbers. Usual anime retains `model_overall_bias` (my usual difference from the MAL mean), `held_out` (scored shows hidden from the model), and average whole-score errors in `model`, `community` (MAL alone), and `overall` (MAL plus my usual difference). Non-Usual rated lists carry the `model` object described under Rating models and the lab below. `{}` for music. |
+| metrics_json | TEXT | Accuracy and diagnostic numbers. Usual anime retains `model_overall_bias` (my usual difference from the MAL mean), `held_out` (scored shows hidden from the model), and average whole-score errors in `model`, `community` (MAL alone), and `overall` (MAL plus my usual difference). Non-Usual rated lists carry the `selected_model` object described under Rating models and the lab below. `{}` for music. |
+
+### `rec_model_calibrations`
+
+One replaceable row per rated medium and experimental model, at most twelve rows per
+profile. Keeping calibration separate from `rec_runs` lets model switches reuse an
+unchanged check even after newer runs are saved. Only list recomputes write this cache;
+the lab remains read-only.
+
+| Column | Type | Description |
+|---|---|---|
+| medium | TEXT PK | `anime`, `film`, `tv`, or `book`. Never null. |
+| model_name | TEXT PK | `details`, `similar`, or `blend`. Never null; combined key with medium. |
+| fingerprint | TEXT | SHA-256 of the calibration version, medium, model name, rated rows (source id, personal score, crowd score), fitted rated metadata, and relevant similarity links between rated titles. Contains no titles or keys. |
+| predictions_json | TEXT | `selected` and `usual` arrays of `[source_id, actual_score, held_out_prediction]`, in fold-major order. Both use identical source-id-modulo-five folds with training-only fits. Empty arrays below twenty ratings. Books use doubled stars. |
+| updated_at | TEXT | When this cache entry was replaced, as UTC text. |
+
+The fingerprint includes genres and credited people, details-model features where used,
+MAL recommendation votes between rated titles for Similar titles and Blend, and rated
+Hardcover similar-book links for those models. Hidden adult anime remain in the rated
+rows and accuracy counts. A changed training input replaces the row; corrupt prediction
+JSON is discarded and rebuilt. New suggestions get a fresh full-data fit without
+invalidating held-out checks that do not use their metadata. A code-level calibration
+version invalidates older checks when fitting rules change. Predictions, residuals, and
+accuracy numbers are identical whether the unchanged check is cached or fitted again.
 
 ### `rec_items`
 The suggestions in a run, best first.
@@ -762,7 +786,7 @@ Each accepts `usual` (Usual), `details` (More details), `similar` (Similar title
 reasons, chances, and accuracy fields. The 3.0 dismissal, recency, and theme-transfer
 switches apply to Usual only.
 
-On another model, `rec_runs.metrics_json.model` is an object:
+On another model, `rec_runs.metrics_json.selected_model` is an object:
 
 | Field | Meaning |
 |---|---|
@@ -770,13 +794,19 @@ On another model, `rec_runs.metrics_json.model` is an object:
 | `count` | Eligible rated titles. At twenty or more, each was predicted once outside its training fold. |
 | `mae` | Mean absolute error of the selected model on those held-out titles, on the 1 to 10 scale. |
 | `usual_mae` | Plain Usual's mean absolute error on the same titles and folds, with the three 3.0 switches off. |
+| `whole_mae` | Anime only: selected-model error after converting each held-out prediction with `whole_score`, as the lab does. |
+| `usual_whole_mae` | Anime only: plain Usual's whole-score error on those same five folds. |
 
 Book errors use doubled stars, matching the lab. For You divides book errors by two and
 labels them as stars; stored values and lab output stay on the doubled scale. Below
-twenty eligible ratings, `count` still records the actual number, both errors are null,
+twenty eligible ratings, `count` still records the actual number, all errors are null,
 and no chance estimate is shown. Usual does not gain this block. In particular, anime's
-existing numeric `model` field remains its old single-fold whole-score error on Usual;
-only a non-Usual anime run replaces that value with the object above.
+existing numeric `model` field remains its old single-fold whole-score error on Usual.
+Anime's selected-model note and tooltip use `whole_mae` and `usual_whole_mae`; other
+media use `mae` and `usual_mae`. Saved 3.1 runs that used an object under `model` are
+translated to `selected_model` when read, without rewriting the run. An old anime
+comparison has no whole-score fields, so its note requests a recompute instead of
+presenting its raw errors as whole-score errors.
 
 `rec_items.facts_json.details` gains a sentence such as `Predicted by Similar titles,
 experimental.` on non-Usual lists. Seed and genre reasons still describe real ratings.

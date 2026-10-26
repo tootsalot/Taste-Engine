@@ -1,6 +1,7 @@
 """Selected rating models use their own predictions and held-out calibration."""
 
 import math
+from dataclasses import replace
 from datetime import date
 from statistics import mean
 
@@ -9,7 +10,7 @@ import pytest
 from taste import recommend, settings, themes
 from taste.recommend import candidates, experiments, lab, selection
 from taste.recommend.everything import everything_recommendations
-from taste.recommend.model import chance_at_least, holdout_residuals
+from taste.recommend.model import chance_at_least, holdout_residuals, whole_score
 from tests.fill_world import NOW_DT
 from tests.model_world import fill_model_library
 
@@ -47,9 +48,17 @@ def test_selected_scores_chances_and_errors_match_the_lab(full_library, medium, 
         "mae": round(mean(abs(value) for value in residuals), 3),
         "usual_mae": round(mean(abs(value) for value in usual), 3),
     }
+    if medium == "anime":
+        usual_predictions = lab.holdout_predictions(rows, facts, context, lab.DEFAULT_CANDIDATES[0])
+        expected_check.update(
+            whole_mae=round(mean(abs(mine - whole_score(guess)) for _, mine, guess in held_out), 3),
+            usual_whole_mae=round(
+                mean(abs(mine - whole_score(guess)) for _, mine, guess in usual_predictions), 3
+            ),
+        )
     settings.set_value(conn, f"rec_model_{medium}", name)
     recs, metrics = list_result(conn, medium)
-    assert metrics["model"] == expected_check
+    assert metrics["selected_model"] == expected_check
     assert "experiments" not in metrics
     assert "theme_transfer" not in metrics
     assert recs
@@ -99,7 +108,10 @@ def test_small_selected_medium_keeps_its_count_and_suppresses_errors(conn, mediu
     rows = [(key, 7.0, 7.0) for key in range(1, 20)]
     facts = {key: {} for key, _, _ in rows}
     chosen = selection.fit_selected(conn, medium, "details", rows, facts, dict.fromkeys(facts, 7.0))
-    assert chosen.metrics == {"name": "details", "count": 19, "mae": None, "usual_mae": None}
+    expected = {"name": "details", "count": 19, "mae": None, "usual_mae": None}
+    if medium == "anime":
+        expected.update(whole_mae=None, usual_whole_mae=None)
+    assert chosen.metrics == expected
     assert chosen.residuals == []
     assert chosen.predict(1) == 7.0
 
@@ -129,7 +141,7 @@ def test_mixed_list_reranks_saved_selected_picks_without_refitting(full_library,
 
     monkeypatch.setattr(selection, "fit_selected", refuse)
     recs, metrics = everything_recommendations(full_library, saved)
-    film_check = saved["film"][1]["model"]
+    film_check = saved["film"][1]["selected_model"]
     assert metrics["holdouts"]["film"] == {
         "count": film_check["count"],
         "mae": film_check["usual_mae"],
@@ -140,3 +152,24 @@ def test_mixed_list_reranks_saved_selected_picks_without_refitting(full_library,
             original = film_picks[rec.facts["source_item_key"]]
             assert rec.score == original.score
             assert rec.facts["details"] == original.facts["details"]
+
+
+@pytest.mark.parametrize("medium", lab.MEDIA)
+def test_selected_fit_receives_only_titles_the_list_predicts(full_library, monkeypatch, medium):
+    original = selection.fit_selected
+    requested, predicted = [], []
+
+    def capture(*args, **kwargs):
+        requested.extend(kwargs["prediction_ids"])
+        selected = original(*args, **kwargs)
+
+        def predict(key):
+            predicted.append(key)
+            return selected.predict(key)
+
+        return replace(selected, predict=predict)
+
+    monkeypatch.setattr(selection, "fit_selected", capture)
+    settings.set_value(full_library, f"rec_model_{medium}", "details")
+    assert list_result(full_library, medium)[0]
+    assert set(requested) == set(predicted)

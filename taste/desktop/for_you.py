@@ -832,12 +832,17 @@ class ForYouPage(LazyPage, QWidget):
 
 def model_note(kind: str, metrics: dict) -> str | None:
     """Describe a saved experimental comparison, leaving Usual's existing notes alone."""
-    block = metrics.get("model")
-    if not isinstance(block, dict) or block.get("name") == "usual":
+    block = metrics.get("selected_model")
+    if block is None or block.get("name") == "usual":
         return None
     name = settings.REC_MODELS.get(block.get("name"), "Selected model")
     count = block.get("count", 0)
-    error, usual = block.get("mae"), block.get("usual_mae")
+    if kind == "anime":
+        if "whole_mae" not in block:
+            return f"{name} (experimental): recompute this list to compare whole-score errors."
+        error, usual = block.get("whole_mae"), block.get("usual_whole_mae")
+    else:
+        error, usual = block.get("mae"), block.get("usual_mae")
     if error is None or usual is None:
         noun = "title" if count == 1 else "titles"
         return f"{name} (experimental): {count} rated {noun}; not enough ratings to compare errors."
@@ -865,11 +870,14 @@ def accuracy_text(metrics: dict) -> str:
 def accuracy_tip(metrics: dict) -> str:
     chosen = model_note("anime", metrics)
     if chosen is not None:
-        block = metrics["model"]
-        if block.get("mae") is None or block.get("usual_mae") is None:
+        block = metrics["selected_model"]
+        if "whole_mae" not in block:
+            return chosen + " Each guess is a whole score, like the ones you give."
+        if block.get("whole_mae") is None or block.get("usual_whole_mae") is None:
             return chosen + " Errors are shown only when enough rated titles can be held out."
         return (
-            chosen + " Both errors use the same titles, held out over five folds. Lower is better."
+            chosen + " Both errors use the same titles, held out over five folds. "
+            "Each guess is a whole score, like the ones you give. Lower is better."
         )
     if metrics.get("model") is None:
         return (

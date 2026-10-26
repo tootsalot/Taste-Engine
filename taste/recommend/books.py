@@ -91,16 +91,7 @@ def book_recommendations(
             for position, book_id in enumerate(json.loads(similar or "[]")):
                 weight = (rating - mine) / (1 + position / 10)
                 sources.setdefault(book_id, []).append((weight, title, rating))
-    chosen = None
-    if choice == "usual":
-        residuals = sorted(holdout_residuals(scored, facts))
-        if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"] or cfg["rec_theme_transfer"]:
-            residuals = sorted(experiments.residuals(conn, "book", scored, facts, now))
-    else:
-        crowd = {key: f["rating"] * 2 for key, f in facts.items() if f["rating"] is not None}
-        chosen = selection.fit_selected(conn, "book", choice, scored, facts, crowd)
-        residuals = chosen.residuals
-    recs: list[Rec] = []
+    eligible = {}
     for book_id in set(support) | wanted:
         f = facts.get(book_id)
         if not f or not f.get("details_at") or str(book_id) in dismissed:
@@ -109,6 +100,20 @@ def book_recommendations(
             continue  # read, reading, paused, or given up
         if f["rating"] is None or (f["ratings_count"] or 0) < BOOK_MIN_RATINGS:
             continue
+        eligible[book_id] = f
+    chosen = None
+    if choice == "usual":
+        residuals = sorted(holdout_residuals(scored, facts))
+        if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"] or cfg["rec_theme_transfer"]:
+            residuals = sorted(experiments.residuals(conn, "book", scored, facts, now))
+    else:
+        crowd = {key: f["rating"] * 2 for key, f in facts.items() if f["rating"] is not None}
+        chosen = selection.fit_selected(
+            conn, "book", choice, scored, facts, crowd, prediction_ids=tuple(eligible)
+        )
+        residuals = chosen.residuals
+    recs: list[Rec] = []
+    for book_id, f in eligible.items():
         predicted = (
             chosen.predict(book_id)
             if chosen
@@ -172,7 +177,7 @@ def book_recommendations(
     recs.sort(key=lambda r: (-(r.score + 0.08 * math.log1p(r.support)), r.title))
     metrics = {"model_overall_bias": round(model.overall / 2, 3), "rated": len(scored)}
     if chosen:
-        metrics["model"] = chosen.metrics
+        metrics["selected_model"] = chosen.metrics
     else:
         metrics.update(experiments.metrics(conn, "book", scored, facts, now))
         metrics["theme_transfer"] = experiments.transfer_metrics(conn, "book", scored, facts, now)

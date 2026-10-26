@@ -169,19 +169,7 @@ def anime_recommendations(
     candidates = set(support)
     if cfg["rec_include_plan_to_watch"]:
         candidates |= plan_to_watch
-    chosen = None
-    if choice == "usual":
-        residuals = sorted(holdout_residuals(scored, facts))
-        if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"]:
-            residuals = sorted(experiments.residuals(conn, "anime", scored, facts, now))
-    else:
-        crowd = {
-            key: f["community_mean"] for key, f in facts.items() if f["community_mean"] is not None
-        }
-        chosen = selection.fit_selected(conn, "anime", choice, scored, facts, crowd)
-        residuals = chosen.residuals
-    recs: list[Rec] = []
-    predictions: dict[str, float] = {}
+    eligible = {}
     for anime_id in candidates:
         f = facts.get(anime_id)
         if not f or f["community_mean"] is None or str(anime_id) in dismissed:
@@ -192,6 +180,23 @@ def anime_recommendations(
             continue
         if not cfg["include_nsfw"] and f.get("nsfw_rating") == "black":
             continue
+        eligible[anime_id] = f
+    chosen = None
+    if choice == "usual":
+        residuals = sorted(holdout_residuals(scored, facts))
+        if cfg["rec_dismissal_signal"] or cfg["rec_recent_ratings"]:
+            residuals = sorted(experiments.residuals(conn, "anime", scored, facts, now))
+    else:
+        crowd = {
+            key: f["community_mean"] for key, f in facts.items() if f["community_mean"] is not None
+        }
+        chosen = selection.fit_selected(
+            conn, "anime", choice, scored, facts, crowd, prediction_ids=tuple(eligible)
+        )
+        residuals = chosen.residuals
+    recs: list[Rec] = []
+    predictions: dict[str, float] = {}
+    for anime_id, f in eligible.items():
         predicted = (
             chosen.predict(anime_id)
             if chosen
@@ -261,7 +266,7 @@ def anime_recommendations(
             rec.facts["chance_8_plus"] = round(chance, 3)
     metrics = {"model_overall_bias": round(model.overall, 3)}
     if chosen:
-        metrics.update({"rated": len(scored), "model": chosen.metrics})
+        metrics.update({"rated": len(scored), "selected_model": chosen.metrics})
     else:
         metrics.update(evaluate(conn, facts, scored))
         metrics.update(experiments.metrics(conn, "anime", scored, facts, now))

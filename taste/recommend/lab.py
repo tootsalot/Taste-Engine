@@ -20,7 +20,15 @@ from taste import settings
 from taste.recommend import candidates, experiments
 from taste.recommend.anime import _anime_facts, _scored
 from taste.recommend.books import _book_facts, _book_scored
-from taste.recommend.candidates import Context, Facts, Rows, fit_blend, fit_details, fit_similar
+from taste.recommend.candidates import (
+    Context,
+    Facts,
+    Rows,
+    fit_blend,
+    fit_details,
+    fit_similar,
+    fit_usual,
+)
 from taste.recommend.model import MIN_RESIDUALS, build_model, shrunk, whole_score
 from taste.recommend.screen import _screen_facts, _screen_scored, _typical_tmdb_average
 
@@ -60,10 +68,6 @@ def _fit(
         return model.predict(context.crowd[title_id], f.get("genres", []), f.get("studios", []))
 
     return predict
-
-
-def fit_usual(train_rows: Rows, facts: Facts, context: Context) -> Callable[[int], float]:
-    return _fit(train_rows, facts, context)
 
 
 def fit_dismissals(train_rows: Rows, facts: Facts, context: Context) -> Callable[[int], float]:

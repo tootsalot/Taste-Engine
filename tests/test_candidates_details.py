@@ -1,6 +1,7 @@
 """Ridge details learn metadata corrections from training ratings only."""
 
 import math
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -213,3 +214,32 @@ def test_missing_metadata_contains_no_invented_features(medium):
         set(),
         {},
     )
+
+
+def test_details_prepare_only_training_and_requested_metadata_and_load_later_titles(
+    conn, monkeypatch
+):
+    rows = [(key, 9.0 if key % 2 else 3.0, 6.0) for key in range(1, 41)]
+    facts = {
+        key: {"example_id": key, "media_type": "tv" if key % 2 else "movie"}
+        for key in range(1, 141)
+    }
+    ctx = candidates.Context(conn, "anime", dict.fromkeys(facts, 6.0), date(2026, 1, 1))
+    full = candidates.fit_details(rows, facts, ctx)
+    features = candidates.detail_features
+    seen = []
+
+    def capture(fact, medium):
+        seen.append(fact["example_id"])
+        return features(fact, medium)
+
+    monkeypatch.setattr(candidates, "detail_features", capture)
+    predict = candidates.fit_details(rows, facts, replace(ctx, prediction_ids=(101, 102)))
+    expected_ids = {key for key, _, _ in rows} | {101, 102}
+    assert set(seen) == expected_ids
+    assert len(seen) == len(expected_ids)
+    assert predict.penalty == full.penalty
+    assert [predict(key) for key in (101, 102, 103)] == [full(key) for key in (101, 102, 103)]
+    assert seen[-1] == 103
+    assert predict(103) == full(103)
+    assert seen.count(103) == 1

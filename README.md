@@ -158,6 +158,9 @@ ratings, and every run uses the same rules and bootstrap seed.
 
 The selected model uses the cache, without fetching more details. Its note in For You
 names it and compares its held-out error with Usual, and Behind the score names it too.
+For anime, both errors round each guess to a whole score, like the scores I give. The
+five-fold check is reused until my ratings or the facts the model reads change, so
+recomputing an unchanged list does not repeat that check.
 Its chance of an 8 or more, or 4 stars, comes from that model's own held-out misses. The
 switches for learning from Not interested, recent ratings, and borrowed themes apply to
 Usual only. Dismissed picks stay hidden with every model. Across everything keeps

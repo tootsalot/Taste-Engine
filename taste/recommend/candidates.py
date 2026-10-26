@@ -11,7 +11,7 @@ import json
 import math
 import sqlite3
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 
@@ -28,6 +28,7 @@ class Context:
     crowd: dict[int, float]
     # The lab freezes recency to stored data; new models do not use rating dates.
     now: date
+    prediction_ids: tuple[int, ...] | None = None
 
 
 def holdout_predictions(
@@ -42,10 +43,10 @@ def holdout_predictions(
     result = []
     for fold in range(5):
         train = [row for row in rows if row[0] % 5 != fold]
-        predict = fit(train, facts, context)
-        for key, mine, _ in rows:
-            if key % 5 == fold:
-                result.append((key, mine, predict(key)))
+        held_out = [row for row in rows if row[0] % 5 == fold]
+        fold_context = replace(context, prediction_ids=tuple(key for key, _, _ in held_out))
+        predict = fit(train, facts, fold_context)
+        result.extend((key, mine, predict(key)) for key, mine, _ in held_out)
     return result
 
 
@@ -53,7 +54,8 @@ def _clamp(value: float) -> float:
     return min(max(value, 1.0), 10.0)
 
 
-def _usual_predictor(train_rows: Rows, facts: Facts, context: Context) -> Callable[[int], float]:
+def fit_usual(train_rows: Rows, facts: Facts, context: Context) -> Callable[[int], float]:
+    """Fit the plain crowd line and leans, without optional recommendation signals."""
     model = build_model(train_rows, facts)
 
     def predict(title_id: int) -> float:
@@ -139,6 +141,16 @@ def detail_features(fact: dict, medium: str) -> tuple[set[tuple[str, str]], dict
     if count is not None and count >= 0 and math.isfinite(count):
         numeric[count_name] = math.log1p(count)
     return categories, numeric
+
+
+def _detail_raw(train_rows: Rows, facts: Facts, context: Context) -> DetailRaw:
+    """Project needed metadata only, without learning a vocabulary or numeric scale."""
+    keys = (
+        facts
+        if context.prediction_ids is None
+        else dict.fromkeys([key for key, _, _ in train_rows] + list(context.prediction_ids))
+    )
+    return {key: detail_features(facts.get(key, {}), context.medium) for key in keys}
 
 
 def _detail_encoder(train_rows: Rows, raw: DetailRaw):
@@ -231,15 +243,13 @@ def _details_design(train_rows: Rows, facts: Facts, raw: DetailRaw):
 def _details_fixed(
     train_rows: Rows, facts: Facts, context: Context, penalty: float, raw: DetailRaw | None = None
 ):
-    raw = (
-        raw
-        if raw is not None
-        else {key: detail_features(f, context.medium) for key, f in facts.items()}
-    )
+    raw = _detail_raw(train_rows, facts, context) if raw is None else raw
     model, encode, gram, rhs = _details_design(train_rows, facts, raw)
     weights = ridge_weights(gram, rhs, penalty)
 
     def predict(title_id: int) -> float:
+        if title_id not in raw:
+            raw[title_id] = detail_features(facts.get(title_id, {}), context.medium)
         correction = sum(weights[index] * value for index, value in encode(title_id))
         return _clamp(model.base(context.crowd[title_id]) + correction)
 
@@ -247,13 +257,13 @@ def _details_fixed(
     return predict
 
 
-def fit_details(train_rows: Rows, facts: Facts, context: Context):
+def fit_details(train_rows: Rows, facts: Facts, context: Context, raw: DetailRaw | None = None):
     """Ridge corrections to the usual line, with penalty chosen inside the training ratings.
 
     Each inner fold learns its own line, vocabulary and numeric scaling. Its Gram
     matrix is shared across penalty values. Equal errors favor stronger shrinkage.
     """
-    raw = {key: detail_features(f, context.medium) for key, f in facts.items()}
+    raw = _detail_raw(train_rows, facts, context) if raw is None else raw
     errors = [0.0] * len(DETAIL_PENALTIES)
     for fold in range(5):
         train = [row for row in train_rows if row[0] % 5 != fold]
@@ -279,7 +289,10 @@ SIMILAR_NEIGHBORS = 20
 
 
 def _similarity_graph(
-    train_rows: Rows, facts: Facts, context: Context
+    train_rows: Rows,
+    facts: Facts,
+    context: Context,
+    prediction_ids: Sequence[int] | None = None,
 ) -> dict[int, tuple[tuple[float, int], ...]]:
     """Metadata-only neighbor order, reusable inside this fit's nested folds.
 
@@ -287,6 +300,8 @@ def _similarity_graph(
     recommendation votes add a bounded link strength votes / (votes + 10);
     a Hardcover similar-book link has strength 1. Links work in either direction.
     A link combines with overlap as 1 - (1 - overlap) * (1 - link).
+    Targets include the requested predictions and training titles used by inner
+    validation. Unrelated stored suggestions need no neighbor lists.
     """
     genre_names = sorted({g for f in facts.values() for g in f.get("genres", [])})
     people_names = sorted({p for f in facts.values() for p in f.get("studios", [])})
@@ -318,12 +333,18 @@ def _similarity_graph(
                     links.setdefault(target, {})[key] = 1.0
 
     train_ids = sorted({key for key, _, _ in train_rows})
+    if prediction_ids is None:
+        prediction_ids = (
+            context.crowd
+            if context.prediction_ids is None
+            else dict.fromkeys((*train_ids, *context.prediction_ids))
+        )
     train_signatures = []
     for key in train_ids:
         g, p = signatures.get(key, (0, 0))
         train_signatures.append((key, g, p, g.bit_count() + 0.5 * p.bit_count()))
     graph = {}
-    for key in context.crowd:
+    for key in prediction_ids:
         g, p = signatures.get(key, (0, 0))
         size = g.bit_count() + 0.5 * p.bit_count()
         row_links = links.get(key, {})
@@ -398,6 +419,8 @@ def _fit_similar_with_graph(
 
     def predict(title_id: int) -> float:
         if title_id not in neighbors:
+            if title_id not in graph:
+                graph.update(_similarity_graph(train_rows, facts, context, (title_id,)))
             neighbors[title_id] = _neighbor_sums(leftovers, graph.get(title_id, ()))
         total, support = neighbors[title_id]
         return _clamp(model.base(context.crowd[title_id]) + total / (support + prior))
@@ -441,6 +464,7 @@ def _blend_predictions(
     facts: Facts,
     context: Context,
     graph: dict[int, tuple[tuple[float, int], ...]],
+    raw: DetailRaw | None = None,
 ) -> list[tuple[float, float, float, float]]:
     """Refit and retune both components inside each blend training fold."""
     predictions = []
@@ -449,8 +473,8 @@ def _blend_predictions(
         held_out = [row for row in train_rows if row[0] % 5 == fold]
         if not held_out:
             continue
-        usual = _usual_predictor(train, facts, context)
-        details = fit_details(train, facts, context)
+        usual = fit_usual(train, facts, context)
+        details = fit_details(train, facts, context, raw)
         similar = _fit_similar_with_graph(train, facts, context, graph)
         predictions.extend(
             (mine, usual(key), details(key), similar(key)) for key, mine, _ in held_out
@@ -461,12 +485,13 @@ def _blend_predictions(
 def fit_blend(train_rows: Rows, facts: Facts, context: Context) -> Callable[[int], float]:
     """Blend Usual, Details, and Similar with weights learned inside the training part."""
     graph = _similarity_graph(train_rows, facts, context)
-    weights = _blend_weights(_blend_predictions(train_rows, facts, context, graph))
+    raw = _detail_raw(train_rows, facts, context)
+    weights = _blend_weights(_blend_predictions(train_rows, facts, context, graph, raw))
     # A zero-weight component needs no final fit. Its validation predictions were
     # still fitted and tuned on each inner training part before selecting weights.
     predictors = (
-        _usual_predictor(train_rows, facts, context) if weights[0] else None,
-        fit_details(train_rows, facts, context) if weights[1] else None,
+        fit_usual(train_rows, facts, context) if weights[0] else None,
+        fit_details(train_rows, facts, context, raw) if weights[1] else None,
         _fit_similar_with_graph(train_rows, facts, context, graph) if weights[2] else None,
     )
 

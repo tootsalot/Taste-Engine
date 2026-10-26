@@ -20,15 +20,34 @@ window = test_for_you.window
 @pytest.mark.parametrize("kind", ("anime", "film", "tv"))
 @pytest.mark.parametrize("name", ("details", "similar", "blend"))
 def test_model_note_names_the_model_and_both_comparable_errors(kind, name):
-    metrics = {"model": {"name": name, "count": 300, "mae": 1.10, "usual_mae": 1.17}}
+    metrics = {
+        "selected_model": {
+            "name": name,
+            "count": 300,
+            "mae": 1.10,
+            "usual_mae": 1.17,
+            "whole_mae": 1.20,
+            "usual_whole_mae": 1.30,
+        }
+    }
     assert model_note(kind, metrics) == (
-        f"{settings.REC_MODELS[name]} (experimental): off by 1.10 on average on "
-        "300 held-out ratings, Usual 1.17."
+        f"{settings.REC_MODELS[name]} (experimental): off by "
+        f"{1.20 if kind == 'anime' else 1.10:.2f} on average on "
+        f"300 held-out ratings, Usual {1.30 if kind == 'anime' else 1.17:.2f}."
     )
 
 
 def test_book_model_note_converts_doubled_errors_to_explicit_stars():
-    metrics = {"model": {"name": "similar", "count": 130, "mae": 2.20, "usual_mae": 2.34}}
+    metrics = {
+        "selected_model": {
+            "name": "similar",
+            "count": 130,
+            "mae": 2.20,
+            "usual_mae": 2.34,
+            "whole_mae": 2.10,
+            "usual_whole_mae": 2.30,
+        }
+    }
     assert model_note("book", metrics) == (
         "Similar titles (experimental): off by 1.10 stars on average on "
         "130 held-out ratings, Usual 1.17 stars."
@@ -38,7 +57,16 @@ def test_book_model_note_converts_doubled_errors_to_explicit_stars():
 @pytest.mark.parametrize("kind", ("anime", "book"))
 @pytest.mark.parametrize("count", (0, 1, 19))
 def test_sparse_model_note_reports_only_the_count(kind, count):
-    metrics = {"model": {"name": "blend", "count": count, "mae": None, "usual_mae": None}}
+    metrics = {
+        "selected_model": {
+            "name": "blend",
+            "count": count,
+            "mae": None,
+            "usual_mae": None,
+            "whole_mae": None,
+            "usual_whole_mae": None,
+        }
+    }
     text = model_note(kind, metrics)
     assert text.startswith("Blend (experimental):")
     assert re.findall(r"\d+(?:\.\d+)?", text) == [str(count)]
@@ -58,10 +86,21 @@ def test_usual_notes_keep_the_existing_scalar_metrics_and_wording():
 
 
 def test_anime_accuracy_helpers_accept_new_blocks_without_treating_them_as_numbers():
-    metrics = {"model": {"name": "similar", "count": 300, "mae": 1.10, "usual_mae": 1.17}}
+    metrics = {
+        "selected_model": {
+            "name": "similar",
+            "count": 300,
+            "mae": 1.10,
+            "usual_mae": 1.17,
+            "whole_mae": 1.20,
+            "usual_whole_mae": 1.30,
+        }
+    }
     assert accuracy_text(metrics) == model_note("anime", metrics)
     assert "same titles" in accuracy_tip(metrics)
-    metrics["model"].update(count=19, mae=None, usual_mae=None)
+    metrics["selected_model"].update(
+        count=19, mae=None, usual_mae=None, whole_mae=None, usual_whole_mae=None
+    )
     assert "not enough ratings" in accuracy_text(metrics)
     assert "not enough ratings" in accuracy_tip(metrics)
 
@@ -75,7 +114,16 @@ def test_page_uses_saved_model_notes_for_every_rated_medium(window):
                 conn,
                 kind,
                 [Rec(kind, "1", f"Example {kind}", score=4.0 if kind == "book" else 8.0)],
-                {"model": {"name": "similar", "count": 300, "mae": 2.20, "usual_mae": 2.34}},
+                {
+                    "selected_model": {
+                        "name": "similar",
+                        "count": 300,
+                        "mae": 2.20,
+                        "usual_mae": 2.34,
+                        "whole_mae": 2.10,
+                        "usual_whole_mae": 2.30,
+                    }
+                },
             )
     finally:
         conn.close()
@@ -89,7 +137,18 @@ def test_page_uses_saved_model_notes_for_every_rated_medium(window):
         assert "Predicted from your" not in note.text()
     assert "stars" in window.for_you.lists["book"].note.text()
     assert window.for_you.lists["anime"].note.toolTip() == plain_tip(
-        accuracy_tip({"model": {"name": "similar", "count": 300, "mae": 2.20, "usual_mae": 2.34}})
+        accuracy_tip(
+            {
+                "selected_model": {
+                    "name": "similar",
+                    "count": 300,
+                    "mae": 2.20,
+                    "usual_mae": 2.34,
+                    "whole_mae": 2.10,
+                    "usual_whole_mae": 2.30,
+                }
+            }
+        )
     )
 
 
@@ -138,7 +197,7 @@ def test_model_setting_recomputes_in_existing_worker_from_cache_and_changes_scor
     finally:
         conn.close()
     assert {rec.item_key: rec.score for rec in recs} != usual
-    assert metrics["model"]["name"] == "similar"
+    assert metrics["selected_model"]["name"] == "similar"
     assert page.lists["anime"].note.text().startswith("Similar titles (experimental):")
     assert any("Predicted by Similar titles, experimental." in rec.facts["details"] for rec in recs)
 
@@ -152,5 +211,42 @@ def test_model_setting_recomputes_in_existing_worker_from_cache_and_changes_scor
     finally:
         conn.close()
     assert {rec.item_key: rec.score for rec in recs} == usual
-    assert not isinstance(metrics.get("model"), dict)
+    assert "selected_model" not in metrics
     assert page.lists["anime"].note.text() == usual_note
+
+
+@pytest.mark.parametrize("kind", ("anime", "film", "tv", "book"))
+def test_old_saved_model_blocks_are_normalized_once_when_read(conn, kind):
+    old = {"name": "similar", "count": 300, "mae": 1.10, "usual_mae": 1.17}
+    recommend.save_run(conn, kind, [], {"model": old})
+    _, metrics, _ = recommend.latest(conn, kind)
+    assert metrics == {"selected_model": old}
+    assert model_note(kind, metrics)
+    if kind == "anime":
+        assert "recompute" in accuracy_text(metrics).lower()
+        assert "whole" in accuracy_tip(metrics)
+
+
+def test_latest_keeps_old_numeric_anime_model_error(conn):
+    original = {"held_out": 87, "community": 1.43, "overall": 1.40, "model": 1.35}
+    recommend.save_run(conn, "anime", [], original)
+    _, metrics, _ = recommend.latest(conn, "anime")
+    assert metrics == original
+    assert "off by 1.35" in accuracy_text(metrics)
+
+
+def test_anime_selected_note_and_tooltip_use_whole_score_errors():
+    metrics = {
+        "selected_model": {
+            "name": "details",
+            "count": 300,
+            "mae": 0.91,
+            "usual_mae": 1.03,
+            "whole_mae": 1.10,
+            "usual_whole_mae": 1.20,
+        }
+    }
+    assert "off by 1.10" in accuracy_text(metrics)
+    assert "Usual 1.20" in accuracy_text(metrics)
+    assert "0.91" not in accuracy_tip(metrics)
+    assert "whole score" in accuracy_tip(metrics)
