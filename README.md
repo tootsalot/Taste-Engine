@@ -113,6 +113,10 @@ python -m taste profiles
 
 ## How the anime suggestions work
 
+I get anime film suggestions on the Anime tab, including in Across everything.
+Films leaves them out of suggestions, while my rated anime films still count in
+the film model and the Films and TV report.
+
 Candidates are shows that MAL users recommend alongside shows I scored above my own average, plus sequels and related shows of things I liked. On Usual, each one gets a predicted score for me in two steps:
 
 1. **Start from the MAL mean.** With 30 or more scored shows, the app fits my score as a straight line in the MAL mean instead of just subtracting my usual difference. A harsh critic is often harsher on weak shows than on strong ones, and a line captures that. With fewer shows a fitted line swings too much, so it stays a plain shift.

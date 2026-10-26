@@ -11,6 +11,7 @@ For You
 - More details learns from saved metadata, Similar titles learns from nearby rated titles, and Blend learns a mix of both with Usual
 - Experimental lists name their model and compare its held-out error with Usual, with chances based on that model's own misses
 - Anime model comparisons use whole-score errors for both models, matching the lab
+- Anime films are suggested through Anime only, including in Across everything; rated anime films stay in the film model and report
 - Seed and genre reasons keep describing real ratings; the three 3.0 model switches apply to Usual only
 - Across everything keeps reranking the saved lists, and music keeps its listening model
 

@@ -289,6 +289,9 @@ class World:
             catalog[("tv", i)] = fake_tmdb.tv(
                 i, f"Example Suggested Series {i}", 7.5, ["Drama"], "Ola Writer"
             )
+        # Cover anime films in both my ratings and suggestions, without shifting the RNG.
+        for fid in (104, 401, 404, 406):
+            catalog[("movie", fid)]["original_language"] = "ja"
         self.tmdb = fake_tmdb.FakeTmdb(
             ratings, catalog=catalog, watchlist=[("movie", 401)], favorites=[]
         )

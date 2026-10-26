@@ -44,8 +44,11 @@ def _typical_tmdb_average(conn: sqlite3.Connection, kind: str = "movie") -> floa
 
 
 def is_anime(show: dict[str, Any]) -> bool:
-    """A TMDB show that's anime: animation made in Japan (by language or origin).
-    Animation from elsewhere stays a TV pick."""
+    """Japanese animation, suggested through Anime instead of Films or TV.
+
+    Film details have no origin country here, so films need Animation plus
+    Japanese original language. TV can also identify Japan from origin countries.
+    """
     if "Animation" not in show.get("genres", []):
         return False
     countries = json.loads(show.get("origin_country_json") or "[]")
@@ -181,7 +184,7 @@ def _screen_recommendations(
             continue  # unsettled, or only known from a list so far (no genres yet)
         if (f["release_date"] or "") > today_text:
             continue  # not out yet: its average is anticipation, not a verdict
-        if kind == "tv" and is_anime(f):
+        if is_anime(f):
             continue  # MAL and the Anime tab cover anime
         eligible[tmdb_id] = f
     chosen = None
