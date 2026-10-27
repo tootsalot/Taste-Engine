@@ -46,6 +46,7 @@ TMDB_LOGO_HEIGHT = 14  # the app's own logo is 30 px in the top bar
 FIELD_WIDTH = 600  # inputs stop here, so nothing stretches across a wide screen
 TWO_COLUMNS = 1500  # page width from which settings sit beside keys and data
 THREE_COLUMNS = 2200  # and from which Advanced splits the settings in two
+DELETE_WAIT_MS = 5000  # a cancelled check stops between media, a recap between periods
 CREDITS = (
     "Built with Python and Qt for Python (PySide6, used under the LGPL 3.0), plus requests, "
     "keyring, python-dotenv, and tzdata. Fonts: Space Grotesk and Inter (SIL Open Font "
@@ -641,6 +642,19 @@ class SettingsPage(QWidget):
         if not confirmed:
             return False
         deleted = self.profile_id
+        # A cancelled model check or a recap drawing can still hold the database open, and
+        # Windows can't delete an open file: stop them first, as closing the window does.
+        jobs = [t for t in self.ctx.threads if getattr(t, "profile_id", None) == deleted]
+        for job in jobs:
+            if hasattr(job, "cancel"):
+                job.cancel()
+        if not all(job.wait(DELETE_WAIT_MS) for job in jobs):
+            self._message(
+                self.settings_message,
+                "Wait for the background work to finish before deleting.",
+                ok=False,
+            )
+            return False
         self.ctx.forget(deleted)
         profiles.delete(deleted, store=self.ctx.store)
         self.profile_deleted.emit(deleted)

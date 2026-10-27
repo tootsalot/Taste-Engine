@@ -144,6 +144,8 @@ def music_recommendations(
                 reasons=[_close_to([(n, m) for _, n, m in seeds_for])],
                 facts={
                     "match_label": _match_label(rank, len(picked)),
+                    # The score sums over seeds and passes 1; the card shows the closest one.
+                    "best_match": round(min(max(m for _, _, m in seeds_for), 1.0), 3),
                     "details": [
                         f"Match strength {scores[key]:.2f}: how similar it is to artists you "
                         "play, weighted by how much you play them."

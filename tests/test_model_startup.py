@@ -1,5 +1,6 @@
 """Startup model choice waits for launch work and belongs to one profile session."""
 
+import time
 from threading import Event
 
 import pytest
@@ -74,6 +75,19 @@ def asked(pid="me"):
         return comparison.asked_version(conn)
     finally:
         conn.close()
+
+
+def replace_after_check(worker, release):
+    """Put a new database at the checked profile's path before the window hears the result.
+
+    Windows refuses to rename a file that is open, so the check ends and closes its
+    connection first. Its finished signal waits in the event queue until after the swap.
+    """
+    release.set()
+    worker.wait()
+    path = profiles.db_path("me")
+    path.rename(path.with_suffix(".old"))
+    profiles.create("me", "New me")
 
 
 def test_waits_for_first_paint_and_launch_sync_decision(startup, qtbot):
@@ -247,6 +261,31 @@ def test_settings_save_cancels_check_before_recompute(startup, qtbot, monkeypatc
     assert not ChoiceDialog.opened
 
 
+def test_delete_waits_for_a_cancelled_check_to_close_the_database(startup, qtbot, monkeypatch):
+    make, _ = startup
+    entered = Event()
+
+    def check(conn, cancelled=None, progress=None):
+        entered.set()
+        while not cancelled():
+            time.sleep(0.01)
+        time.sleep(0.3)  # the rest of a medium, with the database still open
+        return None
+
+    monkeypatch.setattr(comparison, "check_models", check)
+    win = make()
+    win.sync_on_launch()
+    win.show()
+    qtbot.waitUntil(entered.is_set)
+    worker = win.model_worker
+    win._after_settings_saved(["clock_format"])
+    assert win.model_worker is None and worker.isRunning()
+    # Windows refused to delete the file while the check had it open.
+    assert win.settings.delete_profile(confirmed=True)
+    assert not worker.isRunning()
+    assert not profiles.exists("me")
+
+
 def test_answered_version_is_per_profile_and_version_bump_asks_again(startup, qtbot, monkeypatch):
     make, calls = startup
     win = make()
@@ -320,9 +359,7 @@ def test_stale_worker_cannot_offer_or_mark(startup, qtbot, monkeypatch, change):
         win.reload_profiles(select="other")
         win.reload_profiles(select="me")
     elif change == "recreate":
-        path = profiles.db_path("me")
-        path.rename(path.with_suffix(".old"))
-        profiles.create("me", "New me")
+        replace_after_check(worker, release)
     elif change == "version":
         monkeypatch.setattr(recommend, "MODEL_SET_VERSION", recommend.MODEL_SET_VERSION + 1)
     else:
@@ -380,10 +417,7 @@ def test_recreated_profile_gets_its_own_fresh_check(startup, qtbot, monkeypatch)
     win.sync_on_launch()
     win.show()
     qtbot.waitUntil(entered.is_set)
-    path = profiles.db_path("me")
-    path.rename(path.with_suffix(".old"))
-    profiles.create("me", "New me")
-    release.set()
+    replace_after_check(win.model_worker, release)
     qtbot.waitUntil(lambda: asked() == recommend.MODEL_SET_VERSION)
     assert len(calls) == 2
 

@@ -65,21 +65,6 @@ def cmd_lab(conn: sqlite3.Connection, medium: str) -> int:
     return 0
 
 
-def _lab(args: argparse.Namespace) -> int:
-    """Open only an existing database, skipping schema setup and legacy migration."""
-    try:
-        path = args.db if args.db else profiles.db_path(args.profile)
-        if not path.is_file():
-            print("The requested profile database does not exist.", file=sys.stderr)
-            return 2
-        with profiles._readonly(path) as conn:
-            conn.row_factory = sqlite3.Row
-            return cmd_lab(conn, args.medium)
-    except (ProfileError, OSError, sqlite3.Error):
-        print("The lab could not read the profile database.", file=sys.stderr)
-        return 2
-
-
 def cmd_themes(conn: sqlite3.Connection) -> int:
     """Print mapped taxonomy counts, without titles or other profile information."""
     coverage = themes.coverage(conn)
@@ -109,18 +94,19 @@ def cmd_themes(conn: sqlite3.Connection) -> int:
     return 0
 
 
-def _themes(args: argparse.Namespace) -> int:
-    """Inspect only an existing database, without schema setup or legacy migration."""
+def _inspect(args: argparse.Namespace, command, failure: str) -> int:
+    """Run a read-only command on an existing database only, without schema setup or
+    legacy migration."""
     try:
         path = args.db if args.db else profiles.db_path(args.profile)
         if not path.is_file():
             print("The requested profile database does not exist.", file=sys.stderr)
             return 2
-        with profiles._readonly(path) as conn:
+        with profiles.readonly(path) as conn:
             conn.row_factory = sqlite3.Row
-            return cmd_themes(conn)
+            return command(conn)
     except (ProfileError, OSError, sqlite3.Error):
-        print("Theme coverage could not read the profile database.", file=sys.stderr)
+        print(failure, file=sys.stderr)
         return 2
 
 
@@ -257,9 +243,13 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     load_env()
     if args.command == "lab":
-        return _lab(args)
+        return _inspect(
+            args,
+            lambda conn: cmd_lab(conn, args.medium),
+            "The lab could not read the profile database.",
+        )
     if args.command == "themes":
-        return _themes(args)
+        return _inspect(args, cmd_themes, "Theme coverage could not read the profile database.")
     if profiles.migrate_legacy():
         print("Moved data/taste.db to the 'default' profile.")
     try:

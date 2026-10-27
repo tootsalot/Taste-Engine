@@ -93,7 +93,7 @@ def list_profiles(root: Path | None = None) -> list[Profile]:
 def display_name(profile_id: str, root: Path | None = None) -> str:
     root = root or profiles_dir()
     try:
-        with _readonly(db_path(profile_id, root)) as conn:
+        with readonly(db_path(profile_id, root)) as conn:
             row = conn.execute(
                 "SELECT setting_value FROM app_settings WHERE setting_key = 'display_name'"
             ).fetchone()
@@ -209,7 +209,7 @@ def migrate_legacy(root: Path | None = None, legacy: Path | None = None) -> bool
     return True
 
 
-class _readonly:
+class readonly:
     """Open a database read-only for quick lookups, without running schema setup."""
 
     def __init__(self, path: Path) -> None:

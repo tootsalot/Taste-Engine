@@ -1,12 +1,13 @@
 """Saved rating-model choices use the shared plain-language accuracy check."""
 
 import re
+from threading import Event
 
 import pytest
 from PySide6.QtCore import Qt
 
 from taste import recommend, settings
-from taste.desktop import for_you
+from taste.desktop import for_you, workers
 from taste.desktop.for_you import model_note, model_tip
 from taste.desktop.widgets import plain_tip
 from taste.recommend import Rec
@@ -158,6 +159,39 @@ def test_model_setting_recomputes_in_existing_worker_from_cache_and_changes_scor
     assert page.lists["anime"].note.text() == usual_note
 
 
+def test_settings_saved_during_a_recompute_reach_the_lists(window, qtbot, monkeypatch):
+    synced(window, qtbot)
+    refreshed(window, qtbot)
+    page = window.for_you
+    entered, release = Event(), Event()
+    original = workers.runner.refresh_recommendations
+
+    def held(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            release.wait(5)  # the first recompute read its settings already
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(workers.runner, "refresh_recommendations", held)
+    finished = []
+    page.refresh_finished.connect(finished.append)
+    assert page.start_refresh(fetch=False) is not None
+    qtbot.waitUntil(entered.is_set)
+    window.settings.set_mode("advanced", remember=False)
+    combo = window.settings.inputs["rec_model_anime"]
+    combo.setCurrentIndex(combo.findData("similar"))
+    assert window.settings.save_settings()
+    release.set()
+    # Before the fix the change waited for the next refresh: the lists kept Usual.
+    qtbot.waitUntil(lambda: len(finished) == 2, timeout=15000)
+    conn = window.ctx.connect(window.current_profile())
+    try:
+        _, metrics, _ = recommend.latest(conn, "anime")
+    finally:
+        conn.close()
+    assert metrics["selected_model"]["name"] == "similar"
+
+
 @pytest.mark.parametrize("kind", ("anime", "film", "tv", "book"))
 def test_old_saved_model_blocks_still_open_without_showing_raw_errors(conn, kind):
     old = {"name": "similar", "count": 300, "mae": 1.10, "usual_mae": 1.17}
@@ -165,6 +199,28 @@ def test_old_saved_model_blocks_still_open_without_showing_raw_errors(conn, kind
     _, metrics, _ = recommend.latest(conn, kind)
     assert metrics == {"selected_model": old}
     assert "recompute" in model_note(kind, metrics).lower()
+
+
+def test_for_you_opens_runs_saved_in_the_31_layout(window):
+    # 3.0.0 crashed at launch on these: a chosen model's block under "model".
+    window.new_profile(("example_user", "Example"))
+    old = {"name": "similar", "count": 300, "mae": 1.10, "usual_mae": 1.17}
+    conn = window.ctx.connect("example_user")
+    try:
+        for kind in ("anime", "film", "tv", "book"):
+            score = 4.0 if kind == "book" else 8.0
+            recommend.save_run(
+                conn, kind, [Rec(kind, "1", f"Example {kind}", score=score)], {"model": old}
+            )
+    finally:
+        conn.close()
+    window.for_you.reload()
+    for kind in ("anime", "film", "tv", "book"):
+        tab = window.for_you.lists[kind]
+        window.for_you.tabs.setCurrentWidget(tab)
+        assert tab.note.text().startswith("Similar titles (experimental):")
+        assert [tile.rec.title for tile in tab.tiles] == [f"Example {kind}"]
+        assert tab.detail is not None
 
 
 def test_old_numeric_anime_metrics_stay_saved_but_the_note_uses_plain_words(conn):

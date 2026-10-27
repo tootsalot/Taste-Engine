@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         self._model_offer: tuple[ModelCheckWorker, dict] | None = None
         self._model_seen: set[tuple[Path, tuple[int, int] | None, int]] = set()
         self._pending_model_choice: str | None = None
+        self._recompute_pending = False  # settings changed while a refresh or sync ran
         self.setWindowTitle("Taste Engine")
         self.setWindowIcon(theme.app_icon())
         self.resize(1180, 820)
@@ -250,6 +251,7 @@ class MainWindow(QMainWindow):
         self._on_profile_changed()
 
     def _on_profile_changed(self, _index: int = 0) -> None:
+        self._recompute_pending = False  # it was for the profile left behind
         self._cancel_model_check()
         pid = self.current_profile()
         has_profile = pid is not None
@@ -505,6 +507,8 @@ class MainWindow(QMainWindow):
         if had_focus and not enabled:
             # Qt would hand focus to the next control, the sidebar toggle, and ring it.
             self.sidebar.focus_current()
+        if self._recompute_pending and not self._blocks_recs() and not self.for_you.is_refreshing():
+            self._recompute_pending = self.for_you.start_refresh(fetch=False) is None
         QTimer.singleShot(0, self._maybe_check_rating_model)
 
     # -- first-launch rating model choice -----------------------------------
@@ -761,8 +765,9 @@ class MainWindow(QMainWindow):
         self.reports.refresh_later()
         if set(changed) & set(recommend.REC_SETTINGS):
             # Plan to Watch, minimum raters, and so on change the lists: recompute from
-            # what's cached (no network, about a second, in the background).
-            self.for_you.start_refresh(fetch=False)
+            # what's cached (no network, about a second, in the background). A refresh or
+            # sync already running may have read the old settings: recompute after it.
+            self._recompute_pending = self.for_you.start_refresh(fetch=False) is None
 
     def _after_profile_restored(self, profile_id: str) -> None:
         self.ctx.forget(profile_id)

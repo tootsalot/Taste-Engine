@@ -11,7 +11,7 @@ import json
 import math
 import sqlite3
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any
 
@@ -29,6 +29,11 @@ class Context:
     # The lab freezes recency to stored data; new models do not use rating dates.
     now: date
     prediction_ids: tuple[int, ...] | None = None
+    # Every rated title of a five-fold check, so its folds can share neighbor lists.
+    neighbor_pool: tuple[int, ...] | None = None
+    # Shared with the fold copies holdout_predictions makes: MAL's recommendation links
+    # and the shared neighbor lists are built once per check instead of once per fit.
+    cache: dict[Any, Any] = field(default_factory=dict, compare=False, repr=False)
 
 
 def holdout_predictions(
@@ -41,10 +46,13 @@ def holdout_predictions(
     if len(rows) < MIN_RESIDUALS:
         return []
     result = []
+    pool = tuple(sorted({key for key, _, _ in rows}))
     for fold in range(5):
         train = [row for row in rows if row[0] % 5 != fold]
         held_out = [row for row in rows if row[0] % 5 == fold]
-        fold_context = replace(context, prediction_ids=tuple(key for key, _, _ in held_out))
+        fold_context = replace(
+            context, prediction_ids=tuple(key for key, _, _ in held_out), neighbor_pool=pool
+        )
         predict = fit(train, facts, fold_context)
         result.extend((key, mine, predict(key)) for key, mine, _ in held_out)
     return result
@@ -241,9 +249,8 @@ def _details_design(train_rows: Rows, facts: Facts, raw: DetailRaw):
 
 
 def _details_fixed(
-    train_rows: Rows, facts: Facts, context: Context, penalty: float, raw: DetailRaw | None = None
+    train_rows: Rows, facts: Facts, context: Context, penalty: float, raw: DetailRaw
 ):
-    raw = _detail_raw(train_rows, facts, context) if raw is None else raw
     model, encode, gram, rhs = _details_design(train_rows, facts, raw)
     weights = ridge_weights(gram, rhs, penalty)
 
@@ -302,7 +309,24 @@ def _similarity_graph(
     A link combines with overlap as 1 - (1 - overlap) * (1 - link).
     Targets include the requested predictions and training titles used by inner
     validation. Unrelated stored suggestions need no neighbor lists.
+
+    Inside a five-fold check, titles are ranked once against every rated title and the
+    lists are shared by all folds. A fit skips neighbors outside its own training rows
+    (_neighbor_sums), so its predictions match a ranking of training titles only.
     """
+    train_ids = sorted({key for key, _, _ in train_rows})
+    if prediction_ids is None:
+        prediction_ids = (
+            context.crowd
+            if context.prediction_ids is None
+            else dict.fromkeys((*train_ids, *context.prediction_ids))
+        )
+    pool, shared = train_ids, None
+    if context.neighbor_pool is not None and set(train_ids) <= set(context.neighbor_pool):
+        pool = context.neighbor_pool
+        shared = context.cache.setdefault(("neighbors", pool), {})
+        if all(key in shared for key in prediction_ids):
+            return {key: shared[key] for key in prediction_ids}
     genre_names = sorted({g for f in facts.values() for g in f.get("genres", [])})
     people_names = sorted({p for f in facts.values() for p in f.get("studios", [])})
     genres = {name: 1 << index for index, name in enumerate(genre_names)}
@@ -316,15 +340,18 @@ def _similarity_graph(
     }
     links: dict[int, dict[int, float]] = {}
     if context.medium == "anime":
-        for source, target, votes in context.conn.execute(
-            "SELECT mal_anime_id, recommended_id, num_recommendations "
-            "FROM stg_mal_anime_recommendations"
-        ):
-            if votes > 0:
-                strength = votes / (votes + 10)
-                for left, right in ((source, target), (target, source)):
-                    neighbors = links.setdefault(left, {})
-                    neighbors[right] = max(neighbors.get(right, 0.0), strength)
+        if "mal_links" not in context.cache:
+            for source, target, votes in context.conn.execute(
+                "SELECT mal_anime_id, recommended_id, num_recommendations "
+                "FROM stg_mal_anime_recommendations"
+            ):
+                if votes > 0:
+                    strength = votes / (votes + 10)
+                    for left, right in ((source, target), (target, source)):
+                        neighbors = links.setdefault(left, {})
+                        neighbors[right] = max(neighbors.get(right, 0.0), strength)
+            context.cache["mal_links"] = links
+        links = context.cache["mal_links"]
     elif context.medium == "book":
         for key, f in facts.items():
             for target in json.loads(f.get("similar_json") or "[]"):
@@ -332,19 +359,15 @@ def _similarity_graph(
                     links.setdefault(key, {})[target] = 1.0
                     links.setdefault(target, {})[key] = 1.0
 
-    train_ids = sorted({key for key, _, _ in train_rows})
-    if prediction_ids is None:
-        prediction_ids = (
-            context.crowd
-            if context.prediction_ids is None
-            else dict.fromkeys((*train_ids, *context.prediction_ids))
-        )
     train_signatures = []
-    for key in train_ids:
+    for key in pool:
         g, p = signatures.get(key, (0, 0))
         train_signatures.append((key, g, p, g.bit_count() + 0.5 * p.bit_count()))
     graph = {}
     for key in prediction_ids:
+        if shared is not None and key in shared:
+            graph[key] = shared[key]
+            continue
         g, p = signatures.get(key, (0, 0))
         size = g.bit_count() + 0.5 * p.bit_count()
         row_links = links.get(key, {})
@@ -360,6 +383,8 @@ def _similarity_graph(
             neighbors.append((overlap + link - overlap * link, other))
         neighbors.sort(key=lambda pair: (-pair[0], pair[1]))
         graph[key] = tuple(neighbors)
+        if shared is not None:
+            shared[key] = graph[key]
     return graph
 
 

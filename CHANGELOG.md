@@ -20,6 +20,9 @@ For You
 - Balanced, Best first, and Strict rotation control the mixed order, with an instant remembered medium filter
 - A separate Outside your usual card explores a less-rated medium or theme above my usual, without repeating the normal top pick
 - Broader theme coverage and recorded item links add cross-media reasons with their numbers; the other lists keep their existing theme mapping
+- Discover music cards show how close a new artist is to the nearest artist I play, so they never read above 100% (an artist like several of mine showed sums like 162%); lists saved before this show the match words alone
+- Settings saved while suggestions are recomputing or a sync is running now reach the lists: they recompute again once that work ends
+- Deleting a profile first waits for a stopped rating check or recap drawing to close the database, which Windows refused to delete while it was open
 
 Lab and checks
 - A read-only `themes` command prints mapped title/tag counts and common unmapped taxonomy terms without printing titles
@@ -32,6 +35,8 @@ Lab and checks
 - Saved comparisons use `selected_model`, leaving Usual anime's numeric `model` field intact; older runs still open
 - `scripts/time_app.py --models` measures fits, predictions, first and unchanged second list recomputes, and Across everything on the invented library, using the app's transaction path for saves
 - Late startup-sync and recap callbacks cannot recreate a profile after its window closes or its file is deleted
+- The first check of a model after my ratings change is faster (anime Similar titles about three times, anime Blend about a fifth), with the same predictions: the accuracy interval no longer uses exact fractions, and Similar titles reads MAL's links and ranks neighbors once per check instead of once per fold
+- Tests now check that no saved list keeps a model block under `model` with any model, that For You opens lists saved in the 3.1 layout, and that every list computes on an empty profile; the startup tests no longer rename a database that is still open, which Windows refuses
 
 ## [3.0.0]
 

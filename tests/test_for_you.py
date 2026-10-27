@@ -235,8 +235,9 @@ def test_music_tabs_build_when_shown_and_carry_the_scope_note(window, qtbot):
     assert discover.dirty and discover.tiles == []  # not built until someone looks
     page.tabs.setCurrentWidget(discover)
     assert [t.rec.title for t in discover.tiles][:2] == ["Example New X", "Example Dismissed Z"]
-    assert discover.tiles[0].score.text() == "95%"  # a number, like every other tab
-    assert discover.detail.score.text() == "95%"
+    # The closest seed (80%), not the 0.95 sum over both seeds that ranks it.
+    assert discover.tiles[0].score.text() == "80%"
+    assert discover.detail.score.text() == "80%"
     assert discover.detail.caption.text() == "Strong match"
     assert "Match strength 0.95" in discover.detail.toolTip()
     assert discover.detail.open_button.text() == "Open on Last.fm"
@@ -406,13 +407,16 @@ def test_helpers():
     older = Rec("anime", "1", "T", score=7.675)  # saved before facts existed
     assert score_text("anime", older) == ("8", "predicted for you (7.7)")
     assert score_text("anime", Rec("anime", "1", "T", score=7.44))[0] == "7"
-    label = {"match_label": "Strong match"}
-    # A number on top like every other tab, with the match words under it.
-    assert score_text("music_discover", Rec("artist", "x", "X", score=0.95, facts=label)) == (
-        "95%",
+    label = {"match_label": "Strong match", "best_match": 0.9}
+    # Two seeds both 90% similar sum to 1.62, but the card shows the closest seed.
+    assert score_text("music_discover", Rec("artist", "x", "X", score=1.62, facts=label)) == (
+        "90%",
         "Strong match",
     )
-    assert score_text("music_discover", Rec("artist", "x", "X", score=0.95)) == ("95%", "match")
+    # Runs saved before best_match show the words alone, never the sum as a percentage.
+    older = Rec("artist", "x", "X", score=1.62, facts={"match_label": "Strong match"})
+    assert score_text("music_discover", older) == ("Strong match", "")
+    assert score_text("music_discover", Rec("artist", "x", "X", score=0.95)) == ("Match", "")
     assert score_text("music_rediscover", Rec("artist", "x", "X", score=1234.0)) == (
         "1,234",
         "plays",

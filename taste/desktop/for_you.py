@@ -172,8 +172,11 @@ def score_text(kind: str, rec: Rec) -> tuple[str, str]:
             f"for you · Hardcover {mean:.2f}" if mean else "predicted for you",
         )
     if kind == "music_discover":
-        # Last.fm's similarity, 0 to 1, as a percentage; the words say which third it's in.
-        return f"{rec.score:.0%}", rec.facts.get("match_label") or "match"
+        # The closest Last.fm similarity, 0 to 1, as a percentage; the words say which third
+        # of the list it's in. Runs saved before best_match have only the words.
+        words = rec.facts.get("match_label") or "Match"
+        best = rec.facts.get("best_match")
+        return (f"{best:.0%}", words) if best is not None else (words, "")
     return f"{int(rec.score):,}", "plays"
 
 

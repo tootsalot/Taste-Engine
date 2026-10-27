@@ -352,6 +352,20 @@ def test_discover_scores_by_similarity_and_recent_plays(conn, music_world):
     assert x.image_url is None  # no cover until fetch_artist_covers runs
 
 
+def test_best_match_stays_a_share_when_the_score_passes_one(conn, music_world):
+    conn.execute(
+        "UPDATE stg_lastfm_similar_artists SET match = 0.9 WHERE similar_key = 'example new x'"
+    )
+    discover, _ = recommend.music_recommendations(conn, NOW_DT)
+    x = discover[0]
+    # 1.0 * 0.9 + 0.25 * 0.9 ranks it, but no seed is more than 90% similar.
+    assert x.score == 1.125
+    assert x.facts["best_match"] == 0.9
+    best = {r.title: r.facts["best_match"] for r in discover}
+    assert best["Example New Y"] == 0.5
+    assert best["Example New W"] == 1.0
+
+
 def test_artists_i_already_play_are_never_discovered(conn, music_world):
     discover, _ = recommend.music_recommendations(conn, NOW_DT)
     titles = {r.title for r in discover}

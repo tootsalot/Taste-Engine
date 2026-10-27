@@ -187,7 +187,9 @@ def paired_bootstrap(
     """
     differences = [error - usual for error, usual in zip(errors, usual_errors, strict=True)]
     rng = random.Random(0)
-    samples = [mean(rng.choices(differences, k=len(differences))) for _ in range(1000)]
+    count = len(differences)
+    # fsum, not statistics.mean: mean's exact fractions took most of a cold recompute.
+    samples = [math.fsum(rng.choices(differences, k=count)) / count for _ in range(1000)]
     percentiles = quantiles(samples, n=40, method="inclusive")
     return mean(differences), (percentiles[0], percentiles[-1])
 

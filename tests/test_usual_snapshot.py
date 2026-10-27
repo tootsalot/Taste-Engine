@@ -3,6 +3,8 @@
 The fixture's base_sha records the original capture. Only its film and everything
 hashes first changed when Japanese animation stopped appearing in film suggestions.
 The mixed hashes now capture 4.0's relative scores, balancing, and surprise card.
+The music_discover and everything hashes changed again only to add each Discover
+pick's best_match fact.
 """
 
 import hashlib
