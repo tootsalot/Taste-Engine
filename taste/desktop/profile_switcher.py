@@ -33,6 +33,7 @@ from PySide6.QtWidgets import QMenu, QPushButton, QSizePolicy
 
 from taste import profiles
 from taste.desktop import theme
+from taste.desktop.widgets import plain_tip
 
 AVATAR = QSize(30, 30)
 PICTURE_PX = 256  # stored pictures are this square
@@ -268,7 +269,7 @@ class ProfileSwitcher(QPushButton):
         self.setText(shown.replace("&", "&&"))  # "&" would mark a shortcut key
         picture = self._picture(self.currentData())
         self.setIcon(avatar(name or "?", picture))
-        self.setToolTip(f"Profile: {name}. Click to switch or add one." if name else "")
+        self.setToolTip(plain_tip(f"Profile: {name}. Click to switch or add one.") if name else "")
         self.menu_.clear()
         for action in self.group.actions():
             self.group.removeAction(action)

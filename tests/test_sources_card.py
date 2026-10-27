@@ -103,7 +103,7 @@ def test_saving_a_row_keeps_the_username_and_the_key(window, qtbot):
     assert row.more.isVisible() and row.test in row.more.menu().actions()
     assert row.save.isHidden()  # everything typed is saved
     # The Dashboard's menu follows at once.
-    assert [a.text() for a in window.dashboard.sync_menu.actions()] == ["MyAnimeList"]
+    assert [a.text() for a in window.dashboard.sync_menu.actions()][3:] == ["MyAnimeList"]
 
 
 def test_every_row_lines_up(window, qtbot):

@@ -75,9 +75,8 @@ def _months(conn: sqlite3.Connection, names: list[str], start: str, end: str) ->
     return found
 
 
-def _newest_year(conn: sqlite3.Connection) -> tuple[str, int] | None:
+def _newest_year(conn: sqlite3.Connection, found: list[str]) -> tuple[str, int] | None:
     """The newest year with plays and how many artists were new in it."""
-    found = years(conn)
     if not found:
         return None
     year = found[0]
@@ -89,7 +88,10 @@ def _from_week_start(conn: sqlite3.Connection, days: list[tuple[str, int]]) -> l
     return days[1:] + days[:1] if settings.get(conn, "week_start") == "monday" else days
 
 
-def load(conn: sqlite3.Connection, span: str = "all") -> MusicStats:
+def load(
+    conn: sqlite3.Connection, span: str = "all", found_years: list[str] | None = None
+) -> MusicStats:
+    """`found_years`: `years(conn)` when the caller already has it (it reads every play)."""
     start, end = activity.ALL_TIME if span == "all" else (
         f"{span}-01-01", f"{int(span) + 1}-01-01"
     )  # fmt: skip
@@ -118,9 +120,10 @@ def load(conn: sqlite3.Connection, span: str = "all") -> MusicStats:
     busiest_day = (
         WEEKDAYS[max(range(7), key=lambda d: (weekdays[d], -d))] if any(weekdays) else None
     )
+    found_years = years(conn) if found_years is None else found_years
     return MusicStats(
         span=span,
-        years=years(conn),
+        years=found_years,
         plays=plays,
         hours=activity.music_hours(conn, start, end),
         artists=len(artists),
@@ -128,7 +131,7 @@ def load(conn: sqlite3.Connection, span: str = "all") -> MusicStats:
         busiest_hour=busiest_hour,
         busiest_day=busiest_day,
         busiest_day_share=max(weekdays) / plays if plays else 0.0,
-        newest_year=_newest_year(conn) if span == "all" else None,
+        newest_year=_newest_year(conn, found_years) if span == "all" else None,
         albums=albums[:ALBUMS_SHOWN],
         tracks=activity.top_tracks(conn, start, end, n=TRACKS_SHOWN),
         by_hour=by_hour,

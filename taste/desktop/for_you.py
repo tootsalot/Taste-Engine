@@ -495,9 +495,11 @@ class RecList(QWidget):
         """Show one suggestion in full in the panel."""
         if not 0 <= index < len(self.recs):
             return
-        self.selected = index
-        for i, tile in enumerate(self.tiles):
-            tile.set_selected(i == index)
+        # Only the outline that moves: restyling every tile on each click was most of it.
+        previous, self.selected = self.selected, index
+        for i in (previous, index):
+            if 0 <= i < len(self.tiles):
+                self.tiles[i].set_selected(i == index)
         self._clear_detail()
         card = RecCard(self._ctx, self.list_kind, self.recs[index])
         card.opened.connect(self._on_open)
@@ -691,28 +693,35 @@ class ListSwitch(Segmented):
 
     def reflow(self, width: int) -> None:
         self.wrap_width = max(width, 1)
+        groups, used = [], 0
+        for key, button in self.buttons.items():
+            size = button.minimumWidth()
+            if not groups or used + size > self.wrap_width - 4:
+                groups.append([])
+                used = 0
+            groups[-1].append(key)
+            used += size
+        if groups == getattr(self, "_groups", None):
+            # The same buttons on the same rows: every resize frame used to rebuild them.
+            self.setMaximumWidth(self.wrap_width)
+            self._move_pill(animate=False)
+            return
+        self._groups = groups
         while self.rows.count():
             old = self.rows.takeAt(0).layout()
             while old.count():
                 old.takeAt(0)
             old.deleteLater()
         self._lines = []
-        line, used = None, 0
-        for button in self.buttons.values():
-            size = button.minimumWidth()
-            if line is None or used + size > self.wrap_width - 4:
-                if line is not None:
-                    line.addStretch()
-                line = QHBoxLayout()
-                line.setSpacing(0)
-                line.setContentsMargins(0, 0, 0, 0)
-                self.rows.addLayout(line)
-                self._lines.append(line)
-                used = 0
-            line.addWidget(button)
-            used += size
-        if line is not None:
+        for keys in groups:
+            line = QHBoxLayout()
+            line.setSpacing(0)
+            line.setContentsMargins(0, 0, 0, 0)
+            for key in keys:
+                line.addWidget(self.buttons[key])
             line.addStretch()
+            self.rows.addLayout(line)
+            self._lines.append(line)
         height = max(b.sizeHint().height() for b in self.buttons.values())
         self.setFixedHeight(len(self._lines) * height + 4)
         self.setMaximumWidth(self.wrap_width)

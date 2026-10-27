@@ -38,11 +38,14 @@ def sync_sources(
     store: SecretStore | None = None,
     out: Callable[[str], None] = print,
     client_factory: ClientFactory = _default_client,
+    quick: bool = False,
     **sync_kwargs: Any,
 ) -> dict[str, bool]:
     """Sync one source or 'all'. Returns {source: succeeded}.
 
-    In 'all', a missing key or a failure in one source doesn't stop the other.
+    In 'all', a missing key or a failure in one source doesn't stop the other. `quick`
+    reads new and changed ratings, plays, and lists, but skips refreshing TMDB details
+    already fetched and Last.fm track lengths.
     """
     store = store or SecretStore()
     targets = list(SOURCES) if source == "all" else [source]
@@ -62,7 +65,8 @@ def sync_sources(
                 if not cfg.user_token or not cfg.account_id:
                     raise ConfigError("connect your TMDB account on the Settings page first.")
                 client = client_factory([cfg.read_token, cfg.user_token])
-                results[name] = tmdb.sync(conn, client, cfg, out=out).status == "success"
+                result = tmdb.sync(conn, client, cfg, out=out, quick=quick)
+                results[name] = result.status == "success"
             elif name == "mal":
                 cfg = credentials.mal(conn, profile_id, store)
                 client = client_factory([cfg.client_id])
@@ -72,7 +76,7 @@ def sync_sources(
                 client = client_factory([cfg.api_key])
                 result = lastfm.sync(conn, client, cfg, out=out, **sync_kwargs)
                 results[name] = result.status == "success"
-                if results[name]:
+                if results[name] and not quick:
                     # Lengths for "about how many hours": the recaps still open first,
                     # then all time until enough plays have one.
                     clock = sync_kwargs.get("now")
@@ -206,12 +210,7 @@ def refresh_recommendations(
                 int(r.item_key) for r in shown if not r.facts.get("about") and r.item_key.isdigit()
             ]
             if enrich.fetch_synopses(conn, mal_client, mal_cfg, missing, out, now=now):
-                # Only synopsis text changed; keep the already fitted scored pool.
-                facts = recommend._anime_facts(conn)
-                from taste.recommend.model import about_text
-
-                for rec in pool_cache["anime"][0]:
-                    rec.facts["about"] = about_text(facts[int(rec.item_key)].get("synopsis"))
+                pool_cache.pop("anime", None)  # rebuilt with the new synopses
                 compute("anime")
         try:
             lastfm_cfg = credentials.lastfm(conn, profile_id, store)

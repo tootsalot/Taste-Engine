@@ -133,3 +133,18 @@ def test_existing_databases_gain_nullable_keyword_columns(conn):
             r for r in conn.execute(f"PRAGMA table_info({table})") if r[1] == "keywords_json"
         )
         assert column[2:5] == ("TEXT", 0, None)
+
+
+def test_quick_sync_fetches_details_only_for_titles_never_detailed(conn, make_client):
+    fake = FakeTmdb()
+    client, _ = make_client(fake)
+    tmdb.sync(conn, client, CFG, out=lambda _: None, now=NOW)
+    conn.execute("UPDATE stg_tmdb_movies SET fetched_at = '' WHERE tmdb_id = 11")
+    conn.execute("UPDATE stg_tmdb_tv SET keywords_json = NULL WHERE tmdb_id = 31")
+    fake.calls.clear()
+    tmdb.sync(conn, client, CFG, out=lambda _: None, now=NOW, quick=True)
+    assert ("GET", "/3/movie/11") in fake.calls
+    assert ("GET", "/3/tv/31") not in fake.calls  # a refresh waits for a full sync
+    fake.calls.clear()
+    tmdb.sync(conn, client, CFG, out=lambda _: None, now=NOW)
+    assert ("GET", "/3/tv/31") in fake.calls

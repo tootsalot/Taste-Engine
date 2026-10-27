@@ -132,7 +132,7 @@ class MusicView(QWidget):
                 self.span = years[0] if latest else "all"
             if self.span != "all" and self.span not in years:
                 self.span = "all"
-            stats = musicstats.load(conn, self.span)
+            stats = musicstats.load(conn, self.span, years)
         finally:
             conn.close()
         self.span_bar.set_years(years)

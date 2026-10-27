@@ -156,7 +156,7 @@ def test_connecting_and_disconnecting_tmdb(window, qtbot):
     assert window.ctx.store.get("me", "TMDB_ACCOUNT_ID") == ACCOUNT
     assert row.state.text() == "Connected · never synced"
     assert USER_TOKEN not in row.state.text() + card.message.text()
-    assert [a.text() for a in window.dashboard.sync_menu.actions()] == ["TMDB"]
+    assert [a.text() for a in window.dashboard.sync_menu.actions()][3:] == ["TMDB"]
 
     worker = card.disconnect_tmdb()
     qtbot.waitUntil(lambda: not worker.isRunning(), timeout=5000)

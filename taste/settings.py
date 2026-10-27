@@ -46,6 +46,12 @@ STANDARD_SCOPE_NOTES = {
 CLOCK_FORMATS = {"12h": "12-hour (10:52 PM)", "24h": "24-hour (22:52)"}
 WEEK_STARTS = {"sunday": "Sunday", "monday": "Monday"}
 SYNC_ON_LAUNCH = {"off": "Off", "launch": "Every time the app opens", "daily": "Once a day"}
+LASTFM_HISTORY = {
+    "all": "All of it",
+    "5": "The last 5 years",
+    "2": "The last 2 years",
+    "1": "The last year",
+}
 REPORT_SPANS = {"all": "All time", "year": "The latest year"}
 REC_MODELS = {
     "usual": "Usual",
@@ -473,6 +479,18 @@ SETTINGS: list[Setting] = [
         "The same for each year, made in January.",
         group="Recaps",
         advanced=True,
+    ),
+    Setting(
+        "lastfm_history",
+        "Last.fm history to sync",
+        "choice",
+        "all",
+        "How far back Last.fm plays are read. A shorter span makes the first sync faster "
+        "and the database smaller, but reports count an artist as new the first time they "
+        "appear in the synced plays. Choosing a longer span later reads the older plays on "
+        "the next sync; a shorter one never deletes plays already synced.",
+        choices=LASTFM_HISTORY,
+        group="Syncing and storage",
     ),
     Setting(
         "lastfm_lookback_days",

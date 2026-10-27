@@ -37,7 +37,7 @@ The rest of Settings opens in **Simple**, with the everyday settings and a sente
 
 ### Syncing
 
-On the **Dashboard**, click **Sync everything** (its arrow lists each connected source, to sync just one). The first time, it also fetches what the recommendations need, which takes a few minutes for a big list. After that it's seconds: Hardcover sends only the books that changed, with a full read once a week. While it runs, a status line shows each step and its progress; **Show log** has the details, and a sync with problems turns the line red. When everything synced together, the line says so once.
+On the **Dashboard**, click **Sync everything** (its arrow lists each connected source, to sync just one). The arrow also has **Quick sync**, which reads only new and changed ratings, plays, and lists, skips refreshing details I already have, and recomputes suggestions from what's saved; the button itself is a full sync. Settings, Syncing and storage, sets how far back Last.fm history goes (all of it, or the last 5, 2, or 1 years), which makes a first sync faster. The first time, it also fetches what the recommendations need, which takes a few minutes for a big list. After that it's seconds: Hardcover sends only the books that changed, with a full read once a week. While it runs, a status line shows each step and its progress; **Show log** has the details, and a sync with problems turns the line red. When everything synced together, the line says so once.
 
 ### Dashboard
 
@@ -169,15 +169,16 @@ recommendations**. Music stays in Discover and Rediscover.
 
 The list uses MAL genres, themes, and demographics; TMDB genres and keywords; and Hardcover
 genres and moods. Rare shared terms count more than broad ones, and a match needs at least
-two shared terms beyond the broad theme map. Medium labels such as Animation or based on
+one shared term beyond the broad theme map. Medium labels such as Animation or based on
 manga cannot make two titles similar. Each reason names one to three titles I rated above
 my average in another medium and shows the shared terms. It says a pick is like those
 titles, never that they are the same work. Item identity still comes only from recorded
 source IDs.
 
-Every pick keeps the score its own tab predicts with its selected model. It must be at or
-above my usual for that medium. Cross support decides its place, with its prediction
-relative to my usual breaking ties. Behind the score shows that support, how many liked
+Every pick keeps the score its own tab predicts with its selected model. Cross support
+decides its place, with its prediction relative to my usual breaking ties, so the list
+fills up like the other tabs. Each card says how strong the match is (Strong match, Good
+match, or Worth a try) and whether its prediction is above, near, or below my usual. Behind the score shows that support, how many liked
 titles in other media were compared, and the prediction against my usual. Balanced is the
 default; Advanced settings also offers Best first and Strict rotation across anime, films,
 TV, and books.

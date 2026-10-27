@@ -88,12 +88,14 @@ class SyncWorker(QThread):
         client_factory: Any = None,
         sync_kwargs: dict[str, Any] | None = None,
         recs_kwargs: dict[str, Any] | None = None,
+        quick: bool = False,
     ) -> None:
         super().__init__()
         self.profile_id = profile_id
         # Resolved now, on the UI thread: the data folder can't change under a running thread.
         self.path = profiles.db_path(profile_id)
         self.source = source
+        self.quick = quick
         self.store = store
         self.client_factory = client_factory
         self.sync_kwargs = sync_kwargs or {}
@@ -121,7 +123,13 @@ class SyncWorker(QThread):
             if self.client_factory is not None:
                 kwargs["client_factory"] = self.client_factory
             results = runner.sync_sources(
-                conn, self.profile_id, self.source, store=self.store, out=self._out, **kwargs
+                conn,
+                self.profile_id,
+                self.source,
+                store=self.store,
+                out=self._out,
+                quick=self.quick,
+                **kwargs,
             )
             if self.source == "all" and any(results.values()):
                 self._refresh_recommendations(conn)
@@ -144,6 +152,8 @@ class SyncWorker(QThread):
         kwargs: dict[str, Any] = dict(self.recs_kwargs)
         if self.client_factory is not None:
             kwargs["client_factory"] = self.client_factory
+        if self.quick:
+            kwargs["fetch"] = False  # recompute from what's saved, no network
         try:
             runner.refresh_recommendations(
                 conn,

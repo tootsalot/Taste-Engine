@@ -39,6 +39,7 @@ PAGE_LIMIT = 200
 # each incremental run re-checks that far back (the lastfm_lookback_days setting).
 # Dedupe makes the overlap harmless.
 DAY_SECONDS = 24 * 60 * 60
+YEAR_SECONDS = 365 * DAY_SECONDS
 KEY_SEPARATOR = "\x1f"  # joins names into identity keys; can't appear in a title
 # Last.fm returns this image for anything it has no picture for (all artists, some albums).
 PLACEHOLDER_IMAGE = "2a96cbd8b46e442fc41c2b86b821562f"
@@ -119,6 +120,8 @@ def sync(
     scope = profile_settings.get(conn, "lastfm_capture_scope")
     if lookback_seconds is None:
         lookback_seconds = profile_settings.get(conn, "lastfm_lookback_days") * DAY_SECONDS
+    history = profile_settings.get(conn, "lastfm_history")
+    floor = 0 if history == "all" else max(0, now() - int(history) * YEAR_SECONDS)
     try:
         # Catch up on anything a crashed run left in staging but not in core.
         with transaction(conn):
@@ -142,16 +145,19 @@ def sync(
         high_water = conn.execute(
             "SELECT MAX(to_unix) FROM sync_lastfm_windows WHERE status = 'complete'"
         ).fetchone()[0]
-        from_unix = 0 if high_water is None else max(0, high_water - lookback_seconds)
-        window_id = conn.execute(
-            "INSERT INTO sync_lastfm_windows (opened_by_run_id, from_unix, to_unix, status) "
-            "VALUES (?, ?, ?, 'open')",
-            (run.run_id, from_unix, now()),
-        ).lastrowid
-        window = conn.execute(
-            "SELECT * FROM sync_lastfm_windows WHERE window_id = ?", (window_id,)
-        ).fetchone()
-        _fetch_window(conn, client, settings, run, window, out, page_limit)
+        from_unix = floor if high_water is None else max(0, high_water - lookback_seconds)
+        _fetch_window(
+            conn, client, settings, run, _open_window(conn, run, from_unix, now()), out, page_limit
+        )
+        oldest = conn.execute(
+            "SELECT MIN(from_unix) FROM sync_lastfm_windows WHERE status = 'complete'"
+        ).fetchone()[0]
+        if oldest is not None and oldest > floor:
+            # A longer history was chosen after the first sync: read the older plays once.
+            out("Last.fm: reading older plays for the longer history setting")
+            _fetch_window(
+                conn, client, settings, run, _open_window(conn, run, floor, oldest), out, page_limit
+            )
 
         with transaction(conn):
             events_loaded += load_core(conn, scope)
@@ -185,6 +191,17 @@ def sync(
 # ---------------------------------------------------------------------------
 # Fetch
 # ---------------------------------------------------------------------------
+
+
+def _open_window(conn: sqlite3.Connection, run: SyncRun, from_unix: int, to_unix: int):
+    window_id = conn.execute(
+        "INSERT INTO sync_lastfm_windows (opened_by_run_id, from_unix, to_unix, status) "
+        "VALUES (?, ?, ?, 'open')",
+        (run.run_id, from_unix, to_unix),
+    ).lastrowid
+    return conn.execute(
+        "SELECT * FROM sync_lastfm_windows WHERE window_id = ?", (window_id,)
+    ).fetchone()
 
 
 def _fetch_window(

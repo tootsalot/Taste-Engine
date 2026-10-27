@@ -40,6 +40,18 @@ def test_file_fallback_when_no_keyring():
     assert not path.exists()  # last key gone, file gone
 
 
+@pytest.mark.parametrize("text", ["[]", '"a key"', '{"MAL_CLIENT_ID": 7}', "{broken"])
+def test_a_damaged_key_file_reads_as_unreadable_and_never_blocks_deleting(text):
+    store = SecretStore(backend=None)
+    path = profiles.profiles_dir() / "me.keys.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(SecretStoreError, match="unreadable"):
+        store.get_with_source("me", "MAL_CLIENT_ID")
+    store.delete_all("me")
+    assert not path.exists()
+
+
 def test_environment_fallback(monkeypatch):
     store = SecretStore(backend=FakeKeyring())
     assert store.get_with_source("me", "MAL_CLIENT_ID") == (None, None)

@@ -15,6 +15,7 @@ from taste.config import data_dir
 
 FILE_NAME = "ui_state.json"
 MIX_FILTERS = ("all", "anime", "film", "tv", "book")
+CACHE_SIZES_MB = (100, 300, 1000)  # Settings' picture cache choices
 
 
 def mix_filter(profile_id: str | None) -> str:

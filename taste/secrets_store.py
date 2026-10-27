@@ -124,7 +124,9 @@ class SecretStore:
     def delete_all(self, profile_id: str) -> None:
         validate_id(profile_id)
         for name in STORED_NAMES:
-            self.delete(profile_id, name)
+            # A damaged key file goes below anyway; it must not stop deleting a profile.
+            with contextlib.suppress(SecretStoreError):
+                self.delete(profile_id, name)
         self._file(profile_id).unlink(missing_ok=True)
 
     # -- internals ----------------------------------------------------------
@@ -153,9 +155,12 @@ class SecretStore:
         if not path.is_file():
             return {}
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            raise SecretStoreError(f"The key file for {profile_id!r} is unreadable.") from None
+            data = None
+        if not isinstance(data, dict) or not all(isinstance(v, str) for v in data.values()):
+            raise SecretStoreError(f"The key file for {profile_id!r} is unreadable.")
+        return data
 
     def _write_file(self, profile_id: str, data: dict[str, str]) -> None:
         path = self._file(profile_id)

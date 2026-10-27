@@ -13,8 +13,8 @@ from taste.profiles import DEFAULT_PROFILE, ProfileError
 from taste.recommend import cross_lab, lab
 
 
-def cmd_sync(conn: sqlite3.Connection, profile_id: str, source: str) -> int:
-    results = runner.sync_sources(conn, profile_id, source)
+def cmd_sync(conn: sqlite3.Connection, profile_id: str, source: str, quick: bool = False) -> int:
+    results = runner.sync_sources(conn, profile_id, source, quick=quick)
     return 0 if all(results.values()) else 1
 
 
@@ -224,6 +224,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sync = sub.add_parser("sync", help="pull data from a source")
     sync.add_argument("source", choices=["mal", "lastfm", "tmdb", "hardcover", "all"])
+    sync.add_argument(
+        "--quick",
+        action="store_true",
+        help="new and changed data only: skip refreshing details already fetched",
+    )
     rep = sub.add_parser("report", help="print a summary and write CSV files")
     rep.add_argument("--out", type=Path, help="folder for CSV files (default reports/<profile>)")
     sub.add_parser("status", help="row counts and last sync per source")
@@ -301,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         if args.command == "sync":
-            return cmd_sync(conn, args.profile, args.source)
+            return cmd_sync(conn, args.profile, args.source, args.quick)
         if args.command == "report":
             return cmd_report(conn, args.out or reports_dir() / args.profile)
         return cmd_status(conn, label)

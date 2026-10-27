@@ -11,7 +11,7 @@ from taste import settings, themes
 from taste.db import utc_now
 from taste.recommend.anime import anime_recommendations
 from taste.recommend.books import book_recommendations
-from taste.recommend.everything import dismissed_keys, everything_recommendations, source_items
+from taste.recommend.everything import dismissed_keys, everything_recommendations
 from taste.recommend.model import Rec, _dismissed
 from taste.recommend.music import music_recommendations
 from taste.recommend.screen import film_recommendations, tv_recommendations
@@ -105,7 +105,7 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
         if r["item_key"] not in dismissed
     ]
     if kind == "everything":
-        hidden = dismissed_keys(conn, source_items(conn))
+        hidden = dismissed_keys(conn)
         recs = [r for r in recs if (r.kind, r.facts.get("source_item_key")) not in hidden]
     metrics = json.loads(run["metrics_json"])
     # 3.1 used model for both a numeric anime error and the selected-model block.

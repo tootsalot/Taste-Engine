@@ -511,7 +511,7 @@ class RecapPage(LazyPage, QWidget):
     def folder(self) -> Path | None:
         """Where Save puts cards, once chosen. None until then."""
         saved = ui_state.load().get("recap_folder")
-        return Path(saved) if saved else None
+        return Path(saved) if saved and isinstance(saved, str) else None
 
     def _ask_folder(self) -> str:
         start = str(self.folder() or Path.home() / "Pictures")

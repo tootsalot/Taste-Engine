@@ -280,6 +280,7 @@ SIMPLE_SETTINGS = {
     "clock_format",
     "week_start",
     "sync_on_launch",
+    "lastfm_history",
     "lastfm_capture_scope",
     "rec_count",
     "rec_media_types",
@@ -622,6 +623,18 @@ def test_report_pages_can_open_on_the_latest_year(window, qtbot):
     newest = musicstats.years(conn)[0]
     conn.close()
     assert window.reports.music.span == newest != "all"
+
+
+@pytest.mark.parametrize("damaged", ["big", [300], -5, 12345])
+def test_a_damaged_window_preferences_file_falls_back_safely(qtbot, damaged):
+    ui_state.save(image_cache_mb=damaged, recap_folder=7)
+    ctx = AppContext(store=SecretStore(backend=FakeKeyring()))
+    assert ctx.art.cache.max_bytes == 300 * 1024 * 1024
+    from taste.desktop.recap_page import RecapPage
+
+    page = RecapPage(ctx)
+    qtbot.addWidget(page)
+    assert page.folder() is None
 
 
 def test_picture_cache_size_and_clear(window):

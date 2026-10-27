@@ -301,3 +301,22 @@ def test_lookback_days_setting_is_used(conn, make_client):
     transport.calls.clear()
     run_sync(conn, client, now=NOW_2)
     assert transport.calls[0]["params"]["from"] == NOW_1 - 3 * lastfm.DAY_SECONDS
+
+
+def test_history_setting_limits_the_first_sync_and_a_longer_one_reads_older_plays_once(
+    conn, make_client
+):
+    server = FakeLastfm("lastfm_recent_page1.json")
+    client, transport = make_client(server)
+    settings.set_value(conn, "lastfm_history", "1")
+    run_sync(conn, client, now=NOW_1)
+    assert transport.calls[0]["params"]["from"] == NOW_1 - lastfm.YEAR_SECONDS
+    # A shorter span never deletes plays already synced; a longer one fills in the gap.
+    settings.set_value(conn, "lastfm_history", "all")
+    transport.calls.clear()
+    run_sync(conn, client, now=NOW_2)
+    backfill = [c["params"] for c in transport.calls if c["params"]["from"] == 0]
+    assert backfill and backfill[0]["to"] == NOW_1 - lastfm.YEAR_SECONDS
+    transport.calls.clear()
+    run_sync(conn, client, now=NOW_2 + 1)
+    assert all(c["params"]["from"] != 0 for c in transport.calls)

@@ -34,7 +34,9 @@ class AppContext:
             from taste.desktop.art import ArtLoader  # local import: keeps this module Qt-free
 
             # One picture cache for every profile, sized by the window preference.
-            megabytes = ui_state.load().get("image_cache_mb", images.MAX_CACHE_BYTES >> 20)
+            megabytes = ui_state.load().get("image_cache_mb")
+            if megabytes not in ui_state.CACHE_SIZES_MB:  # a hand-edited or damaged file
+                megabytes = images.MAX_CACHE_BYTES >> 20
             self._art = ArtLoader(
                 images.ImageCache(session=self.image_session, max_bytes=int(megabytes) << 20)
             )

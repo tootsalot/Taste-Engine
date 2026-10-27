@@ -1,4 +1,4 @@
-"""Cross-media picks require specific shared story evidence and native predictions."""
+"""Cross-media picks require a specific shared term and keep native predictions."""
 
 from copy import deepcopy
 from dataclasses import replace
@@ -9,7 +9,6 @@ from taste import activity, core, recommend, settings, themes
 from taste.recommend import Rec
 from taste.recommend.everything import (
     MAX_SEEDS,
-    MIN_SIMILARITY,
     STOP_TERMS,
     CrossIndex,
     balance,
@@ -84,15 +83,31 @@ def test_cross_picks_keep_predictions_and_native_seed_scores(conn):
     assert pools == original
 
 
-def test_only_other_medium_seeds_and_at_or_above_usual_predictions_count(conn):
+def test_only_other_medium_seeds_count_and_below_usual_only_ranks_lower(conn):
     ratings(conn, "anime")
     own = pick(conn, "anime", 10, 9)
     assert everything_recommendations(conn, {"anime": ([own], {})})[0] == []
     ratings(conn, "film")
-    low = pick(conn, "anime", 11, 6.99)
-    picks, _ = everything_recommendations(conn, {"anime": ([own, low], {})})
-    assert [r.item_key for r in picks] == ["anime:10"]
-    assert all(seed["medium"] == "film" for seed in picks[0].facts["cross_seeds"])
+    low = pick(conn, "anime", 11, 5)
+    picks, _ = everything_recommendations(conn, {"anime": ([low, own], {})})
+    # Equal support: the prediction against my usual breaks the tie, never excludes.
+    assert [r.item_key for r in picks] == ["anime:10", "anime:11"]
+    assert all(seed["medium"] == "film" for r in picks for seed in r.facts["cross_seeds"])
+    assert picks[0].facts["usual_comparison"] == "Strong match · Above your usual for anime"
+    assert picks[1].facts["usual_comparison"] == "Good match · Below your usual for anime"
+
+
+def test_the_list_fills_to_the_same_count_as_other_tabs(conn):
+    ratings(conn, "book", (2, 3, 4.5))
+    ratings(conn, "film", (5, 7, 9), tags=())
+    settings.set_value(conn, "rec_count", 12)
+    # Twenty films that each share one specific term, most predicted below my usual.
+    films = [
+        pick(conn, "film", key, 3 + key % 5, ("Time Travel", f"Extra {key}"))
+        for key in range(100, 120)
+    ]
+    picks, _ = everything_recommendations(conn, {"film": (films, {})})
+    assert len(picks) == 12
 
 
 @pytest.mark.parametrize(
@@ -102,10 +117,10 @@ def test_only_other_medium_seeds_and_at_or_above_usual_predictions_count(conn):
         ("Emotional", "Funny"),
         ("Tense", "Romantic"),
         tuple(STOP_TERMS),
-        ("Time Travel", "Animation", "anime", "based on manga"),
+        ("Drama", "Animation", "anime", "based on manga"),
     ],
 )
-def test_broad_themes_and_medium_markers_do_not_supply_two_specific_terms(conn, tags):
+def test_broad_themes_and_medium_markers_never_make_a_match(conn, tags):
     ratings(conn, "anime", tags=tags)
     ratings(conn, "film", tags=tags)
     candidate = pick(conn, "film", 10, 8, tags)
@@ -114,17 +129,17 @@ def test_broad_themes_and_medium_markers_do_not_supply_two_specific_terms(conn, 
     assert all(not (title.terms & STOP_TERMS) for title in documents)
 
 
-def test_casefolded_trimmed_collapsed_terms_and_minimum_similarity(conn):
+def test_casefolded_trimmed_collapsed_terms_and_unrelated_terms_weaken_a_match(conn):
     ratings(conn, "anime", tags=("  Time   Travel ", "FOUND FAMILY"))
     ratings(conn, "film", tags=())
     candidate = pick(conn, "film", 10, 8)
     data = load_cross_data(conn)
     title = next(t for t in data if t.medium == "film" and t.item_key == "10")
-    assert CrossIndex(data).support(title)["cross_support"] > 0
+    clean = CrossIndex(data).support(title)["cross_support"]
+    assert clean > 0
     noisy = replace(title, terms=title.terms | frozenset(f"Unrelated term {i}" for i in range(100)))
     noisy_data = [noisy if t is title else t for t in data]
-    assert CrossIndex(noisy_data).support(noisy)["cross_support"] == 0
-    assert 0 < MIN_SIMILARITY < 1
+    assert 0 < CrossIndex(noisy_data).support(noisy)["cross_support"] < clean
     assert everything_recommendations(conn, {"film": ([candidate], {})})[0]
 
 
@@ -172,6 +187,8 @@ def test_recorded_identity_is_not_similarity_and_dismissal_only_covers_aliases(c
     recommend.dismiss(conn, "everything", "anime:2")
     blocked = dismissed_keys(conn, source_items(conn))
     assert ("book", "99") in blocked and ("book", "100") not in blocked
+    # For You's reload reads only the dismissed titles' own ids, with the same result.
+    assert dismissed_keys(conn) == blocked
 
 
 def test_same_source_identity_does_not_copy_a_film_rating_into_tv(conn):

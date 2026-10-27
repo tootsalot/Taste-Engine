@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 from PySide6.QtCore import Qt
 
+from taste import runner
 from taste.desktop import theme
 from taste.desktop.dashboard import SHELF_MAX
 from taste.desktop.dashboard_cards import finished_tip
@@ -187,7 +188,14 @@ def test_the_sync_menu_lists_each_connected_source(window, qtbot):
     set_up_profile(window)  # MyAnimeList and Last.fm
     dash = window.dashboard
     menu = {a.text(): a for a in dash.sync_menu.actions()}
-    assert list(menu) == ["MyAnimeList", "Last.fm"]  # TMDB and Hardcover aren't connected
+    # Quick and full first, a separator, then TMDB and Hardcover aren't connected.
+    assert list(menu) == [
+        "Quick sync (new and changed)",
+        "Full sync (refresh details)",
+        "",
+        "MyAnimeList",
+        "Last.fm",
+    ]
     with qtbot.waitSignal(dash.sync_finished, timeout=15000) as blocker:
         menu["Last.fm"].trigger()
         assert not dash.sync_button.isEnabled()
@@ -195,6 +203,27 @@ def test_the_sync_menu_lists_each_connected_source(window, qtbot):
     assert dash.sync_button.isEnabled()
     text = dash.strip.text.text()
     assert text.startswith("Last.fm synced ") and text.endswith("MyAnimeList: never synced.")
+
+
+def test_quick_sync_runs_every_source_and_recomputes_suggestions_without_fetching(
+    window, qtbot, monkeypatch
+):
+    set_up_profile(window)
+    dash = window.dashboard
+    seen = []
+    original = runner.refresh_recommendations
+
+    def record(*args, **kwargs):
+        seen.append(kwargs.get("fetch", True))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "refresh_recommendations", record)
+    quick = next(a for a in dash.sync_menu.actions() if a.text().startswith("Quick"))
+    with qtbot.waitSignal(dash.sync_finished, timeout=15000) as blocker:
+        quick.trigger()
+        assert dash.worker.quick
+    assert blocker.args[0] == {"mal": True, "lastfm": True}
+    assert seen == [False]
 
 
 def test_poster_tooltips_name_the_main_title_when_the_card_shows_english():

@@ -16,7 +16,6 @@ from taste.recommend.model import Rec, _dismissed
 from taste.recommend.screen import _screen_facts
 
 POOLS = ("anime", "film", "tv", "book")
-MIN_SIMILARITY = 0.12
 MAX_SEEDS = 3
 WITHIN_REACH = 1.0
 MEDIUM_ORDER = {kind: index for index, kind in enumerate(POOLS)}
@@ -141,9 +140,27 @@ def source_items(conn: sqlite3.Connection) -> dict[tuple[str, str], int]:
     }
 
 
-def dismissed_keys(conn: sqlite3.Connection, identities: dict) -> set[tuple[str, str]]:
-    """A dismissal covers recorded aliases, never a related adaptation."""
+def dismissed_keys(
+    conn: sqlite3.Connection, identities: dict | None = None
+) -> set[tuple[str, str]]:
+    """A dismissal covers recorded aliases, never a related adaptation. Without
+    `identities` (For You's reload), only the dismissed titles' own ids are read."""
     dismissed = {tuple(row) for row in conn.execute("SELECT kind, item_key FROM rec_dismissed")}
+    if identities is None:
+        kinds = {identity: kind for kind, identity in themes.IDS.items()}
+        identities = {}
+        for kind, key in dismissed:
+            if kind not in themes.IDS:
+                continue
+            for source, id_type, external, item in conn.execute(
+                "SELECT a.source, a.id_type, a.external_id, a.item_id "
+                "FROM core_item_external_ids d JOIN core_item_external_ids a "
+                "ON a.item_id = d.item_id "
+                "WHERE d.source = ? AND d.id_type = ? AND d.external_id = ?",
+                (*themes.IDS[kind], key),
+            ):
+                if (source, id_type) in kinds:
+                    identities[kinds[source, id_type], external] = item
     items = {identities[key] for key in dismissed if key in identities}
     return dismissed | {key for key, item in identities.items() if item in items}
 
@@ -216,10 +233,11 @@ def load_cross_data(
 
 
 class CrossIndex:
-    """IDF weighted Jaccard, using a term index instead of all seed/candidate pairs.
+    """IDF weighted cosine, using a term index instead of all seed/candidate pairs.
 
-    Jaccard rewards shared evidence while penalizing unrelated extra tags. Binary
-    term sets avoid a source repeating a keyword to increase its influence.
+    Cosine rather than Jaccard: a TMDB title can carry dozens of keywords against a
+    handful of MAL genres, and Jaccard ranked such films near zero. Binary term sets
+    avoid a source repeating a keyword to increase its influence.
     """
 
     def __init__(self, titles: list[CrossTitle], hidden: set[int] | None = None):
@@ -261,13 +279,15 @@ class CrossIndex:
             for term in title.specific_terms:
                 self.index[term].add(seed_id)
         for title in titles:
-            self.totals[title.medium, title.item_key] = sum(self.idf[t] for t in title.terms)
+            self.totals[title.medium, title.item_key] = math.sqrt(
+                sum(self.idf[t] ** 2 for t in title.terms)
+            )
 
     def support(self, title: CrossTitle) -> dict:
         """The strongest three visible liked titles in other media, strongest first."""
         possible = set()
-        # Two specific raw terms are required, so broad-only matches can never
-        # qualify. Index only specific terms before computing full Jaccard.
+        # A shared specific raw term is required, so broad-only matches can never
+        # qualify. Only specific terms are indexed; similarity then uses every term.
         for term in title.specific_terms:
             possible.update(self.index.get(term, ()))
         found = []
@@ -280,17 +300,10 @@ class CrossIndex:
                 continue
             compared += 1
             shared = title.terms & seed.terms
-            if len(title.specific_terms & seed.specific_terms) < 2:
-                continue
-            overlap = sum(self.idf[t] for t in shared)
-            union = (
-                self.totals[title.medium, title.item_key]
-                + self.totals[seed.medium, seed.item_key]
-                - overlap
+            norms = (
+                self.totals[title.medium, title.item_key] * self.totals[seed.medium, seed.item_key]
             )
-            similarity = overlap / union if union else 0
-            if similarity < MIN_SIMILARITY:
-                continue
+            similarity = sum(self.idf[t] ** 2 for t in shared) / norms
             found.append((self.weights[seed_id] * similarity, seed, shared))
         found.sort(key=lambda row: (-row[0], MEDIUM_ORDER[row[1].medium], row[1].item_key))
         best = found[:MAX_SEEDS]
@@ -364,8 +377,7 @@ def balance(picks: list[Rec], mode: str, prefix: tuple[Rec, ...] = ()) -> list[R
 def _surprise(picks: list[Rec], baselines: dict) -> Rec | None:
     """Best supported pick in the least-rated available medium, with ranking ties.
 
-    Keep it separate only when another pick remains in the regular list. Its score
-    still has to reach the same personal average as every other cross-media pick.
+    Keep it separate only when another pick remains in the regular list.
     """
     if len(picks) < 2:
         return None
@@ -375,9 +387,25 @@ def _surprise(picks: list[Rec], baselines: dict) -> Rec | None:
     reason = (
         f"Among these picks, you have rated {themes.LABELS[rec.kind]} least "
         f"({count} {noun}). This pick shares specific terms with liked titles "
-        "in other media and is predicted at or above your usual."
+        "in other media."
     )
+    if rec.facts["relative_score"] >= 0:
+        reason += " It is predicted at or above your usual."
     return replace(rec, facts={**rec.facts, "outside_usual": True, "surprise_reason": reason})
+
+
+def _match_label(rank: int, total: int) -> str:
+    """Thirds of the list by cross support, like Discover music."""
+    if rank <= math.ceil(total / 3):
+        return "Strong match"
+    if rank <= math.ceil(2 * total / 3):
+        return "Good match"
+    return "Worth a try"
+
+
+def _versus_usual(relative: float, medium: str) -> str:
+    direction = "Above" if relative >= 0.25 else "Near" if relative > -0.25 else "Below"
+    return f"{direction} your usual for {themes.LABELS[medium]}"
 
 
 def _join(words: list[str]) -> str:
@@ -411,7 +439,6 @@ def everything_recommendations(
                 or rec.score is None
                 or not math.isfinite(rec.score)
                 or baseline["mean"] is None
-                or rec.score < baseline["mean"]
             ):
                 continue
             identity = ("core", title.item_id) if title.item_id is not None else ("source", key)
@@ -422,11 +449,9 @@ def everything_recommendations(
                 continue
             seen.add(identity)
             relative = (rec.score - baseline["mean"]) / baseline["spread"]
-            named = [
-                f"{seed['title']} ({seed['medium']}, you gave it {seed['my_score']:g})"
-                for seed in support["cross_seeds"]
-            ]
-            reason = f"Like {_join(named)}: shares {_join(support['shared_terms'])}."
+            # The panel lists the liked titles just above this sentence.
+            noun = "this title" if len(support["cross_seeds"]) == 1 else "these titles"
+            reason = f"Like {noun}: shares {_join(support['shared_terms'])}."
             unit = "stars" if kind == "book" else "points"
             details = [
                 f"Cross support: {support['cross_support']:.3f}.",
@@ -447,23 +472,34 @@ def everything_recommendations(
                         "list_kind": kind,
                         "usual_mean": baseline["mean"],
                         "relative_score": relative,
-                        "usual_comparison": f"At or above your usual for {themes.LABELS[kind]}",
                         "details": details,
                     },
                 )
             )
     ranked.sort(key=_order)
+    count = settings.get(conn, "rec_count")
     outside = _surprise(ranked, index.baselines)
-    regular = [rec for rec in ranked if outside is None or rec.item_key != outside.item_key]
+    # Balancing takes each medium's picks in ranked order, so only a medium's top `count`
+    # can reach the list. Trimming first keeps balancing fast on whole pools.
+    taken, regular = Counter(), []
+    for rec in ranked:
+        if (outside is None or rec.item_key != outside.item_key) and taken[rec.kind] < count:
+            taken[rec.kind] += 1
+            regular.append(rec)
     mode = settings.get(conn, "mix_balance")
-    ordered = balance(regular, mode, (outside,) if outside else ())
+    ordered = balance(regular, mode, (outside,) if outside else ())[:count]
+    for rank, rec in enumerate(sorted(ordered, key=_order), 1):
+        label = _match_label(rank, len(ordered))
+        rec.facts["match_label"] = label
+        rec.facts["usual_comparison"] = (
+            f"{label} · {_versus_usual(rec.facts['relative_score'], rec.kind)}"
+        )
     metrics = {
         "cross_media": 1,
         "experimental": True,
         "visibility": themes.visibility(conn),
         "means_spreads": index.baselines,
         "balance": mode,
-        "minimum_similarity": MIN_SIMILARITY,
         "max_seeds": MAX_SEEDS,
     }
-    return ordered[: settings.get(conn, "rec_count")], metrics
+    return ordered, metrics

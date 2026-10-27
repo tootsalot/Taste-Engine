@@ -109,6 +109,7 @@ class DashboardPage(LazyPage, QWidget):
         self.sync_button.clicked.connect(lambda: self.start_sync("all"))
         self.sync_menu = QMenu(self.sync_button)
         self.sync_menu.aboutToShow.connect(motion.menu_effects)
+        self.sync_menu.setToolTipsVisible(True)
         self.sync_button.setMenu(self.sync_menu)
         top.addWidget(self.sync_button)
         layout.addLayout(top)
@@ -486,8 +487,19 @@ class DashboardPage(LazyPage, QWidget):
         self.sync_button.setToolTip("Wait for the recommendations to finish." if blocked else "")
 
     def _fill_sync_menu(self, connected: list[source_status.SourceStatus]) -> None:
-        """The arrow's menu: each connected source, or the way to Settings."""
+        """The arrow's menu: quick or full, then each connected source, or the way to
+        Settings. The button itself is a full sync."""
         self.sync_menu.clear()
+        if connected:
+            quick = self.sync_menu.addAction("Quick sync (new and changed)")
+            quick.setToolTip(
+                "Ratings, plays, and lists only. Details already saved aren't refreshed, "
+                "and suggestions are recomputed from what's saved."
+            )
+            quick.triggered.connect(self._quick_sync)
+            full = self.sync_menu.addAction("Full sync (refresh details)")
+            full.triggered.connect(lambda: self.start_sync("all"))
+            self.sync_menu.addSeparator()
         for status in connected:
             action = self.sync_menu.addAction(theme.source_dot(status.source), status.label)
             action.triggered.connect(lambda _=False, s=status.source: self.start_sync(s))
@@ -495,7 +507,10 @@ class DashboardPage(LazyPage, QWidget):
             action = self.sync_menu.addAction("Add your sources in Settings")
             action.triggered.connect(lambda: self.open_page.emit("Settings"))
 
-    def start_sync(self, source: str) -> None:
+    def _quick_sync(self) -> None:
+        self.start_sync("all", quick=True)
+
+    def start_sync(self, source: str, quick: bool = False) -> None:
         if not self.profile_id or self.is_syncing() or self.is_blocked():
             return
         self.strip.start()
@@ -507,6 +522,7 @@ class DashboardPage(LazyPage, QWidget):
             self.ctx.client_factory,
             self.ctx.sync_kwargs,
             self.ctx.recs_kwargs,
+            quick=quick,
         )
         self.worker.recs_updated.connect(self.recs_updated)
         self.worker.message.connect(self.strip.message)

@@ -18,7 +18,8 @@ For You
 - Seed and genre reasons keep describing real ratings; the three 3.0 model switches apply to Usual only
 - Across media replaces Across everything with anime, film, TV, and book picks like titles I rated above my average in other media; music stays in Discover and Rediscover
 - One to three liked titles and their shared terms explain each pick; broad themes alone and labels such as Animation or based on manga cannot make a match
-- Each pick keeps its own tab's predicted score and must reach my usual for that medium; cross support ranks it without changing the rating models or other lists
+- Each pick keeps its own tab's predicted score; cross support ranks it without changing the rating models or other lists, and the list fills to the same count as the other tabs
+- Cards say how strong each match is (Strong match, Good match, Worth a try) and whether the prediction is above, near, or below my usual for that medium
 - Balanced, Best first, and Strict rotation control the order across those four media, with an instant remembered medium filter
 - A separate Outside your usual card highlights the best eligible pick in a medium I have rated least
 - TMDB keywords arrive with the existing details request; the first sync after updating takes longer while older titles collect them once
@@ -26,6 +27,17 @@ For You
 - Discover music cards show how close a new artist is to the nearest artist I play, so they never read above 100% (an artist like several of mine showed sums like 162%); lists saved before this show the match words alone
 - Settings saved while suggestions are recomputing or a sync is running now reach the lists: they recompute again once that work ends
 - Deleting a profile first waits for a stopped rating check or recap drawing to close the database, which Windows refused to delete while it was open
+
+Syncing
+- Quick sync in the Sync everything menu reads new and changed ratings, plays, and lists, skips refreshing details I already have, and recomputes suggestions without fetching; the button itself is still a full sync (`sync --quick` on the command line)
+- A setting chooses how far back Last.fm history goes: all of it, or the last 5, 2, or 1 years. Choosing a longer span later reads the older plays on the next sync; a shorter one never deletes plays. With a shorter span, reports count an artist as new the first time they appear in the synced plays
+
+Speed and fixes
+- For You responds faster: a poster that loads now tells only the tiles waiting for it, not every tile in the app, and a click restyles only the two tiles whose outline changes
+- Collapsing or opening the sidebar no longer re-decodes every poster on every animation frame; pictures redraw sharp once the size settles
+- The Music report reads its list of years once instead of three times, and For You's reload reads only the dismissed titles' ids instead of every recorded id
+- A damaged key file or window-preferences file no longer crashes the app, and never stops a profile from being deleted
+- The profile switcher's tooltip shows a display name as plain text
 
 Lab and checks
 - A read-only `themes` command prints mapped title/tag counts and common unmapped taxonomy terms without printing titles

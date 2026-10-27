@@ -195,7 +195,9 @@ def sync(
     out: Callable[[str], None] = print,
     *,
     now: datetime | None = None,
+    quick: bool = False,
 ) -> SyncResult:
+    """Ratings and lists, then details: all that are due, or only new titles when `quick`."""
     run = SyncRun(conn, SOURCE, "full")
     stamp = utc_now()
     try:
@@ -222,7 +224,8 @@ def sync(
                     _load_core(conn, kind, int(item["id"]))
             local_time.refresh(conn)
             run.save()
-        fetch_details(conn, client, cfg, run, out, now=now)
+        ids = _detail_ids(conn, now or datetime.now(timezone.utc), new_only=True) if quick else None
+        fetch_details(conn, client, cfg, run, out, now=now, ids=ids)
         run.finish("success")
         out(f"TMDB: {run.rows_fetched} ratings, {run.rows_inserted} new, {removed} removed")
         return SyncResult(
@@ -364,14 +367,16 @@ def _apply_removals(conn: sqlite3.Connection, run_id: int, now: str) -> int:
 
 
 def _detail_ids(
-    conn: sqlite3.Connection, now: datetime, account_only: bool = True
+    conn: sqlite3.Connection, now: datetime, account_only: bool = True, new_only: bool = False
 ) -> list[tuple[str, int]]:
     """Titles with missing keywords, missing details, or details older than REFRESH_DAYS.
 
     `account_only`: just what's on my account (rated, watchlist, favorites). Suggestion
     candidates are known from lists too, and a sync must not fetch them all; the
-    recommendations refresh fetches the strongest ones.
+    recommendations refresh fetches the strongest ones. `new_only` (a quick sync): only
+    titles whose details were never fetched.
     """
+    due = "fetched_at = ?" if new_only else "(fetched_at < ? OR keywords_json IS NULL)"
     cutoff = (now - timedelta(days=REFRESH_DAYS)).strftime(TIMESTAMP_FORMAT)
     mine = (
         " AND tmdb_id IN (SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = ? "
@@ -382,7 +387,8 @@ def _detail_ids(
     )
     found = []
     for kind, table in (("movie", "stg_tmdb_movies"), ("tv", "stg_tmdb_tv")):
-        params = (cutoff, kind, kind) if account_only else (cutoff,)
+        first = "" if new_only else cutoff  # list-seeded rows have fetched_at ''
+        params = (first, kind, kind) if account_only else (first,)
         # A title that answered 404 lately is gone from TMDB: not asked again for a while.
         gone = (
             " AND tmdb_id NOT IN (SELECT tmdb_id FROM stg_tmdb_fetches WHERE method = ? "
@@ -391,8 +397,7 @@ def _detail_ids(
         found += [
             (kind, r[0])
             for r in conn.execute(
-                f"SELECT tmdb_id FROM {table} "
-                f"WHERE (fetched_at < ? OR keywords_json IS NULL){mine}{gone} ORDER BY tmdb_id",
+                f"SELECT tmdb_id FROM {table} WHERE {due}{mine}{gone} ORDER BY tmdb_id",
                 (*params, f"gone_{kind}", cutoff),
             )
         ]

@@ -604,7 +604,7 @@ One row per setting. Types, defaults, and validation live in `taste/settings.py`
 
 | Column | Type | Description |
 |---|---|---|
-| setting_key | TEXT PK | Profile: `display_name`, `mal_username`, `lastfm_username`, `timezone`, `include_nsfw`. Last.fm: `lastfm_capture_scope`, `lastfm_scope_note`. Reports: `genre_min_sample`, `in_line_threshold`, `top_n_all_time`, `top_n_per_year`, `top_n_per_month`. Recommendations: `rec_count`, `rec_min_raters`, `rec_media_types`, `rec_include_plan_to_watch`, `rec_seed_artists`, `rec_model_anime`, `rec_model_film`, `rec_model_tv`, `rec_model_book`. Syncing and storage: `lastfm_lookback_days`, `raw_retention_days`. |
+| setting_key | TEXT PK | Profile: `display_name`, `mal_username`, `lastfm_username`, `timezone`, `include_nsfw`. Last.fm: `lastfm_capture_scope`, `lastfm_scope_note`. Reports: `genre_min_sample`, `in_line_threshold`, `top_n_all_time`, `top_n_per_year`, `top_n_per_month`. Recommendations: `rec_count`, `rec_min_raters`, `rec_media_types`, `rec_include_plan_to_watch`, `rec_seed_artists`, `rec_model_anime`, `rec_model_film`, `rec_model_tv`, `rec_model_book`. Syncing and storage: `lastfm_history` (`all`, `5`, `2`, or `1` years: where the first Last.fm sync starts; a longer span later adds one window reading the older plays), `lastfm_lookback_days`, `raw_retention_days`. |
 | setting_value | TEXT | The value as text (booleans are `1` / `0`, `rec_media_types` is a comma-separated list such as `tv,movie,ona,ova`). Views `CAST` the numeric ones. |
 | updated_at | TEXT | When it was last changed (UTC). |
 
@@ -907,8 +907,8 @@ cutoff. The ordinary lists save exactly their usual cutoffs, scores, reasons, an
 When a recompute includes a medium and Across media, it reuses that scored pool. Candidate
 eligibility stays with the medium: ratings, dismissals, release dates, adult visibility,
 minimum raters, and the medium's other restrictions still apply. A cross-media pick must
-have other-media support and a prediction at or above its medium's personal mean. Its
-native prediction remains `rec_items.score`, including book stars. Keywords never enter
+have other-media support. Its prediction against its medium's personal mean only breaks
+ties, so the list fills to `rec_count` like the other tabs. Its native prediction remains `rec_items.score`, including book stars. Keywords never enter
 any rating model.
 
 Terms are casefolded, trimmed, and have repeated whitespace collapsed. Raw MAL genres
@@ -917,10 +917,11 @@ moods are combined with the existing expanded mapped themes. A small explicit st
 removes medium markers, including Animation, anime, based on manga, and based on novel or
 book. Every term's inverse document frequency is `log((N + 1) / (document_count + 1)) + 1`,
 where the corpus is the titles in the four media, rated titles and candidates together.
-Weighted Jaccard similarity uses the sum of shared term weights divided by the sum of
-union term weights. An inverted term index avoids comparing every seed/candidate pair.
-A match needs similarity at least 0.12 and at least two shared literal terms that are not
-generic broad themes. Broad Drama alone can never create a match.
+Similarity is the weighted cosine: the sum of squared shared term weights divided by the
+product of both titles' weight norms. Cosine rather than Jaccard, because a TMDB title can
+carry dozens of keywords against a few MAL genres. An inverted term index avoids comparing
+every seed/candidate pair. A match needs at least one shared literal term that is not a
+generic broad theme. Broad Drama alone can never create a match.
 
 Liked seeds have personal scores strictly above their own medium's average. A seed's
 weight is `(score - mean) / max(population_standard_deviation, floor)` on its native
@@ -948,10 +949,11 @@ Cross-media `rec_items.facts_json` retains the candidate's own-medium facts and 
 | `cross_seeds` | One to three objects, strongest first, each with `medium`, `item_key`, `title`, and `my_score`. Scores use native scales: books in stars, the others in points. |
 | `shared_terms` | Up to five shared terms that supported the match, rarest first. Displayed as plain-text chips. |
 | `cross_support` | Sum of the strongest other-media seed contributions. It determines ranking, never the predicted score. |
-| `cross_compared` | Number of liked other-media seeds visited through at least one shared specific raw term, before the two-term specificity and minimum-similarity thresholds. Own-medium seeds and recorded aliases of the same core item are excluded. |
+| `cross_compared` | Number of liked other-media seeds sharing at least one specific raw term with the pick. Own-medium seeds and recorded aliases of the same core item are excluded. |
 | `usual_mean` | Personal average for the pick's medium, on that medium's native score scale. |
 | `relative_score` | The candidate's prediction minus its medium's mean, divided by its floored native spread. Used to break support ties. |
-| `usual_comparison` | Plain wording comparing the candidate's native prediction with the personal mean. |
+| `match_label` | "Strong match", "Good match", or "Worth a try", by thirds of the saved list's cross support. |
+| `usual_comparison` | The match label and whether the native prediction is above, near, or below the personal mean ("Good match · Below your usual for films"). |
 | `outside_usual` | True only on the separate surprise card, when one exists. |
 | `surprise_reason` | Plain explanation of the least-rated eligible medium and the pick's prediction. |
 | `details` | Sentences giving cross support, compared seed count, and native prediction against the personal mean, for Behind the score. |
@@ -959,7 +961,7 @@ Cross-media `rec_items.facts_json` retains the candidate's own-medium facts and 
 The surprise is the highest-ranked eligible pick in an available medium with the fewest
 personal ratings. Ties follow the ordinary cross-support ranking. It is removed from the
 regular grid and counts toward `rec_count` and balancing's first ten. It follows the same
-support and at-or-above-usual eligibility as other cross-media picks. At least one other
+eligibility as other cross-media picks. At least one other
 pick must remain in the regular list for the separate card to appear.
 
 Cross-media `metrics_json` stores:
@@ -971,7 +973,6 @@ Cross-media `metrics_json` stores:
 | `visibility` | Current anime visibility stamp. |
 | `means_spreads` | Per-medium objects with rating `count`, native `mean`, and floored native `spread`; mean/spread are null without ratings. |
 | `balance` | The selected `mix_balance` value. |
-| `minimum_similarity` | Fixed minimum weighted Jaccard similarity, 0.12. |
 | `max_seeds` | Maximum number of counted seeds per pick, 3. |
 
 Dismissal stores the pick under its own kind and source key (`anime` and `101` for a

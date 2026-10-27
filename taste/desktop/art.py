@@ -14,8 +14,9 @@ from __future__ import annotations
 import contextlib
 import time
 import traceback
+import weakref
 
-from PySide6.QtCore import QObject, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRectF, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QImage,
@@ -26,6 +27,7 @@ from PySide6.QtGui import (
     QPixmapCache,
 )
 from PySide6.QtWidgets import QSizePolicy, QWidget
+from shiboken6 import isValid
 
 from taste import images
 from taste.desktop import motion, theme
@@ -33,6 +35,7 @@ from taste.desktop.widgets import plain_tip
 
 MEMORY_CACHE_KB = 20 * 1024
 THREADS = 4
+RESIZE_SETTLE_MS = 150
 
 
 def cache_key(url: str, size: QSize) -> str:
@@ -75,8 +78,6 @@ class _Job(QRunnable):
 
 
 class ArtLoader(QObject):
-    loaded = Signal(str)  # cache key, once its pixmap is ready
-    failed_key = Signal(str)  # cache key of a picture that can't be had
     _finished = Signal(str, QImage)
 
     def __init__(self, cache: images.ImageCache | None = None) -> None:
@@ -85,13 +86,19 @@ class ArtLoader(QObject):
         self.pool = QThreadPool()
         self.pool.setMaxThreadCount(THREADS)
         self.pending: set[str] = set()
+        # Only the tiles waiting for a picture hear about it. A signal to every tile made
+        # each finished picture call every tile in the app (tiles times pictures).
+        self.watchers: dict[str, weakref.WeakSet] = {}
         self.failed: dict[str, float] = {}  # cache key -> when it failed
         self.clock = time.monotonic
         QPixmapCache.setCacheLimit(MEMORY_CACHE_KB)
         self._finished.connect(self._on_finished)
 
-    def pixmap(self, url: str | None, size: QSize) -> QPixmap | None:
-        """The picture if it's ready. Otherwise starts loading it and returns None."""
+    def pixmap(
+        self, url: str | None, size: QSize, watcher: ArtTile | None = None
+    ) -> QPixmap | None:
+        """The picture if it's ready. Otherwise starts loading it and returns None;
+        `watcher` is told when it arrives or fails."""
         if not images.allowed(url):
             return None
         key = cache_key(url, size)
@@ -108,16 +115,21 @@ class ArtLoader(QObject):
         if key not in self.pending and failed_at is None:
             self.pending.add(key)
             self.pool.start(_Job(self, url, QSize(size), key))
+        if watcher is not None and key in self.pending:
+            self.watchers.setdefault(key, weakref.WeakSet()).add(watcher)
         return None
 
     def _on_finished(self, key: str, image: QImage) -> None:
         self.pending.discard(key)
+        tiles = [tile for tile in self.watchers.pop(key, ()) if isValid(tile)]
         if image.isNull():
             self.failed[key] = self.clock()
-            self.failed_key.emit(key)
+            for tile in tiles:
+                tile._on_failed(key)
             return
         QPixmapCache.insert(key, QPixmap.fromImage(image))
-        self.loaded.emit(key)
+        for tile in tiles:
+            tile._on_loaded(key)
 
     def is_idle(self) -> bool:
         return not self.pending
@@ -157,10 +169,14 @@ class ArtTile(QWidget):
         self._pixmap: QPixmap | None = None
         self._opacity = 1.0  # below 1 while a picture that just arrived fades in
         self._fade = None
+        # A sidebar sliding open resizes every tile on every frame. The sharp picture is
+        # asked for once the size settles; until then the current one is drawn scaled.
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.setInterval(RESIZE_SETTLE_MS)
+        self._settle.timeout.connect(self._load_at_size)
         self.setFixedSize(size)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        loader.loaded.connect(self._on_loaded)
-        loader.failed_key.connect(self._on_failed)
 
     def set_art(self, url: str | None, title: str = "", fallback: str | None = None) -> None:
         """`fallback` is tried when `url` can't be had (missing, refused, too big)."""
@@ -169,7 +185,7 @@ class ArtTile(QWidget):
         self._opacity = 1.0
         self.letter = (title.strip()[:1] or "?").upper()
         self.setToolTip(plain_tip(title))
-        self._pixmap = self.loader.pixmap(url, self.art_size)
+        self._pixmap = self.loader.pixmap(url, self.art_size, self)
         if self._pixmap is None and not self._waiting():
             self._use_fallback()
         self.update()
@@ -185,10 +201,15 @@ class ArtTile(QWidget):
         self.art_size = QSize(size)
         self.setFixedSize(size)
         if self.url:
-            found = self.loader.pixmap(self.url, self.art_size)
+            self._settle.start()
+        self.update()
+
+    def _load_at_size(self) -> None:
+        if self.url:
+            found = self.loader.pixmap(self.url, self.art_size, self)
             if found is not None:
                 self._pixmap = found
-        self.update()
+                self.update()
 
     def has_picture(self) -> bool:
         return self._pixmap is not None
@@ -200,7 +221,7 @@ class ArtTile(QWidget):
     def _use_fallback(self) -> None:
         if self.fallback and self.fallback != self.url:
             self.url, self.fallback = self.fallback, None
-            self._pixmap = self.loader.pixmap(self.url, self.art_size)
+            self._pixmap = self.loader.pixmap(self.url, self.art_size, self)
 
     def _on_loaded(self, key: str) -> None:
         if self.url and key == cache_key(self.url, self.art_size):
