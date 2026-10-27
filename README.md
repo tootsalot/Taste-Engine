@@ -49,7 +49,7 @@ The **Dashboard** (at the top of this page) opens with **Your taste**: a one-lin
 
 ![For You, with a pick open in the side panel](docs/screenshots/for-you.png)
 
-**For You** is a grid of picks with a panel beside it for the one I've clicked. The panel says what the pick is (MAL's synopsis, the artist's Last.fm bio, the film or show's TMDB overview, or the book's Hardcover description) and how popular it is (MAL members and rank, Last.fm listeners, TMDB votes, Hardcover readers). Anime suggestions each come with the whole score I'd most likely give (the exact prediction and the MAL mean beside it), the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, each with how closely Last.fm says it matches the nearest artist I play (like "95%, Strong match"), and old favorites to rediscover. **Films** works like anime: TMDB's recommendations for the films I rated highest, each with a predicted rating for me next to the TMDB average. Films that aren't out yet are left out, and an average built on few votes counts for less, so a brand-new film's early hype doesn't top the list. **TV** has its own tab after Films. It uses the same model on my TV ratings, with creators instead of directors, and starts from TMDB's recommendations for shows I rated above my own TV average, plus my watchlist. Anime stays out of it (MAL and the Anime tab cover that), going by TMDB's animation genre and Japanese origin. Shows not out yet are left out, thin TMDB averages count for less, and watchlist picks are marked. The reason reads like a sentence; the individual shows and my ratings are kept under Behind the score. TV episode lengths say "45m episodes", so I do not mistake one episode for the whole show. A small library uses my usual difference from TMDB; the chance of an 8 or more appears only once there are at least 20 rated shows to check it against. **Books** too: Hardcover's similar books for the ones I rated highest (plus my Want to Read), with predicted stars next to the Hardcover average. The last list, [Across everything](#across-everything), mixes them all.
+**For You** is a grid of picks with a panel beside it for the one I've clicked. The panel says what the pick is (MAL's synopsis, the artist's Last.fm bio, the film or show's TMDB overview, or the book's Hardcover description) and how popular it is (MAL members and rank, Last.fm listeners, TMDB votes, Hardcover readers). Anime suggestions each come with the whole score I'd most likely give (the exact prediction and the MAL mean beside it), the chance I'd give it an 8 or more, and a one-line reason in plain words ("Because you loved A and really liked B"). Music has new artists to try, each with how closely Last.fm says it matches the nearest artist I play (like "95%, Strong match"), and old favorites to rediscover. **Films** works like anime: TMDB's recommendations for the films I rated highest, each with a predicted rating for me next to the TMDB average. Films that aren't out yet are left out, and an average built on few votes counts for less, so a brand-new film's early hype doesn't top the list. **TV** has its own tab after Films. It uses the same model on my TV ratings, with creators instead of directors, and starts from TMDB's recommendations for shows I rated above my own TV average, plus my watchlist. Anime stays out of it (MAL and the Anime tab cover that), going by TMDB's animation genre and Japanese origin. Shows not out yet are left out, thin TMDB averages count for less, and watchlist picks are marked. The reason reads like a sentence; the individual shows and my ratings are kept under Behind the score. TV episode lengths say "45m episodes", so I do not mistake one episode for the whole show. A small library uses my usual difference from TMDB; the chance of an 8 or more appears only once there are at least 20 rated shows to check it against. **Books** too: Hardcover's similar books for the ones I rated highest (plus my Want to Read), with predicted stars next to the Hardcover average. The last list, [Across media](#across-media), finds picks like titles I liked in other media.
 
 ### Reports
 
@@ -83,7 +83,7 @@ python -m taste profiles
 
 ## How the anime suggestions work
 
-I get anime film suggestions on the Anime tab, including in Across everything.
+I get anime film suggestions on the Anime tab, including in Across media.
 Films leaves them out of suggestions, while my rated anime films still count in
 the film model and the Films and TV report.
 
@@ -155,35 +155,52 @@ ratings or the facts the model reads change, so recomputing an unchanged list do
 repeat that check.
 Its chance of an 8 or more, or 4 stars, comes from that model's own held-out misses. The
 switches for learning from Not interested, recent ratings, and borrowed themes apply to
-Usual only. Dismissed picks stay hidden with every model. Across everything keeps
-reranking the saved lists, and music keeps its listening model.
+Usual only. Dismissed picks stay hidden with every model. Across media keeps each pick's
+own medium's prediction, and music keeps its listening model.
 
-## Across everything
+## Across media
 
-![Across everything, mixing books, films, TV, anime, and music](docs/screenshots/across-everything.png)
+![Across media, with picks like liked titles in other media](docs/screenshots/across-media.png)
 
-For You has an **Across everything** list after Books, marked Experimental. It ranks each
-pick by how far its predicted score sits above my usual rating in that medium, divided by
-my rating spread. The spread has a floor of one point, or half a star for books, so a tiny
-spread cannot inflate a pick. Music has no personal ratings: I use rank percentiles within
-Discover and Rediscover, converted to the same scale. Its mixed cards show those ranks.
+For You has an **Across media** list after Books, marked Experimental. An anime I liked
+can lead to a film, show, or book with similar tags. Several liked titles can support one
+pick together. I need ratings in at least two of those four media, then **Refresh
+recommendations**. Music stays in Discover and Rediscover.
 
-Balanced is the default. It makes room in the first ten for each medium with a pick within
-one rating spread of the best remaining pick, and avoids more than two from one medium in
-a row while alternatives remain. Advanced settings also offers Best first, which follows
-relative scores, and Strict rotation, which visits each available medium in turn.
+The list uses MAL genres, themes, and demographics; TMDB genres and keywords; and Hardcover
+genres and moods. Rare shared terms count more than broad ones, and a match needs at least
+two shared terms beyond the broad theme map. Medium labels such as Animation or based on
+manga cannot make two titles similar. Each reason names one to three titles I rated above
+my average in another medium and shows the shared terms. It says a pick is like those
+titles, never that they are the same work. Item identity still comes only from recorded
+source IDs.
 
-All, Anime, Films, TV, Books, and Music filter the saved mix instantly. The app remembers
-my filter for each profile. An **Outside your usual** card highlights a less-rated medium
-or theme with a prediction above my actual usual. It is separate from the normal top pick
-and counts toward the list size. If no qualifying pick exists, there is no surprise card.
-Music and media without personal ratings cannot supply this rating-based surprise.
+Every pick keeps the score its own tab predicts with its selected model. It must be at or
+above my usual for that medium. Cross support decides its place, with its prediction
+relative to my usual breaking ties. Behind the score shows that support, how many liked
+titles in other media were compared, and the prediction against my usual. Balanced is the
+default; Advanced settings also offers Best first and Strict rotation across anime, films,
+TV, and books.
 
-Each pick keeps its medium's color, with reasons naming the media and numbers behind it.
-Shared genre themes add a small adjustment. A reason can name a title in another medium
-only through an item identity or link already recorded in the database. Matching names,
-people, or a label such as MAL's "novel" never establishes that link. Hidden adult anime
-remain in the counts without appearing by title or picture.
+All, Anime, Films, TV, and Books filter the saved picks instantly. The app remembers my
+filter for each profile. A separate **Outside your usual** card highlights the best
+eligible pick in a medium I have rated least. It counts toward the list size. Hidden adult
+anime still count in my averages, but cannot appear as a named seed, a pick, or a picture
+when Include NSFW anime is off.
+
+TMDB keywords arrive with the existing details request. The first sync after updating
+takes longer because it refreshes older titles once to collect them. Keywords do not feed
+any rating model. Older saved mixed lists rebuild from the cache when I open For You.
+
+I can check whether cross support predicts what my Usual model missed, without writing
+anything or printing titles, IDs, or terms:
+
+```text
+python -m taste --profile me lab --cross
+```
+
+It prints counts, rank correlation, and average held-out misses for no, low, and high
+support, per medium and overall. The rules and weights are fixed in the code.
 
 I can inspect the broader theme map without writing anything or printing titles:
 

@@ -57,6 +57,8 @@ ADDED_COLUMNS = [
     ("stg_mal_anime_details", "fields_version", "INTEGER NOT NULL DEFAULT 0"),
     ("stg_tmdb_movies", "overview", "TEXT"),
     ("stg_tmdb_movies", "popularity", "REAL"),
+    ("stg_tmdb_movies", "keywords_json", "TEXT"),
+    ("stg_tmdb_tv", "keywords_json", "TEXT"),
     ("stg_hardcover_books", "similar_json", "TEXT NOT NULL DEFAULT '[]'"),
     ("stg_hardcover_books", "description", "TEXT"),
     ("stg_hardcover_books", "users_count", "INTEGER"),

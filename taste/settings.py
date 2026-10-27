@@ -422,13 +422,13 @@ SETTINGS: list[Setting] = [
     ),
     Setting(
         "mix_balance",
-        "Across everything mix",
+        "Across media order",
         "choice",
         "balanced",
-        "Balanced brings each medium into the first ten when a pick is within one rating "
-        "spread of the best remaining pick, with at most two in a row while another medium "
-        "has picks. Best first follows relative scores without balancing. Strict rotation "
-        "takes one pick from each available medium in turn. This changes Across everything only.",
+        "Order cross-media picks from anime, films, TV, and books. Balanced makes room for "
+        "each medium in the first ten and limits streaks while other media have picks. "
+        "Best first follows cross support. Strict rotation takes one pick from each "
+        "available medium in turn. This changes Across media only.",
         choices=MIX_BALANCE,
         group="Recommendations",
         advanced=True,

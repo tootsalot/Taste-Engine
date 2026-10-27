@@ -56,7 +56,7 @@ def _book_scored(conn: sqlite3.Connection) -> list[tuple[int, float, float]]:
 
 
 def book_recommendations(
-    conn: sqlite3.Connection, now: datetime | None = None
+    conn: sqlite3.Connection, now: datetime | None = None, *, full_pool: bool = False
 ) -> tuple[list[Rec], dict[str, Any]]:
     """Books I don't have, predicted the anime way on doubled stars: the Hardcover average
     shifted (or scaled) by how I usually differ from it, plus genre and author leans.
@@ -181,4 +181,4 @@ def book_recommendations(
     else:
         metrics.update(experiments.metrics(conn, "book", scored, facts, now))
         metrics["theme_transfer"] = experiments.transfer_metrics(conn, "book", scored, facts, now)
-    return recs[: cfg["rec_count"]], metrics
+    return (recs if full_pool else recs[: cfg["rec_count"]]), metrics

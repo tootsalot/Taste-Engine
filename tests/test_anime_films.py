@@ -84,10 +84,31 @@ def test_rated_anime_films_stay_in_film_training_rows_and_the_report(conn, libra
     ] == (report)
 
 
-def test_mixed_list_gets_the_recorded_anime_film_once_from_anime(conn, library):
+def test_cross_list_gets_the_recorded_anime_film_once_from_anime(conn, library):
     assert core.find_item(conn, "mal", "mal_anime_id", "202") == core.find_item(
         conn, "tmdb", "tmdb_movie_id", "21"
     )
+    # Give this candidate and a liked film two independent story terms. This
+    # exercises a real cross match while preserving the staged model inputs.
+    for source, id_type, key in (("mal", "mal_anime_id", "202"), ("tmdb", "tmdb_movie_id", "11")):
+        item_id = core.find_item(conn, source, id_type, key)
+        existing = [
+            row[0]
+            for row in conn.execute(
+                "SELECT tag_id FROM core_item_tags WHERE item_id = ? AND source = ?",
+                (item_id, source),
+            )
+        ]
+        core.set_item_tags(
+            conn,
+            item_id,
+            source,
+            existing
+            + [
+                core.tag_id(conn, "Time Travel", "theme"),
+                core.tag_id(conn, "Found Family", "theme"),
+            ],
+        )
     recommend.compute_all(conn, NOW_DT, ("anime", "film", "everything"))
     assert "202" in {pick.item_key for pick in recommend.latest(conn, "anime")[0]}
     picks = recommend.latest(conn, "everything")[0]

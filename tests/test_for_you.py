@@ -169,7 +169,7 @@ def test_refresh_runs_in_the_background_and_fills_the_cards(window, qtbot):
         "film": 0,
         "tv": 0,
         "book": 0,
-        "everything": 9,
+        "everything": 0,
     }
     assert page.refresh_button.isEnabled()
     assert window.dashboard.sync_button.isEnabled()
@@ -335,6 +335,86 @@ def test_a_list_saved_before_3_0_comes_back_from_the_cache(window, qtbot):
     assert not page.is_refreshing()
 
 
+@pytest.mark.parametrize("old_version", ["3.0", "4.0-dev"])
+def test_old_everything_run_opens_and_rebuilds_once_from_cache(
+    window, qtbot, monkeypatch, old_version
+):
+    synced(window, qtbot)
+    refreshed(window, qtbot)
+    page = window.for_you
+    old_title = "Invented old cross pick"
+    conn = window.ctx.connect(window.current_profile())
+    try:
+        old_run = recommend.save_run(
+            conn,
+            "everything",
+            [
+                Rec(
+                    "anime",
+                    "anime:99999",
+                    old_title,
+                    score=8,
+                    facts={"medium": "anime", "source_item_key": "99999", "list_kind": "anime"},
+                )
+            ],
+            {"experimental": True},
+        )
+        if old_version == "3.0":
+            conn.execute("UPDATE rec_runs SET params_json = '{}' WHERE rec_run_id = ?", (old_run,))
+        old_count = conn.execute(
+            "SELECT COUNT(*) FROM rec_runs WHERE kind = 'everything'"
+        ).fetchone()[0]
+        assert recommend.withheld(conn, "everything")
+        assert recommend.latest(conn, "everything") == ([], {}, None)
+    finally:
+        conn.close()
+
+    window.show()
+    window.show_page("Dashboard")
+    page.reload()
+    page.switch.buttons["everything"].click()
+    tab = page.lists["everything"]
+    assert page.withheld and not tab.all_recs and not tab.tiles
+    assert not page.is_refreshing()
+    starts = []
+    start_refresh = page.start_refresh
+
+    def start_cached_refresh(fetch=True):
+        starts.append(fetch)
+        return start_refresh(fetch=fetch)
+
+    def refuse_network_client(*args, **kwargs):
+        raise AssertionError("An old cross-media run must rebuild without a network client")
+
+    monkeypatch.setattr(page, "start_refresh", start_cached_refresh)
+    monkeypatch.setattr(window.ctx, "client_factory", refuse_network_client)
+    with qtbot.waitSignal(page.refresh_finished, timeout=15000):
+        window.show_page("For You")
+    assert starts == [False]
+    assert page.worker.recs_kwargs["fetch"] is False
+    assert not page.withheld and not page.is_refreshing()
+    assert old_title not in [widget.text() for widget in page.findChildren(QLabel)]
+    assert all(rec.title != old_title for rec in tab.all_recs)
+    conn = window.ctx.connect(window.current_profile())
+    try:
+        assert recommend.latest(conn, "everything")[1]["cross_media"] == 1
+        assert (
+            conn.execute("SELECT COUNT(*) FROM rec_runs WHERE kind = 'everything'").fetchone()[0]
+            == old_count + 1
+        )
+        page.reload()
+        window.show_page("Dashboard")
+        window.show_page("For You")
+        page.reload()
+        assert starts == [False] and not page.is_refreshing()
+        assert (
+            conn.execute("SELECT COUNT(*) FROM rec_runs WHERE kind = 'everything'").fetchone()[0]
+            == old_count + 1
+        )
+    finally:
+        conn.close()
+
+
 def test_rec_settings_sit_under_their_own_heading(window):
     window.new_profile(("me", "Me"))
     page = window.settings
@@ -478,6 +558,21 @@ def test_a_card_with_every_line_opens_no_window(stray_windows, qtbot, images):
     ctx.shutdown()
 
 
+def test_a_cross_card_with_seed_and_term_labels_opens_no_window(stray_windows, qtbot, images):
+    from tests.test_mix_ui import picks
+
+    ctx = AppContext(image_session=images)
+    try:
+        card = RecCard(ctx, "everything", picks()[1])
+        qtbot.addWidget(card)
+        card.show()
+        assert card.seeds and card.shared_terms
+        assert all(widget.parent() is not None for widget in (*card.seeds, *card.shared_terms))
+        assert stray_windows == ["RecCard"]
+    finally:
+        ctx.shutdown()
+
+
 def test_syncing_one_source_leaves_recommendations_alone(window, qtbot):
     set_up_profile(window)
     with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
@@ -539,7 +634,7 @@ def test_tv_tab_follows_films_and_dismisses_tv_only(window):
         "Films",
         "TV",
         "Books",
-        "Across everything",
+        "Across media",
     ]
     assert ACCENTS["tv"] == theme.TEAL and "tv" in PORTRAIT
     page.tabs.setCurrentWidget(page.lists["tv"])

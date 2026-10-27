@@ -63,30 +63,16 @@ def test_profile_distinguishes_media_and_never_matches_titles(conn):
     assert set(taste["themes"]["psychological"]) == {"anime", "film", "book"}
     assert all(part["count"] == 5 for part in taste["themes"]["psychological"].values())
     assert conn.execute("SELECT COUNT(*) FROM core_items").fetchone()[0] == 15
-    assert "anime" in themes.reason(taste, ["psychological"], "book")
-    assert "films" in themes.reason(taste, ["psychological"], "book")
+    assert themes.lean(taste, ["psychological"], "book") == 0
 
 
-def test_everything_builds_dismisses_and_keeps_usual_picks(conn, request):
+def test_one_medium_has_no_cross_picks_and_keeps_usual_picks(conn, request):
     request.getfixturevalue("anime_world")
     before = recommend.anime_recommendations(conn, NOW)[0]
-    assert not settings.get(conn, "rec_theme_transfer")
     recommend.compute_all(conn, NOW, ("anime", "everything"))
     picks, metrics, _ = recommend.latest(conn, "everything")
-    assert picks and metrics["experimental"]
-    assert "everything" in recommend.LIST_KINDS
-    assert all(r.facts["medium"] == "anime" and r.kind == "anime" for r in picks)
+    assert picks == [] and metrics["cross_media"] == 1
     assert recommend.latest(conn, "anime")[0] == before
-    recommend.dismiss(conn, "everything", picks[0].item_key)
-    assert picks[0].item_key not in {r.item_key for r in recommend.latest(conn, "everything")[0]}
-    # Not interested means the show itself, so its own list drops it too.
-    show = picks[0].facts["source_item_key"]
-    assert show not in {r.item_key for r in recommend.latest(conn, "anime")[0]}
-    assert show not in {r.item_key for r in recommend.anime_recommendations(conn, NOW)[0]}
-    recommend.compute_all(conn, NOW, ("anime", "everything"))
-    assert picks[0].item_key not in {r.item_key for r in recommend.latest(conn, "everything")[0]}
-    settings.set_value(conn, "include_nsfw", False)
-    assert recommend.latest(conn, "everything")[0] == []  # stale reasons are also withheld
 
 
 def test_transfer_fades_with_own_ratings_and_records_a_holdout(conn):
@@ -142,20 +128,32 @@ def test_transfer_holdout_uses_other_media_without_held_out_ratings(conn):
     assert themes.profile(conn, excluded)["themes"]["psychological"]["anime"]["count"] == 8
 
 
-def test_mixed_page_shows_medium_colors_and_fits_both_window_sizes(qtbot, monkeypatch, tmp_path):
+def test_cross_page_shows_medium_colors_and_fits_both_window_sizes(qtbot, monkeypatch, tmp_path):
+    from dataclasses import replace
+
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QScrollArea
 
     from taste.desktop import theme
     from taste.desktop.for_you import ACCENTS
     from tests.test_fill import make_library, pump
+    from tests.test_mix_ui import picks
 
     win = make_library(qtbot, monkeypatch, tmp_path, extras=True)
     try:
         conn = win.ctx.connect(win.current_profile())
         try:
-            settings.set_value(conn, "mix_balance", "rotation")
-            recommend.compute_all(conn, NOW, ("everything",))
+            saved = picks()
+            saved.append(
+                replace(saved[0], item_key="book:6", facts={"list_kind": "book", "medium": "book"})
+            )
+            saved.append(
+                replace(
+                    saved[1], kind="tv", item_key="tv:7", facts={"list_kind": "tv", "medium": "tv"}
+                )
+            )
+            recommend.save_run(conn, "everything", saved, {"cross_media": 1, "balance": "rotation"})
+            conn.commit()
         finally:
             conn.close()
         win.show_page("For You")
@@ -163,9 +161,9 @@ def test_mixed_page_shows_medium_colors_and_fits_both_window_sizes(qtbot, monkey
         page.reload()
         page.switch.buttons["everything"].click()
         tab = page.lists["everything"]
-        assert {r.kind for r in tab.recs} == {"anime", "film", "tv", "book", "artist"}
+        assert {r.kind for r in tab.recs} == {"anime", "film", "tv", "book"}
         assert "Experimental" in tab.note.text()
-        assert "no rating holdout" in tab.note.text()
+        assert "other media" in tab.note.text()
         pump()
         for tile in tab.tiles:
             assert tile.medium.text()
@@ -185,19 +183,49 @@ def test_mixed_page_shows_medium_colors_and_fits_both_window_sizes(qtbot, monkey
         win.ctx.shutdown()
 
 
-def test_the_mix_reranks_saved_lists_without_predicting_again(conn, request, monkeypatch):
-    from taste import enrich
+def test_cross_recompute_fits_each_scored_pool_once(conn, request, monkeypatch):
+    from taste.recommend import runs
 
     request.getfixturevalue("anime_world")
+    calls = []
+    original = runs.anime_recommendations
+
+    def capture(*args, **kwargs):
+        calls.append(kwargs.get("full_pool"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runs, "anime_recommendations", capture)
     recommend.compute_all(conn, NOW, ("anime", "everything"))
-    first = [r.item_key for r in recommend.latest(conn, "everything")[0]]
+    assert calls == [True]
 
-    def refuse(*args, **kwargs):
-        raise AssertionError("the mix must not predict the anime list again")
 
-    monkeypatch.setattr(enrich, "candidate_support", refuse)  # every anime prediction asks
-    recommend.compute_all(conn, NOW, ("everything",))
-    assert [r.item_key for r in recommend.latest(conn, "everything")[0]] == first
+def test_cross_uses_candidates_beyond_the_medium_saved_limit(conn, request):
+    from tests.test_mix_ranking import ratings
+
+    request.getfixturevalue("anime_world")
+    ratings(conn, "film")
+    candidate = core.find_item(conn, "mal", "mal_anime_id", "203")
+    assert candidate is not None
+    core.set_item_tags(
+        conn,
+        candidate,
+        "mal",
+        [core.tag_id(conn, "Time Travel", "theme"), core.tag_id(conn, "Found Family", "theme")],
+    )
+    for key in range(250, 255):
+        conn.execute(
+            "INSERT INTO stg_mal_anime (mal_anime_id, title, media_type, community_mean, "
+            "num_scoring_users, loaded_at) VALUES (?, ?, 'tv', 9.5, 100000, ?)",
+            (key, f"Invented higher own-medium pick {key}", "2026-10-14 18:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO stg_mal_anime_recommendations VALUES (101, ?, ?, 20)",
+            (key, f"Invented higher own-medium pick {key}"),
+        )
+    settings.set_value(conn, "rec_count", 5)
+    recommend.compute_all(conn, NOW, ("anime", "everything"))
+    assert "203" not in {rec.item_key for rec in recommend.latest(conn, "anime")[0]}
+    assert recommend.latest(conn, "everything")[0][0].item_key == "anime:203"
 
 
 def test_transfer_holdout_reads_the_theme_evidence_once(conn, monkeypatch):
@@ -210,12 +238,19 @@ def test_transfer_holdout_reads_the_theme_evidence_once(conn, monkeypatch):
     assert len(loads) == 1  # the "on" check, for all five folds; "off" reads none
 
 
-def test_primary_dismissals_also_hide_saved_mixed_picks(conn, request):
-    request.getfixturevalue("anime_world")
-    recommend.compute_all(conn, NOW, ("anime", "everything"))
-    pick = recommend.latest(conn, "everything")[0][0]
-    recommend.dismiss(conn, "anime", pick.facts["source_item_key"])
-    assert pick.item_key not in {r.item_key for r in recommend.latest(conn, "everything")[0]}
+def test_primary_dismissals_also_hide_saved_cross_picks(conn):
+    from taste.recommend import Rec
+
+    pick = Rec(
+        kind="anime",
+        item_key="anime:123",
+        title="Invented pick",
+        score=8,
+        facts={"medium": "anime", "source_item_key": "123"},
+    )
+    recommend.save_run(conn, "everything", [pick], {"cross_media": 1})
+    recommend.dismiss(conn, "anime", "123")
+    assert recommend.latest(conn, "everything")[0] == []
 
 
 def test_classification_changes_with_nsfw_still_off_withhold_old_seed_reasons(conn, request):
@@ -233,22 +268,3 @@ def test_classification_changes_with_nsfw_still_off_withhold_old_seed_reasons(co
                 "Example Drama A" not in line
                 for line in pick.reasons + pick.facts.get("details", [])
             )
-
-
-def test_theme_reasons_explain_relative_taste_for_a_harsh_critic():
-    taste = {
-        "themes": {
-            "psychological": {
-                "anime": {
-                    "lean": 0.04,
-                    "difference": -0.1,
-                    "count": 12,
-                    "unit": "rating difference",
-                }
-            }
-        }
-    }
-    reason = themes.reason(taste, ["psychological"], "book")
-    assert "anime" in reason and "usual" in reason
-    assert "12" in reason and "+0.40" in reason
-    assert "above the crowd" not in reason

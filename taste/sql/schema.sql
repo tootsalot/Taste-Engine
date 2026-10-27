@@ -291,6 +291,7 @@ CREATE TABLE IF NOT EXISTS stg_tmdb_movies (
     original_language TEXT,
     imdb_id           TEXT,
     genres_json       TEXT NOT NULL DEFAULT '[]',
+    keywords_json     TEXT,
     directors_json    TEXT NOT NULL DEFAULT '[]',
     raw_page_id       INTEGER REFERENCES raw_api_pages (raw_page_id),
     fetched_at        TEXT NOT NULL,
@@ -313,6 +314,7 @@ CREATE TABLE IF NOT EXISTS stg_tmdb_tv (
     poster_path      TEXT,
     networks_json    TEXT NOT NULL DEFAULT '[]',
     genres_json      TEXT NOT NULL DEFAULT '[]',
+    keywords_json    TEXT,
     creators_json    TEXT NOT NULL DEFAULT '[]',
     raw_page_id      INTEGER REFERENCES raw_api_pages (raw_page_id),
     fetched_at       TEXT NOT NULL

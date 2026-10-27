@@ -52,7 +52,7 @@ LISTS = (
     ("film", "Films"),
     ("tv", "TV"),
     ("book", "Books"),
-    ("everything", "Across everything · Experimental"),
+    ("everything", "Across media · Experimental"),
 )
 LINK_HOSTS = {
     "myanimelist.net": "MyAnimeList",
@@ -88,12 +88,12 @@ DETAIL_POSTER = QSize(168, 240)
 DETAIL_COVER = QSize(200, 200)
 DETAIL_WIDTH = 440  # the panel that shows the selected suggestion in full
 
-MEDIUM_LABELS = {"anime": "Anime", "film": "Film", "tv": "TV", "book": "Book", "artist": "Music"}
+MEDIUM_LABELS = {"anime": "Anime", "film": "Film", "tv": "TV", "book": "Book"}
 
 
 EMPTY = {
-    "everything": "No mixed suggestions yet. Refresh recommendations to build "
-    "the experimental list.",
+    "everything": "For cross-media picks, add ratings in at least two of Anime, Films, TV, "
+    "and Books, then press Refresh recommendations.",
     "anime": (
         "No anime suggestions yet. Sync MyAnimeList, then press Refresh recommendations. "
         "The first refresh takes about five minutes; later ones take seconds."
@@ -118,8 +118,8 @@ EMPTY = {
     ),
 }
 EMPTY_AFTER_RUN = {
-    "everything": "No mixed suggestions with these settings. "
-    "Sync a source and refresh recommendations.",
+    "everything": "No cross-media picks with these settings. Add ratings in at least two "
+    "of Anime, Films, TV, and Books, then press Refresh recommendations.",
     "anime": (
         "Nothing to suggest with the current settings. Lowering the minimum MAL raters "
         "or adding anime types in Settings widens the pool."
@@ -143,14 +143,6 @@ def safe_link(url: str | None) -> str | None:
 def score_text(kind: str, rec: Rec) -> tuple[str, str]:
     """(big number or label, caption) for a card. Runs saved before facts existed still read."""
     if kind == "everything":
-        if rec.kind == "artist":
-            rank, count = rec.facts.get("pool_rank"), rec.facts.get("pool_count")
-            name = "Discover" if rec.facts.get("list_kind") == "music_discover" else "Rediscover"
-            return (
-                (f"#{rank}", f"of {count} {name} picks")
-                if rank
-                else ("Music", "Recompute for list rank")
-            )
         return score_text(rec.facts.get("list_kind", rec.kind), rec)
     if rec.score is None:
         return "-", ""
@@ -326,12 +318,28 @@ class RecCard(Card):
         self.body.addWidget(self.title)
         if rec.subtitle:
             self.body.addWidget(label(rec.subtitle, role="muted", wrap=True))
+        self.seeds = []
         if list_kind == "everything":
-            self.body.addWidget(
-                label(rec.facts.get("usual_comparison", ""), role="caption", wrap=True)
-            )
+            for seed in rec.facts.get("cross_seeds", []):
+                medium = seed["medium"]
+                score = f"{seed['my_score']:g}" + ("★" if medium == "book" else "")
+                text = f"{MEDIUM_LABELS[medium]} · {seed['title']} · you gave it {score}"
+                seed_label = label(text, role="cross-seed", wrap=True)
+                self.seeds.append(seed_label)
+                self.body.addWidget(seed_label)
         for reason in rec.reasons:
             self.body.addWidget(label(reason, role="reason", wrap=True))
+        self.shared_terms = []
+        if list_kind == "everything":
+            chips = QGridLayout()
+            chips.setSpacing(6)
+            for i, term in enumerate(rec.facts.get("shared_terms", [])):
+                chip = label(term, role="chip", wrap=True)
+                chip.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+                self.shared_terms.append(chip)
+                chips.addWidget(chip, i // 2, i % 2)
+            if self.shared_terms:
+                self.body.addLayout(chips)
         # What it is, and how many people know it: the panel's room is for this.
         about = rec.facts.get("about") or ""
         self.about = label(about, wrap=True)
@@ -529,7 +537,7 @@ class RecList(QWidget):
 
 
 class OutsideCard(Card):
-    """A compact, independently dismissible surprise above the mixed grid."""
+    """A compact, independently dismissible surprise above the cross-media grid."""
 
     dismissed = Signal(str, str)
     opened = Signal(str)
@@ -598,7 +606,6 @@ class MixedList(RecList):
                 ("film", "Films"),
                 ("tv", "TV"),
                 ("book", "Books"),
-                ("music", "Music"),
             ),
             accents={
                 "all": "anime",
@@ -606,7 +613,6 @@ class MixedList(RecList):
                 "film": "screen",
                 "tv": "screen",
                 "book": "books",
-                "music": "music",
             },
         )
         self.filters.set_value("all")
@@ -631,11 +637,7 @@ class MixedList(RecList):
 
     def _apply_filter(self) -> None:
         choice = self.filters.value()
-        shown = [
-            rec
-            for rec in self.all_recs
-            if choice == "all" or ("music" if rec.kind == "artist" else rec.kind) == choice
-        ]
+        shown = [rec for rec in self.all_recs if choice == "all" or rec.kind == choice]
         self.surprise = next((rec for rec in shown if rec.facts.get("outside_usual")), None)
         super().set_recs([rec for rec in shown if not rec.facts.get("outside_usual")], self.has_run)
 
@@ -843,8 +845,10 @@ class ForYouPage(LazyPage, QWidget):
         self.rebuild_withheld()
 
     def rebuild_withheld(self) -> None:
-        """A list saved before 3.0, or before an adult-visibility change, is held back; it
-        comes back from the cache (no network) once, while this page is in front."""
+        """A stale list comes back from the cache once while this page is in front.
+
+        This includes old cross-media runs and adult-visibility changes.
+        """
         if (
             self.withheld
             and self.profile_id not in self._rebuilt
@@ -947,13 +951,12 @@ class ForYouPage(LazyPage, QWidget):
 
 
 def mixed_note(metrics: dict) -> str:
-    if "means_spreads" not in metrics:
-        return "Experimental. Recompute this list for relative scores and the new mix."
+    if not metrics.get("cross_media"):
+        return "Experimental. Refresh recommendations to build cross-media picks."
     mode = settings.MIX_BALANCE.get(metrics.get("balance"), "Balanced")
     return (
-        "Experimental. Picks use your usual rating and spread where known. "
-        "Music uses rank percentiles within Discover and Rediscover, "
-        f"with no rating holdout. {mode} mix."
+        "Experimental. Picks share tags with titles you liked in other media. "
+        f"Each score uses that medium's own model. {mode} order."
     )
 
 

@@ -15,7 +15,17 @@ USER_TOKEN = "fake-tmdb-user-token-9876543210"
 ACCOUNT = "fake-account-1"
 
 
-def movie(tmdb_id, title, vote, genres, director, year=2021, runtime=110, recs=()):
+def movie(
+    tmdb_id,
+    title,
+    vote,
+    genres,
+    director,
+    year=2021,
+    runtime=110,
+    recs=(),
+    keywords=("clockwork harbor", "borrowed memories"),
+):
     return {
         "id": tmdb_id,
         "title": title,
@@ -29,11 +39,20 @@ def movie(tmdb_id, title, vote, genres, director, year=2021, runtime=110, recs=(
         "imdb_id": f"tt{tmdb_id:07d}",
         "genres": [{"id": i, "name": g} for i, g in enumerate(genres, 1)],
         "credits": {"crew": [{"id": 900 + tmdb_id, "name": director, "job": "Director"}]},
+        "keywords": {"keywords": [{"id": i, "name": k} for i, k in enumerate(keywords, 1)]},
         "_recs": list(recs),
     }
 
 
-def tv(tmdb_id, name, vote, genres, creator, year=2019):
+def tv(
+    tmdb_id,
+    name,
+    vote,
+    genres,
+    creator,
+    year=2019,
+    keywords=("clockwork harbor", "borrowed memories"),
+):
     return {
         "id": tmdb_id,
         "name": name,
@@ -50,6 +69,7 @@ def tv(tmdb_id, name, vote, genres, creator, year=2019):
         "networks": [{"name": "Example Network"}],
         "genres": [{"id": i, "name": g} for i, g in enumerate(genres, 1)],
         "created_by": [{"id": 700 + tmdb_id, "name": creator}],
+        "keywords": {"results": [{"id": i, "name": k} for i, k in enumerate(keywords, 1)]},
     }
 
 
@@ -147,5 +167,13 @@ class FakeTmdb:
             found = self.catalog.get((match.group(1), int(match.group(2))))
             if found is None or (match.group(1), int(match.group(2))) in self.gone:
                 return FakeResponse(404, {"success": False, "status_message": "Not found."})
-            return FakeResponse(200, {k: v for k, v in found.items() if not k.startswith("_")})
+            appended = set((params.get("append_to_response") or "").split(","))
+            return FakeResponse(
+                200,
+                {
+                    k: v
+                    for k, v in found.items()
+                    if not k.startswith("_") and (k not in ("keywords", "credits") or k in appended)
+                },
+            )
         return FakeResponse(404, {"success": False, "status_message": f"No route {path}"})

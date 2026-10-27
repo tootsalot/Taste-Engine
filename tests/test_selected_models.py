@@ -131,27 +131,25 @@ def test_lab_and_selected_models_share_the_fold_implementation(conn, monkeypatch
     assert seen == [([], {}, context, candidate.fit)]
 
 
-def test_mixed_list_reranks_saved_selected_picks_without_refitting(full_library, monkeypatch):
+def test_cross_list_preserves_supplied_scored_pool_predictions_without_refitting(
+    full_library, monkeypatch
+):
     settings.set_value(full_library, "rec_model_film", "details")
     recommend.compute_all(full_library, NOW_DT, ("film",))
     saved = {kind: recommend.latest(full_library, kind)[:2] for kind in recommend.LIST_KINDS}
 
     def refuse(*args, **kwargs):
-        pytest.fail("Across everything must use the saved lists")
+        pytest.fail("Across media must preserve the supplied scored pool")
 
     monkeypatch.setattr(selection, "fit_selected", refuse)
     recs, metrics = everything_recommendations(full_library, saved)
-    film_check = saved["film"][1]["selected_model"]
-    assert metrics["holdouts"]["film"] == {
-        "count": film_check["count"],
-        "mae": film_check["usual_mae"],
-    }
+    assert metrics["cross_media"] == 1
     film_picks = {rec.item_key: rec for rec in saved["film"][0]}
     for rec in recs:
         if rec.kind == "film":
             original = film_picks[rec.facts["source_item_key"]]
             assert rec.score == original.score
-            assert rec.facts["details"] == original.facts["details"]
+            assert rec.facts["tmdb_mean"] == original.facts["tmdb_mean"]
 
 
 @pytest.mark.parametrize("medium", lab.MEDIA)

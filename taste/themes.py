@@ -483,35 +483,6 @@ def transfer(taste: dict, kind: str, tags: list[str], rated: int) -> float:
     return 5 * (10 / (rated + 10)) * lean(taste, tags, kind) if kind in ("tv", "book") else 0.0
 
 
-def reason(taste: dict, tags: list[str], medium: str) -> str:
-    """Describe actual evidence from another medium, never an inferred item match."""
-    choices = sorted(tags, key=lambda tag: (-lean(taste, [tag], medium), tag))
-    for theme in choices:
-        clauses = []
-        for kind, part in sorted(taste["themes"].get(theme, {}).items()):
-            if kind == medium:
-                continue
-            if kind == "music" and part["count"] >= 100:
-                clauses.append(f"you play {theme} music ({part['share']:.0%} of recorded plays)")
-            elif part["count"] >= 3:
-                scale, unit = (5, "stars") if kind == "book" else (10, "points")
-                if (part["difference"] or 0) > 0:
-                    clauses.append(
-                        f"you rate {theme} {LABELS[kind]} above the crowd "
-                        f"({part['difference'] * scale:+.2f} {unit}, {part['count']} ratings)"
-                    )
-                elif part["lean"] > 0:
-                    clauses.append(
-                        f"you rate {theme} {LABELS[kind]} above your usual "
-                        "difference from the crowd "
-                        f"({part['lean'] * scale:+.2f} {unit}, {part['count']} ratings)"
-                    )
-        if clauses:
-            sentence = " and ".join(clauses[:2])
-            return sentence[0].upper() + sentence[1:] + "."
-    return "An experimental mix of your existing suggestion lists."
-
-
 def visibility(conn: sqlite3.Connection) -> str:
     """A policy stamp for cached mixes, including changes to adult classifications."""
     ids = [

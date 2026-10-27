@@ -109,7 +109,7 @@ def evaluate(
 
 
 def anime_recommendations(
-    conn: sqlite3.Connection, now: datetime | None = None
+    conn: sqlite3.Connection, now: datetime | None = None, *, full_pool: bool = False
 ) -> tuple[list[Rec], dict[str, Any]]:
     cfg = settings.get_all(conn)
     facts = _anime_facts(conn)
@@ -259,7 +259,8 @@ def anime_recommendations(
 
     # Best predicted first; how strongly my favorites point at it breaks near-ties.
     recs.sort(key=lambda r: (-(r.score + 0.15 * math.log1p(r.support)), r.title))
-    recs = recs[: cfg["rec_count"]]
+    if not full_pool:
+        recs = recs[: cfg["rec_count"]]
     for rec in recs:  # only for the shows kept: it's the slow part with a long list
         chance = chance_at_least(predictions[rec.item_key], residuals, 8)
         if chance is not None:

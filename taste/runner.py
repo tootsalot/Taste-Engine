@@ -179,9 +179,11 @@ def refresh_recommendations(
     while Last.fm is still fetching. `on_update` is called after each save.
     """
 
+    pool_cache = {}
+
     def compute(*kinds: str) -> dict[str, int]:
         with transaction(conn):
-            result = recommend.compute_all(conn, now, kinds)
+            result = recommend.compute_all(conn, now, kinds, pool_cache=pool_cache)
         if on_update is not None:
             on_update()
         return result
@@ -204,6 +206,12 @@ def refresh_recommendations(
                 int(r.item_key) for r in shown if not r.facts.get("about") and r.item_key.isdigit()
             ]
             if enrich.fetch_synopses(conn, mal_client, mal_cfg, missing, out, now=now):
+                # Only synopsis text changed; keep the already fitted scored pool.
+                facts = recommend._anime_facts(conn)
+                from taste.recommend.model import about_text
+
+                for rec in pool_cache["anime"][0]:
+                    rec.facts["about"] = about_text(facts[int(rec.item_key)].get("synopsis"))
                 compute("anime")
         try:
             lastfm_cfg = credentials.lastfm(conn, profile_id, store)

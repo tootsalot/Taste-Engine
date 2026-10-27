@@ -9,10 +9,9 @@ from typing import Any
 
 from taste import settings, themes
 from taste.db import utc_now
-from taste.recommend import links
 from taste.recommend.anime import anime_recommendations
 from taste.recommend.books import book_recommendations
-from taste.recommend.everything import POOLS, everything_recommendations
+from taste.recommend.everything import dismissed_keys, everything_recommendations, source_items
 from taste.recommend.model import Rec, _dismissed
 from taste.recommend.music import music_recommendations
 from taste.recommend.screen import film_recommendations, tv_recommendations
@@ -64,9 +63,10 @@ def _newest_run(conn: sqlite3.Connection, kind: str) -> sqlite3.Row | None:
 def _hidden_run(conn: sqlite3.Connection, kind: str, run: sqlite3.Row) -> bool:
     # Old reasons may name a seed that has since become hidden. Runs saved before 3.0
     # carry no stamp, so they count as stale too.
-    return kind in ("anime", "everything") and json.loads(run["params_json"]).get(
-        "anime_visibility"
-    ) != themes.visibility(conn)
+    return (kind == "everything" and json.loads(run["metrics_json"]).get("cross_media") != 1) or (
+        kind in ("anime", "everything")
+        and json.loads(run["params_json"]).get("anime_visibility") != themes.visibility(conn)
+    )
 
 
 def withheld(conn: sqlite3.Connection, kind: str) -> bool:
@@ -105,7 +105,7 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
         if r["item_key"] not in dismissed
     ]
     if kind == "everything":
-        hidden = links.dismissed_keys(conn, links.source_items(conn))
+        hidden = dismissed_keys(conn, source_items(conn))
         recs = [r for r in recs if (r.kind, r.facts.get("source_item_key")) not in hidden]
     metrics = json.loads(run["metrics_json"])
     # 3.1 used model for both a numeric anime error and the selected-model block.
@@ -149,32 +149,35 @@ def compute_all(
     conn: sqlite3.Connection,
     now: datetime | None = None,
     kinds: tuple[str, ...] = ("anime", "music"),
+    *,
+    pool_cache: dict | None = None,
 ) -> dict[str, int]:
     """Recompute and save the requested anime, music, film, TV, or book lists. No network.
 
     Returns counts per list. Lists that weren't recomputed are counted from
     their latest saved run.
     """
-    if "anime" in kinds:
-        anime, metrics = anime_recommendations(conn, now)
-        save_run(conn, "anime", anime, metrics)
+    pools = {} if pool_cache is None else pool_cache
+    cross = "everything" in kinds
+    count = settings.get(conn, "rec_count")
+    for kind, build, clock in (
+        ("anime", anime_recommendations, now),
+        ("film", film_recommendations, now.date() if now else None),
+        ("tv", tv_recommendations, now.date() if now else None),
+        ("book", book_recommendations, now),
+    ):
+        if kind in kinds or cross:
+            if kind not in pools:
+                pools[kind] = build(conn, clock, full_pool=cross or pool_cache is not None)
+            recs, metrics = pools[kind]
+            if kind in kinds:
+                save_run(conn, kind, recs[:count], metrics)
     if "music" in kinds:
         discover, rediscover = music_recommendations(conn, now)
         save_run(conn, "music_discover", discover)
         save_run(conn, "music_rediscover", rediscover)
-    if "film" in kinds:
-        films, metrics = film_recommendations(conn, now.date() if now else None)
-        save_run(conn, "film", films, metrics)
-    if "tv" in kinds:
-        shows, metrics = tv_recommendations(conn, now.date() if now else None)
-        save_run(conn, "tv", shows, metrics)
-    if "book" in kinds:
-        books, metrics = book_recommendations(conn, now)
-        save_run(conn, "book", books, metrics)
-    if "everything" in kinds:
-        # The mix reranks the lists saved above (or by an earlier refresh), never predicts again.
-        saved = {kind: latest(conn, kind)[:2] for kind in POOLS}
-        picks, metrics = everything_recommendations(conn, saved)
+    if cross:
+        picks, metrics = everything_recommendations(conn, pools)
         save_run(conn, "everything", picks, metrics)
     return {kind: len(latest(conn, kind)[0]) for kind in LIST_KINDS}
 

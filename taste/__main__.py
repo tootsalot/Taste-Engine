@@ -10,7 +10,7 @@ from pathlib import Path
 from taste import __version__, backup, db, profiles, reports, runner, themes
 from taste.config import load_env, reports_dir
 from taste.profiles import DEFAULT_PROFILE, ProfileError
-from taste.recommend import lab
+from taste.recommend import cross_lab, lab
 
 
 def cmd_sync(conn: sqlite3.Connection, profile_id: str, source: str) -> int:
@@ -91,6 +91,29 @@ def cmd_themes(conn: sqlite3.Connection) -> int:
     if not coverage["unmapped"]:
         lines.append("  None")
     print("\n".join(lines))
+    return 0
+
+
+def cmd_cross_lab(conn: sqlite3.Connection, medium: str = "all") -> int:
+    """Print aggregate support and held-out misses, without titles, ids, or terms."""
+    media = lab.MEDIA if medium == "all" else (medium,)
+    headers = ["medium", "rated", "supported", "checked", "spearman", "no", "low", "high"]
+    rows = []
+    for result in cross_lab.evaluate(conn, media):
+        cells = [result["medium"]]
+        cells.extend(str(result[key]) for key in ("rated", "supported", "checked"))
+        cells.extend(
+            "n/a" if result[key] is None else f"{result[key]:+.3f}"
+            for key in ("spearman", "no_support", "low_support", "high_support")
+        )
+        rows.append(cells)
+    widths = [max(len(row[i]) for row in [headers, *rows]) for i in range(len(headers))]
+    print("Cross-media support and Usual held-out miss")
+    print("Miss = my score minus prediction, on 1 to 10 points (books: doubled stars).")
+    print("Supported counts all rated titles; checked needs crowd data and 20 ratings.")
+    print("No: zero support. Low/high: bottom/top thirds of positive support among checked titles.")
+    for row in [headers, *rows]:
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)))
     return 0
 
 
@@ -206,6 +229,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="row counts and last sync per source")
     model_lab = sub.add_parser("lab", help="compare rating models without changing the database")
     model_lab.add_argument("--medium", choices=(*lab.MEDIA, "all"), default="all")
+    model_lab.add_argument(
+        "--cross",
+        action="store_true",
+        help="check cross-media support against Usual held-out misses",
+    )
     sub.add_parser("themes", help="count theme map coverage without changing the database")
     back = sub.add_parser("backup", help="back up this profile without its keys")
     back.add_argument("path", type=Path)
@@ -245,7 +273,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "lab":
         return _inspect(
             args,
-            lambda conn: cmd_lab(conn, args.medium),
+            lambda conn: (
+                cmd_cross_lab(conn, args.medium) if args.cross else cmd_lab(conn, args.medium)
+            ),
             "The lab could not read the profile database.",
         )
     if args.command == "themes":

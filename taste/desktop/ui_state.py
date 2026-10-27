@@ -14,7 +14,7 @@ from typing import Any
 from taste.config import data_dir
 
 FILE_NAME = "ui_state.json"
-MIX_FILTERS = ("all", "anime", "film", "tv", "book", "music")
+MIX_FILTERS = ("all", "anime", "film", "tv", "book")
 
 
 def mix_filter(profile_id: str | None) -> str:

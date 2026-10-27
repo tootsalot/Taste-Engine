@@ -48,6 +48,7 @@ ID_TYPES = {"movie": "tmdb_movie_id", "tv": "tmdb_tv_id"}
 LISTS = {"watchlist": "watchlist", "favorites": "favorite"}
 REFRESH_DAYS = 30
 MAX_PAGES = 200  # a safety stop; 20 results a page
+MAX_KEYWORDS = 64
 
 
 @dataclass(frozen=True)
@@ -365,7 +366,7 @@ def _apply_removals(conn: sqlite3.Connection, run_id: int, now: str) -> int:
 def _detail_ids(
     conn: sqlite3.Connection, now: datetime, account_only: bool = True
 ) -> list[tuple[str, int]]:
-    """Titles whose details were never fetched, or are older than REFRESH_DAYS.
+    """Titles with missing keywords, missing details, or details older than REFRESH_DAYS.
 
     `account_only`: just what's on my account (rated, watchlist, favorites). Suggestion
     candidates are known from lists too, and a sync must not fetch them all; the
@@ -390,7 +391,8 @@ def _detail_ids(
         found += [
             (kind, r[0])
             for r in conn.execute(
-                f"SELECT tmdb_id FROM {table} WHERE fetched_at < ?{mine}{gone} ORDER BY tmdb_id",
+                f"SELECT tmdb_id FROM {table} "
+                f"WHERE (fetched_at < ? OR keywords_json IS NULL){mine}{gone} ORDER BY tmdb_id",
                 (*params, f"gone_{kind}", cutoff),
             )
         ]
@@ -410,7 +412,7 @@ def fetch_details(
     now = now or datetime.now(timezone.utc)
     todo = ids if ids is not None else _detail_ids(conn, now)
     for i, (kind, tmdb_id) in enumerate(todo, 1):
-        params = {"append_to_response": "credits"} if kind == "movie" else {}
+        params = {"append_to_response": "credits,keywords" if kind == "movie" else "keywords"}
         try:
             response = client.get_json(
                 f"{API}/3/{kind}/{tmdb_id}", params=params, headers=bearer(cfg.read_token),
@@ -447,10 +449,39 @@ def fetch_details(
     return len(todo)
 
 
+def _keyword_names(data: dict[str, Any], kind: str) -> list[str] | None:
+    """Bound untrusted keyword names; missing data stays distinct from an empty answer.
+
+    TMDB's published response examples use keywords.keywords for films and
+    keywords.results for TV. Appending keeps that subrequest's response shape.
+    """
+    block = data.get("keywords")
+    if not isinstance(block, dict):
+        return None
+    values = block.get("keywords" if kind == "movie" else "results")
+    if not isinstance(values, list):
+        return None
+    names, seen = [], set()
+    for entry in values:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not isinstance(name, str):
+            continue
+        name = name.strip()
+        if not name or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        names.append(name)
+        if len(names) == MAX_KEYWORDS:
+            break
+    return names
+
+
 def save_details(
     conn: sqlite3.Connection, kind: str, data: dict[str, Any], raw_id: int | None, fetched_at: str
 ) -> None:
     genres = json.dumps([g.get("name") for g in data.get("genres") or []], ensure_ascii=False)
+    names = _keyword_names(data, kind)
+    keywords = json.dumps(names, ensure_ascii=False) if names is not None else None
     if kind == "movie":
         crew = (data.get("credits") or {}).get("crew") or []
         directors = [
@@ -461,8 +492,8 @@ def save_details(
         conn.execute(
             "INSERT INTO stg_tmdb_movies (tmdb_id, title, original_title, release_date, runtime, "
             "vote_average, vote_count, poster_path, original_language, imdb_id, genres_json, "
-            "directors_json, raw_page_id, fetched_at, overview, popularity) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "directors_json, raw_page_id, fetched_at, overview, popularity, keywords_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (tmdb_id) DO UPDATE SET title = excluded.title, "
             "original_title = excluded.original_title, release_date = excluded.release_date, "
             "runtime = excluded.runtime, vote_average = excluded.vote_average, "
@@ -470,7 +501,8 @@ def save_details(
             "original_language = excluded.original_language, imdb_id = excluded.imdb_id, "
             "genres_json = excluded.genres_json, directors_json = excluded.directors_json, "
             "raw_page_id = excluded.raw_page_id, fetched_at = excluded.fetched_at, "
-            "overview = excluded.overview, popularity = excluded.popularity",
+            "overview = excluded.overview, popularity = excluded.popularity, "
+            "keywords_json = COALESCE(excluded.keywords_json, stg_tmdb_movies.keywords_json)",
             (
                 data["id"],
                 _title(data),
@@ -488,6 +520,7 @@ def save_details(
                 fetched_at,
                 (data.get("overview") or "").strip() or None,
                 data.get("popularity"),
+                keywords,
             ),
         )
         return
@@ -497,8 +530,8 @@ def save_details(
         "INSERT INTO stg_tmdb_tv (tmdb_id, name, original_name, first_air_date, last_air_date, "
         "status, seasons, episodes, episode_run_time, vote_average, vote_count, poster_path, "
         "networks_json, genres_json, creators_json, raw_page_id, fetched_at, overview, "
-        "original_language, origin_country_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "original_language, origin_country_json, keywords_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (tmdb_id) DO UPDATE SET name = excluded.name, "
         "original_name = excluded.original_name, first_air_date = excluded.first_air_date, "
         "last_air_date = excluded.last_air_date, status = excluded.status, "
@@ -510,7 +543,8 @@ def save_details(
         "original_language = excluded.original_language, "
         "origin_country_json = excluded.origin_country_json, "
         "raw_page_id = excluded.raw_page_id, "
-        "fetched_at = excluded.fetched_at",
+        "fetched_at = excluded.fetched_at, "
+        "keywords_json = COALESCE(excluded.keywords_json, stg_tmdb_tv.keywords_json)",
         (
             data["id"],
             _title(data),
@@ -531,6 +565,7 @@ def save_details(
             fetched_at,
             (data.get("overview") or "").strip() or None,
             *_origin(data),
+            keywords,
         ),
     )
 
@@ -653,7 +688,14 @@ def load_title_core(conn: sqlite3.Connection, kind: str, tmdb_id: int) -> int | 
     ]
     core.set_item_creators(conn, item_id, SOURCE, role, creator_ids)
     genres = json.loads(row["genres_json"] or "[]")
-    core.set_item_tags(conn, item_id, SOURCE, [core.tag_id(conn, g, "genre") for g in genres if g])
+    keywords = json.loads(row["keywords_json"] or "[]")
+    core.set_item_tags(
+        conn,
+        item_id,
+        SOURCE,
+        [core.tag_id(conn, g, "genre") for g in genres if g]
+        + [core.tag_id(conn, name, "keyword") for name in keywords],
+    )
     if row["vote_average"] and row["vote_count"]:
         core.upsert_community_rating(
             conn,

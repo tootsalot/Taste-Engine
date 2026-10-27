@@ -4,7 +4,7 @@ Each release's notes on GitHub come from its section here.
 
 ## [4.0.0] - Unreleased
 
-Rating models I can compare before choosing one for a list.
+Cross-media picks from titles I liked, and rating models I can compare before choosing one for a list.
 
 For You
 - A question after launch sync compares all four models on my own ratings, once per profile and model set, with Decide later for the next launch
@@ -14,12 +14,15 @@ For You
 - More details learns from saved metadata, Similar titles learns from nearby rated titles, and Blend learns a mix of both with Usual
 - Rated lists name their model and use the question's plain accuracy wording, with chances based on that model's own misses
 - Stored anime comparisons keep both models' whole-score errors, matching the lab; the chooser uses raw held-out guesses for its within-one-point check
-- Anime films are suggested through Anime only, including in Across everything; rated anime films stay in the film model and report
+- Anime films are suggested through Anime only, including in Across media; rated anime films stay in the film model and report
 - Seed and genre reasons keep describing real ratings; the three 3.0 model switches apply to Usual only
-- Across everything ranks picks relative to my mean and spread in each rated medium; music uses within-list rank percentiles
-- Balanced, Best first, and Strict rotation control the mixed order, with an instant remembered medium filter
-- A separate Outside your usual card explores a less-rated medium or theme above my usual, without repeating the normal top pick
-- Broader theme coverage and recorded item links add cross-media reasons with their numbers; the other lists keep their existing theme mapping
+- Across media replaces Across everything with anime, film, TV, and book picks like titles I rated above my average in other media; music stays in Discover and Rediscover
+- One to three liked titles and their shared terms explain each pick; broad themes alone and labels such as Animation or based on manga cannot make a match
+- Each pick keeps its own tab's predicted score and must reach my usual for that medium; cross support ranks it without changing the rating models or other lists
+- Balanced, Best first, and Strict rotation control the order across those four media, with an instant remembered medium filter
+- A separate Outside your usual card highlights the best eligible pick in a medium I have rated least
+- TMDB keywords arrive with the existing details request; the first sync after updating takes longer while older titles collect them once
+- Older saved mixed lists rebuild from the cache when For You opens; hidden adult anime still count in my averages without appearing as picks or named seeds
 - Discover music cards show how close a new artist is to the nearest artist I play, so they never read above 100% (an artist like several of mine showed sums like 162%); lists saved before this show the match words alone
 - Settings saved while suggestions are recomputing or a sync is running now reach the lists: they recompute again once that work ends
 - Deleting a profile first waits for a stopped rating check or recap drawing to close the database, which Windows refused to delete while it was open
@@ -27,13 +30,14 @@ For You
 Lab and checks
 - A read-only `themes` command prints mapped title/tag counts and common unmapped taxonomy terms without printing titles
 - A read-only `lab` command compares all candidates on the same five held-out folds without printing titles or writing recommendation runs
+- A read-only `lab --cross` check shows cross-support counts, rank correlation with Usual's held-out misses, and average misses by support level, without printing titles, IDs, or terms
 - Average error, rank agreement, top-fifth recovery, and paired bootstrap intervals show whether a model beats Usual; small samples show counts without accuracy numbers
 - Feature vocabularies, scaling, penalties, neighbors, and blend weights are fitted inside training folds, including nested tuning
 - Selected models reuse their five-fold checks until the rated scores or fitted metadata change, with a small cache per profile
 - Similar-title neighbors are built only for predicted titles and inner validation, keeping the same predictions
 - Blend prepares item metadata once per fit; every fold still learns its own vocabulary, scaling, and weights
 - Saved comparisons use `selected_model`, leaving Usual anime's numeric `model` field intact; older runs still open
-- `scripts/time_app.py --models` measures fits, predictions, first and unchanged second list recomputes, and Across everything on the invented library, using the app's transaction path for saves
+- `scripts/time_app.py --models` measures fits, predictions, first and unchanged second list recomputes, and Across media on the invented library, using the app's transaction path for saves
 - Late startup-sync and recap callbacks cannot recreate a profile after its window closes or its file is deleted
 - The first check of a model after my ratings change is faster (anime Similar titles about three times, anime Blend about a fifth), with the same predictions: the accuracy interval no longer uses exact fractions, and Similar titles reads MAL's links and ranks neighbors once per check instead of once per fold
 - Tests now check that no saved list keeps a model block under `model` with any model, that For You opens lists saved in the 3.1 layout, and that every list computes on an empty profile; the startup tests no longer rename a database that is still open, which Windows refuses

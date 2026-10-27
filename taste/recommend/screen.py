@@ -97,17 +97,25 @@ def _runtime(minutes: int | None) -> str:
 
 
 def film_recommendations(
-    conn: sqlite3.Connection, today: date | None = None, prior: int | None = None
+    conn: sqlite3.Connection,
+    today: date | None = None,
+    prior: int | None = None,
+    *,
+    full_pool: bool = False,
 ) -> tuple[list[Rec], dict[str, Any]]:
     """Film picks using my film ratings, genres, and directors."""
-    return _screen_recommendations(conn, today, prior, "movie")
+    return _screen_recommendations(conn, today, prior, "movie", full_pool=full_pool)
 
 
 def tv_recommendations(
-    conn: sqlite3.Connection, today: date | None = None, prior: int | None = None
+    conn: sqlite3.Connection,
+    today: date | None = None,
+    prior: int | None = None,
+    *,
+    full_pool: bool = False,
 ) -> tuple[list[Rec], dict[str, Any]]:
     """The film model applied to my TV ratings, with creators instead of directors."""
-    return _screen_recommendations(conn, today, prior, "tv")
+    return _screen_recommendations(conn, today, prior, "tv", full_pool=full_pool)
 
 
 def _screen_recommendations(
@@ -115,6 +123,8 @@ def _screen_recommendations(
     today: date | None = None,
     prior: int | None = None,
     kind: str = "movie",
+    *,
+    full_pool: bool = False,
 ) -> tuple[list[Rec], dict[str, Any]]:
     """Apply the existing model separately to films or TV.
 
@@ -280,4 +290,4 @@ def _screen_recommendations(
             metrics["theme_transfer"] = experiments.transfer_metrics(
                 conn, item_kind, scored, facts, today
             )
-    return recs[: cfg["rec_count"]], metrics
+    return (recs if full_pool else recs[: cfg["rec_count"]]), metrics
