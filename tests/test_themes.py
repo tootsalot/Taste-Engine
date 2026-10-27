@@ -152,6 +152,12 @@ def test_mixed_page_shows_medium_colors_and_fits_both_window_sizes(qtbot, monkey
 
     win = make_library(qtbot, monkeypatch, tmp_path, extras=True)
     try:
+        conn = win.ctx.connect(win.current_profile())
+        try:
+            settings.set_value(conn, "mix_balance", "rotation")
+            recommend.compute_all(conn, NOW, ("everything",))
+        finally:
+            conn.close()
         win.show_page("For You")
         page = win.for_you
         page.reload()

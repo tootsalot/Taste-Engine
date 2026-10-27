@@ -7,7 +7,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from taste import __version__, backup, db, profiles, reports, runner
+from taste import __version__, backup, db, profiles, reports, runner, themes
 from taste.config import load_env, reports_dir
 from taste.profiles import DEFAULT_PROFILE, ProfileError
 from taste.recommend import lab
@@ -77,6 +77,50 @@ def _lab(args: argparse.Namespace) -> int:
             return cmd_lab(conn, args.medium)
     except (ProfileError, OSError, sqlite3.Error):
         print("The lab could not read the profile database.", file=sys.stderr)
+        return 2
+
+
+def cmd_themes(conn: sqlite3.Connection) -> int:
+    """Print mapped taxonomy counts, without titles or other profile information."""
+    coverage = themes.coverage(conn)
+    lines = ["Theme map coverage"]
+    for medium in ("anime", "film", "tv", "book", "music"):
+        counts = coverage["media"][medium]
+        unit = "artists with recorded plays" if medium == "music" else "rated titles"
+        lines.append(
+            f"{medium}: {counts['mapped_titles']}/{counts['titles']} {unit} mapped; "
+            f"{counts['mapped_tags']}/{counts['tags']} tags mapped"
+        )
+    lines.extend(
+        (
+            "Music uses recorded Last.fm plays, not ratings; capture scope limits "
+            "which plays are recorded.",
+            "",
+            "Most common unmapped genre/tag terms (up to 20):",
+        )
+    )
+    for term, count in coverage["unmapped"][:20]:
+        # Taxonomy terms are allowed output, but remote control characters are not.
+        clean = " ".join("".join(c for c in term if c.isprintable() or c.isspace()).split())
+        lines.append(f"  {count}  {clean}")
+    if not coverage["unmapped"]:
+        lines.append("  None")
+    print("\n".join(lines))
+    return 0
+
+
+def _themes(args: argparse.Namespace) -> int:
+    """Inspect only an existing database, without schema setup or legacy migration."""
+    try:
+        path = args.db if args.db else profiles.db_path(args.profile)
+        if not path.is_file():
+            print("The requested profile database does not exist.", file=sys.stderr)
+            return 2
+        with profiles._readonly(path) as conn:
+            conn.row_factory = sqlite3.Row
+            return cmd_themes(conn)
+    except (ProfileError, OSError, sqlite3.Error):
+        print("Theme coverage could not read the profile database.", file=sys.stderr)
         return 2
 
 
@@ -176,6 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="row counts and last sync per source")
     model_lab = sub.add_parser("lab", help="compare rating models without changing the database")
     model_lab.add_argument("--medium", choices=(*lab.MEDIA, "all"), default="all")
+    sub.add_parser("themes", help="count theme map coverage without changing the database")
     back = sub.add_parser("backup", help="back up this profile without its keys")
     back.add_argument("path", type=Path)
     restore = sub.add_parser("restore", help="restore a backup as a new profile")
@@ -213,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
     load_env()
     if args.command == "lab":
         return _lab(args)
+    if args.command == "themes":
+        return _themes(args)
     if profiles.migrate_legacy():
         print("Moved data/taste.db to the 'default' profile.")
     try:

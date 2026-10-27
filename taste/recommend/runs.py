@@ -9,6 +9,7 @@ from typing import Any
 
 from taste import settings, themes
 from taste.db import utc_now
+from taste.recommend import links
 from taste.recommend.anime import anime_recommendations
 from taste.recommend.books import book_recommendations
 from taste.recommend.everything import POOLS, everything_recommendations
@@ -20,7 +21,9 @@ from taste.recommend.screen import film_recommendations, tv_recommendations
 def save_run(
     conn: sqlite3.Connection, kind: str, recs: list[Rec], metrics: dict[str, Any] | None = None
 ) -> int:
-    params = {k: settings.get(conn, k) for k in REC_SETTINGS}
+    params = {
+        k: settings.get(conn, k) for k in REC_SETTINGS if k != "mix_balance" or kind == "everything"
+    }
     if kind in ("anime", "everything"):
         params["anime_visibility"] = themes.visibility(conn)
     run_id = conn.execute(
@@ -102,7 +105,7 @@ def latest(conn: sqlite3.Connection, kind: str) -> tuple[list[Rec], dict[str, An
         if r["item_key"] not in dismissed
     ]
     if kind == "everything":
-        hidden = {tuple(r) for r in conn.execute("SELECT kind, item_key FROM rec_dismissed")}
+        hidden = links.dismissed_keys(conn, links.source_items(conn))
         recs = [r for r in recs if (r.kind, r.facts.get("source_item_key")) not in hidden]
     metrics = json.loads(run["metrics_json"])
     # 3.1 used model for both a numeric anime error and the selected-model block.
@@ -124,6 +127,7 @@ def dismiss(conn: sqlite3.Connection, kind: str, item_key: str) -> None:
 
 
 REC_SETTINGS = [
+    "mix_balance",
     "rec_theme_transfer",
     "rec_dismissal_signal",
     "rec_recent_ratings",

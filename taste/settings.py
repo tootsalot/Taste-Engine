@@ -53,6 +53,11 @@ REC_MODELS = {
     "similar": "Similar titles",
     "blend": "Blend",
 }
+MIX_BALANCE = {
+    "balanced": "Balanced",
+    "best": "Best first",
+    "rotation": "Strict rotation",
+}
 REC_MODEL_DESCRIPTIONS = {
     "usual": (
         "Starts from the crowd's score and adjusts for how you usually differ from it, "
@@ -412,6 +417,19 @@ SETTINGS: list[Setting] = [
         False,
         "Let sparse TV and book ratings borrow a little theme evidence from other media. "
         "Only lists set to Usual use this signal.",
+        group="Recommendations",
+        advanced=True,
+    ),
+    Setting(
+        "mix_balance",
+        "Across everything mix",
+        "choice",
+        "balanced",
+        "Balanced brings each medium into the first ten when a pick is within one rating "
+        "spread of the best remaining pick, with at most two in a row while another medium "
+        "has picks. Best first follows relative scores without balancing. Strict rotation "
+        "takes one pick from each available medium in turn. This changes Across everything only.",
+        choices=MIX_BALANCE,
         group="Recommendations",
         advanced=True,
     ),

@@ -71,6 +71,7 @@ def test_every_setting_belongs_to_a_group_in_display_order():
         "rec_dismissal_signal",
         "rec_recent_ratings",
         "rec_theme_transfer",
+        "mix_balance",
     ]
     assert by_group["Sources"] == ["mal_username", "lastfm_username"]  # the Sources card
     assert settings.GROUPS == [
@@ -91,6 +92,38 @@ def test_values_round_trip_with_types(conn):
     assert settings.get(conn, "genre_min_sample") == 7
     assert settings.get(conn, "in_line_threshold") == 0.5
     assert settings.get(conn, "include_nsfw") is False
+
+
+def test_mix_balance_is_advanced_and_saved_only_for_the_mixed_list(conn):
+    import json
+
+    from taste.recommend.runs import REC_SETTINGS, save_run
+
+    choice = settings.BY_KEY["mix_balance"]
+    assert choice.advanced
+    assert settings.get(conn, "mix_balance") == "balanced"
+    assert choice.choices == {
+        "balanced": "Balanced",
+        "best": "Best first",
+        "rotation": "Strict rotation",
+    }
+    assert "mix_balance" in REC_SETTINGS
+    for value in choice.choices:
+        settings.set_value(conn, "mix_balance", value)
+        assert settings.get(conn, "mix_balance") == value
+    with pytest.raises(SettingError, match="pick one"):
+        settings.set_value(conn, "mix_balance", "invented_unknown_mode")
+    for kind in ("anime", "film", "tv", "book", "music_discover", "everything"):
+        run = save_run(conn, kind, [])
+        params = json.loads(
+            conn.execute(
+                "SELECT params_json FROM rec_runs WHERE rec_run_id = ?", (run,)
+            ).fetchone()[0]
+        )
+        if kind == "everything":
+            assert params["mix_balance"] == "rotation"
+        else:
+            assert "mix_balance" not in params
 
 
 def test_views_use_genre_min_and_threshold(conn):

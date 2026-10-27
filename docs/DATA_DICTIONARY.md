@@ -18,6 +18,10 @@ Recaps (the Rev page's cards) are image files, not database rows: `<data folder>
 
 Window preferences shared by every profile (whether the sidebar is collapsed, Simple or Advanced settings, and whether Reports shows plays per week, month, or year) live in `<data folder>/ui_state.json`, not in any database. A missing or unreadable file means the defaults.
 
+`for_you_mix_filter` in that file is a mapping from profile ID to `all`, `anime`, `film`,
+`tv`, `book`, or `music`. It remembers each viewer's Across everything filter without
+changing saved recommendation rows or profile settings. Missing or invalid values use `all`.
+
 A profile's own picture, when one is chosen, is `<profile_id>.picture.png` beside its database in the profiles folder: a 256 px square cut from the middle of the chosen image. It's not in the database, and it's deleted with the profile.
 
 ---
@@ -855,12 +859,16 @@ latest valid stored rating date, ignoring malformed dates and using a fixed epoc
 reference when no valid dates are known.
 
 
-## Shared themes and mixed suggestions (3.0)
+## Shared themes and mixed suggestions (4.0)
 
 `taste/themes.py` holds a hand-written, case-insensitive map of MAL genres/themes, TMDB genres,
 Hardcover genres/moods, and Last.fm artist tags. Unknown terms contribute no evidence.
-It maps categories, never item titles. Cross-source item identity remains solely in
-core_item_external_ids.
+It maps categories, never item titles. `MIXED_MAP` extends the original `MAP` for the mix
+and coverage command only; the existing optional TV/book transfer retains `MAP`. Audience
+terms map to literal audience labels. Sexual-content terms share that content category
+and never imply romance. Accolades, distribution formats, and unsupported terms provide
+no theme evidence. Cross-source item identity remains in core_item_external_ids; direct
+recorded relationships remain in core_item_links. Neither titles nor people establish links.
 
 Profile evidence is computed from source-tagged core ratings paired with community ratings.
 Each theme records a medium's count, mean rating difference (normalized to that source's
@@ -869,13 +877,56 @@ recorded play shares for mapped artist tags, explicitly marked `play share`, nev
 rating. Its maximum lean is 0.1, shrunk by 100 plays. Each other medium contributes one lean
 to a theme's mean so a large library cannot outweigh every other medium by volume alone.
 
-The new rec_runs kind `everything` stores an Experimental mix of candidates from the existing
-six lists. Rank within each native list is the common base, plus 0.15 times the other media's
-theme lean. Native prediction/match scores remain in rec_items.score. Namespaced item keys
-are `kind:source_key`; facts_json keeps `medium`, `source_item_key`, `list_kind`, mapped `themes`,
-and `mix_score`. metrics_json records `experimental`, the profile's theme evidence, a visibility
-stamp, and each rated medium's five-fold baseline holdout on the 1 to 10 model scale. Music
-records count 0, mae null, and a note that it has plays rather than personal ratings.
+The rec_runs kind `everything` stores an Experimental mix of the six existing lists,
+without fitting or predicting them again. Rated picks use `(prediction - mean) / spread`
+on the 1 to 10 scale, doubling book stars. Means and population standard deviations use
+all valid personal ratings, including hidden adult anime and missing crowd scores.
+Recorded source ID types identify the medium even if an anime film shares a core item
+across MAL and TMDB. Spread is floored at 1.0. With no personal baseline, a pick uses its
+source-list percentile instead; it never claims to be above a known usual.
+
+Music uses `(pool_count - zero_based_rank - 0.5) / pool_count` within Discover and
+Rediscover separately, then the standard normal inverse CDF. This puts ranks on the
+same scale as rating spreads without inventing music ratings. Every pick adds 0.15 times
+the other media's theme lean. Native scores remain in rec_items.score; mixed music cards
+display source-list rank. Namespaced keys remain `kind:source_key`. Recorded core-item
+aliases are deduplicated and hidden adult aliases are excluded.
+
+`mix_balance` is an Advanced app_settings choice: `balanced` (default), `best`, or
+`rotation`. It joins REC_SETTINGS for cache recomputes and is saved in params_json only
+for `everything`. Balanced reserves first-ten places for unseen media within 1.0 mixed
+score of the best remaining pick and limits same-medium streaks to two while alternatives
+remain. Best first sorts by mixed score. Strict rotation cycles available media.
+
+In addition to `medium`, `source_item_key`, `list_kind`, and mapped `themes`, mixed
+facts_json stores these fields:
+
+| Field | Meaning |
+|---|---|
+| `pool_rank`, `pool_count` | One-based rank and size of the saved source pool. |
+| `relative_score` | Standardized personal-rating gain, or normal-quantile rank when no baseline exists. |
+| `theme_adjustment` | 0.15 times the cross-media theme lean. |
+| `mix_score` | Relative score plus theme adjustment, before balancing. |
+| `usual_comparison` | Plain relative-rating wording, or an explicit source-rank explanation. |
+| `outside_usual` | True only on the single separate surprise card, when an eligible pick exists. |
+| `surprise_reason` | Its less-rated medium/theme count and above-usual explanation. |
+
+The surprise excludes the normal highest-scoring pick and is removed from the regular
+grid. It counts toward rec_count and toward balancing's first ten. Candidates require a
+known personal mean and a prediction above it. Selection minimizes the medium or mapped
+theme rating count among eligible candidates, breaking ties by mixed score and stable
+identity. Music cannot provide a rating-based surprise. Not interested hides it through
+the same source dismissal as other mixed picks.
+
+metrics_json retains `experimental`, `visibility`, `theme_evidence`, and the per-medium
+baseline `holdouts`. Music has count 0 and mae null. New fields are `means_spreads`, a
+per-medium object containing `count`, `mean`, and the floored `spread` (null without
+ratings); `spread_floor` (1.0); `balance`; `within_reach` (1.0); and `map_coverage`.
+Coverage contains `media`, `totals`, and up to twenty `unmapped` pairs of taxonomy term
+and count. Each media/totals block stores `titles`, `mapped_titles`, `tags`, and
+`mapped_tags`. Music counts artists with recorded plays, not rated titles. Hidden anime
+remain in counts, and coverage stores no titles or credited people. The `themes` CLI
+reads the same coverage through an existing read-only database without setup or migration.
 
 `rec_theme_transfer` is an Advanced app_settings boolean, false by default, recorded with
 run parameters. It applies only to TV and book lists set to Usual. When on, those predictions
@@ -889,6 +940,8 @@ The two earlier experiments' separate checks always exclude transfer.
 A dismissal from the mix is stored under the pick's own kind and source key (`anime` and
 `101`, not `everything` and `anime:101`), so its original list hides it too and the dismissal
 experiment counts it. Original-list dismissals filter both fresh and saved mixed lists. The mix
+also hides aliases of the same recorded core item, without extending a dismissal to
+separate items connected by adaptation or other relationship links. The mix
 reranks the lists a refresh has just saved; it never predicts them a second time.
 Anime and mixed runs record `params_json.anime_visibility`: the NSFW setting plus a hash of
 adult classifications. A mismatch with current policy withholds the saved list, including old

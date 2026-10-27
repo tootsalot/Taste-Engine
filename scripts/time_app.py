@@ -123,6 +123,10 @@ def main() -> None:
                     out=lambda message: None,
                 )
                 timings["Recommendations recompute"] = time.perf_counter() - start
+                start = time.perf_counter()
+                with db.transaction(conn):
+                    recommend.compute_all(conn, NOW_DT, ("everything",))
+                timings["Across everything recompute"] = time.perf_counter() - start
                 conn.execute("UPDATE raw_api_pages SET fetched_at = '2020-01-01 00:00:00'")
                 start = time.perf_counter()
                 if hasattr(raw, "compress_old_pages"):

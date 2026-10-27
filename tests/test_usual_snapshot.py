@@ -1,7 +1,8 @@
-"""Usual keeps the pre-3.1 captures apart from 4.0's anime film routing.
+"""Single lists retain the captures apart from 4.0's anime film routing.
 
 The fixture's base_sha records the original capture. Only its film and everything
-hashes changed when Japanese animation stopped appearing in film suggestions.
+hashes first changed when Japanese animation stopped appearing in film suggestions.
+The mixed hashes now capture 4.0's relative scores, balancing, and surprise card.
 """
 
 import hashlib

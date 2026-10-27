@@ -162,17 +162,45 @@ reranking the saved lists, and music keeps its listening model.
 
 ![Across everything, mixing books, films, TV, anime, and music](docs/screenshots/across-everything.png)
 
-For You has an **Across everything** list after Books, marked Experimental. It mixes candidates
-from my existing lists using an explicit genre/theme map and my whole profile. Every pick
-keeps its own medium's color and score. Its reasons name the other media behind a shared theme,
-with their numbers. The note shows each rated medium's baseline holdout; music has plays,
-not a rating holdout. The map describes broad overlaps, not the meaning of an individual item.
+For You has an **Across everything** list after Books, marked Experimental. It ranks each
+pick by how far its predicted score sits above my usual rating in that medium, divided by
+my rating spread. The spread has a floor of one point, or half a star for books, so a tiny
+spread cannot inflate a pick. Music has no personal ratings: I use rank percentiles within
+Discover and Rediscover, converted to the same scale. Its mixed cards show those ranks.
+
+Balanced is the default. It makes room in the first ten for each medium with a pick within
+one rating spread of the best remaining pick, and avoids more than two from one medium in
+a row while alternatives remain. Advanced settings also offers Best first, which follows
+relative scores, and Strict rotation, which visits each available medium in turn.
+
+All, Anime, Films, TV, Books, and Music filter the saved mix instantly. The app remembers
+my filter for each profile. An **Outside your usual** card highlights a less-rated medium
+or theme with a prediction above my actual usual. It is separate from the normal top pick
+and counts toward the list size. If no qualifying pick exists, there is no surprise card.
+Music and media without personal ratings cannot supply this rating-based surprise.
+
+Each pick keeps its medium's color, with reasons naming the media and numbers behind it.
+Shared genre themes add a small adjustment. A reason can name a title in another medium
+only through an item identity or link already recorded in the database. Matching names,
+people, or a label such as MAL's "novel" never establishes that link. Hidden adult anime
+remain in the counts without appearing by title or picture.
+
+I can inspect the broader theme map without writing anything or printing titles:
+
+```text
+python -m taste --profile me themes
+```
+
+It prints mapped title and tag counts per medium and up to twenty common unmapped terms.
+Audience labels stay literal, such as "teen audience"; they do not imply a plot. Terms
+such as awards and distribution formats stay unmapped. The map describes broad overlaps,
+not the meaning of an individual item, and the other lists keep their existing models.
 
 A third Advanced switch can let TV and books borrow theme leans from the other media while
 their own ratings are sparse. It defaults off and the influence fades as their ratings grow.
 Its separate off/on checks can get worse, so I check the numbers before using it. Not
 interested on a pick hides it in both places, the mix and its own list, whichever one I press
-it in. Themes never link titles across sources.
+it in. Theme overlap alone never links titles across sources.
 
 ## Experimental picks
 

@@ -16,9 +16,13 @@ For You
 - Stored anime comparisons keep both models' whole-score errors, matching the lab; the chooser uses raw held-out guesses for its within-one-point check
 - Anime films are suggested through Anime only, including in Across everything; rated anime films stay in the film model and report
 - Seed and genre reasons keep describing real ratings; the three 3.0 model switches apply to Usual only
-- Across everything keeps reranking the saved lists, and music keeps its listening model
+- Across everything ranks picks relative to my mean and spread in each rated medium; music uses within-list rank percentiles
+- Balanced, Best first, and Strict rotation control the mixed order, with an instant remembered medium filter
+- A separate Outside your usual card explores a less-rated medium or theme above my usual, without repeating the normal top pick
+- Broader theme coverage and recorded item links add cross-media reasons with their numbers; the other lists keep their existing theme mapping
 
 Lab and checks
+- A read-only `themes` command prints mapped title/tag counts and common unmapped taxonomy terms without printing titles
 - A read-only `lab` command compares all candidates on the same five held-out folds without printing titles or writing recommendation runs
 - Average error, rank agreement, top-fifth recovery, and paired bootstrap intervals show whether a model beats Usual; small samples show counts without accuracy numbers
 - Feature vocabularies, scaling, penalties, neighbors, and blend weights are fitted inside training folds, including nested tuning
@@ -26,7 +30,7 @@ Lab and checks
 - Similar-title neighbors are built only for predicted titles and inner validation, keeping the same predictions
 - Blend prepares item metadata once per fit; every fold still learns its own vocabulary, scaling, and weights
 - Saved comparisons use `selected_model`, leaving Usual anime's numeric `model` field intact; older runs still open
-- `scripts/time_app.py --models` measures fits, predictions, and first and unchanged second list recomputes on the invented library, using the app's transaction path for saves
+- `scripts/time_app.py --models` measures fits, predictions, first and unchanged second list recomputes, and Across everything on the invented library, using the app's transaction path for saves
 - Late startup-sync and recap callbacks cannot recreate a profile after its window closes or its file is deleted
 
 ## [3.0.0]

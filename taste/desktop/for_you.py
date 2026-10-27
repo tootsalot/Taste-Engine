@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from taste import local_time, recommend, settings
-from taste.desktop import motion, theme
+from taste.desktop import motion, theme, ui_state
 from taste.desktop.art import ArtTile
 from taste.desktop.context import AppContext
 from taste.desktop.widgets import (
@@ -35,6 +35,7 @@ from taste.desktop.widgets import (
     LazyPage,
     ScrollArea,
     Segmented,
+    card_title,
     elided_lines,
     heading,
     label,
@@ -142,6 +143,14 @@ def safe_link(url: str | None) -> str | None:
 def score_text(kind: str, rec: Rec) -> tuple[str, str]:
     """(big number or label, caption) for a card. Runs saved before facts existed still read."""
     if kind == "everything":
+        if rec.kind == "artist":
+            rank, count = rec.facts.get("pool_rank"), rec.facts.get("pool_count")
+            name = "Discover" if rec.facts.get("list_kind") == "music_discover" else "Rediscover"
+            return (
+                (f"#{rank}", f"of {count} {name} picks")
+                if rank
+                else ("Music", "Recompute for list rank")
+            )
         return score_text(rec.facts.get("list_kind", rec.kind), rec)
     if rec.score is None:
         return "-", ""
@@ -226,6 +235,10 @@ class PosterTile(QFrame):
         line.addWidget(self.title, 1)
         line.addWidget(self.score, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(line)
+        if list_kind == "everything":
+            layout.addWidget(
+                label(rec.facts.get("usual_comparison", ""), role="caption", wrap=True)
+            )
         self.setToolTip(plain_tip(rec.title))
 
     def set_width(self, width: int) -> None:
@@ -310,6 +323,10 @@ class RecCard(Card):
         self.body.addWidget(self.title)
         if rec.subtitle:
             self.body.addWidget(label(rec.subtitle, role="muted", wrap=True))
+        if list_kind == "everything":
+            self.body.addWidget(
+                label(rec.facts.get("usual_comparison", ""), role="caption", wrap=True)
+            )
         for reason in rec.reasons:
             self.body.addWidget(label(reason, role="reason", wrap=True))
         # What it is, and how many people know it: the panel's room is for this.
@@ -508,6 +525,133 @@ class RecList(QWidget):
             self._place()
 
 
+class OutsideCard(Card):
+    """A compact, independently dismissible surprise above the mixed grid."""
+
+    dismissed = Signal(str, str)
+    opened = Signal(str)
+
+    def __init__(self, ctx: AppContext, rec: Rec) -> None:
+        super().__init__()
+        self.rec = rec
+        self.link = safe_link(rec.url)
+        self.body.setContentsMargins(16, 12, 16, 12)
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP)
+        art = ArtTile(ctx.art, QSize(76, 108), accent=ACCENTS.get(rec.kind, theme.CORAL))
+        art.set_art(rec.image_url, rec.title, fallback=rec.facts.get("fallback_image"))
+        row.addWidget(art, 0, Qt.AlignmentFlag.AlignTop)
+        words = QVBoxLayout()
+        words.setSpacing(4)
+        words.addWidget(card_title("Outside your usual"))
+        title = label(rec.title, wrap=True)
+        title.setFont(theme.title_font(18))
+        words.addWidget(title)
+        words.addWidget(
+            label(
+                f"{MEDIUM_LABELS[rec.kind]} · {score_text('everything', rec)[0]} · "
+                + rec.facts.get("usual_comparison", ""),
+                role="muted",
+                wrap=True,
+            )
+        )
+        words.addWidget(label(rec.facts.get("surprise_reason", ""), wrap=True))
+        actions = QHBoxLayout()
+        self.open_button = QPushButton("Open pick")
+        self.open_button.setEnabled(self.link is not None)
+        self.open_button.setProperty("role", "primary")
+        self.open_button.clicked.connect(self._open)
+        self.dismiss_button = QPushButton("Not interested")
+        self.dismiss_button.clicked.connect(self._dismiss)
+        actions.addWidget(self.open_button)
+        actions.addWidget(self.dismiss_button)
+        actions.addStretch()
+        words.addLayout(actions)
+        row.addLayout(words, 1)
+        self.body.addLayout(row)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _open(self) -> None:
+        if self.link is not None:
+            self.opened.emit(self.link)
+
+    def _dismiss(self) -> None:
+        self.dismissed.emit("everything", self.rec.item_key)
+
+
+class MixedList(RecList):
+    """One saved pool, instant viewer filters and a separate surprise card."""
+
+    def __init__(self) -> None:
+        super().__init__("everything")
+        self.profile_id: str | None = None
+        self.all_recs: list[Rec] = []
+        self.surprise: Rec | None = None
+        self.surprise_card: OutsideCard | None = None
+        self.filters = Segmented(
+            (
+                ("all", "All"),
+                ("anime", "Anime"),
+                ("film", "Films"),
+                ("tv", "TV"),
+                ("book", "Books"),
+                ("music", "Music"),
+            ),
+            accents={
+                "all": "anime",
+                "anime": "anime",
+                "film": "screen",
+                "tv": "screen",
+                "book": "books",
+                "music": "music",
+            },
+        )
+        self.filters.set_value("all")
+        self.filters.changed.connect(self._filter_changed)
+        self.layout().insertWidget(1, self.filters, 0, Qt.AlignmentFlag.AlignLeft)
+
+    def set_profile(self, profile_id: str | None) -> None:
+        self.profile_id = profile_id
+        self.filters.set_value(ui_state.mix_filter(profile_id))
+        self.set_recs([], False)
+
+    def set_recs(self, recs: list[Rec], has_run: bool) -> None:
+        self.all_recs = recs
+        self.has_run = has_run
+        self._apply_filter()
+
+    def _filter_changed(self, choice: str) -> None:
+        ui_state.set_mix_filter(self.profile_id, choice)
+        self._apply_filter()
+        if self._ctx is not None:
+            self.render(self._ctx, self._on_open, self._on_dismiss)
+
+    def _apply_filter(self) -> None:
+        choice = self.filters.value()
+        shown = [
+            rec
+            for rec in self.all_recs
+            if choice == "all" or ("music" if rec.kind == "artist" else rec.kind) == choice
+        ]
+        self.surprise = next((rec for rec in shown if rec.facts.get("outside_usual")), None)
+        super().set_recs([rec for rec in shown if not rec.facts.get("outside_usual")], self.has_run)
+
+    def render(self, ctx: AppContext, on_open, on_dismiss) -> None:
+        if self.surprise_card is not None:
+            self.layout().removeWidget(self.surprise_card)
+            self.surprise_card.deleteLater()
+            self.surprise_card = None
+        super().render(ctx, on_open, on_dismiss)
+        if self.surprise is not None:
+            card = OutsideCard(ctx, self.surprise)
+            card.opened.connect(on_open)
+            card.dismissed.connect(on_dismiss)
+            self.layout().insertWidget(2, card)
+            self.surprise_card = card
+        elif not self.recs and self.all_recs:
+            self.empty.setText("No picks in this filter yet. Choose All to see the other media.")
+
+
 class ListSwitch(Segmented):
     """The list pills wrap on a narrow page, keeping the same selection and colors."""
 
@@ -612,7 +756,7 @@ class ForYouPage(LazyPage, QWidget):
         self.tabs.tabBar().setDrawBase(False)
         self.lists: dict[str, RecList] = {}
         for kind, title in LISTS:
-            tab = RecList(kind)
+            tab = MixedList() if kind == "everything" else RecList(kind)
             self.lists[kind] = tab
             self.tabs.addTab(tab, title)
         self.tabs.currentChanged.connect(lambda _: self._render_current())
@@ -642,6 +786,7 @@ class ForYouPage(LazyPage, QWidget):
 
     def set_profile(self, profile_id: str | None) -> None:
         self.profile_id = profile_id
+        self.lists["everything"].set_profile(profile_id)
         self.say("")
         self.reload()
 
@@ -673,23 +818,7 @@ class ForYouPage(LazyPage, QWidget):
                         plain_tip(model_tip(kind, metrics, accuracy)) if created else ""
                     )
                 if kind == "everything":
-                    checks = []
-                    for medium, check in metrics.get("holdouts", {}).items():
-                        error, count = check.get("mae"), check.get("count", 0)
-                        checks.append(
-                            f"{MEDIUM_LABELS.get(medium, medium.title())}: "
-                            + (
-                                f"{error:.2f} points on {count}"
-                                if error is not None
-                                else "no rating holdout"
-                            )
-                        )
-                    self.lists[kind].note.setText(
-                        "Experimental. Genre themes mix the existing pools. "
-                        "Baseline holdouts use the 1 to 10 scale. " + "; ".join(checks)
-                        if created
-                        else ""
-                    )
+                    self.lists[kind].note.setText(mixed_note(metrics) if created else "")
                 newest = max(filter(None, (newest, created)), default=None)
             self.withheld = any(recommend.withheld(conn, k) for k in ("anime", "everything"))
             scope = settings.lastfm_scope_note(conn)
@@ -747,7 +876,8 @@ class ForYouPage(LazyPage, QWidget):
         finally:
             conn.close()
         tab = self.lists[list_kind]
-        hidden = next((r.title for r in tab.recs if r.item_key == item_key), "")
+        pool = tab.all_recs if isinstance(tab, MixedList) else tab.recs
+        hidden = next((r.title for r in pool if r.item_key == item_key), "")
         self.say(f"Hidden {hidden}. It won't be suggested again.")
         tile = tab.tile_for(item_key)
         if tile is None:
@@ -811,6 +941,17 @@ class ForYouPage(LazyPage, QWidget):
             )
         self.reload()
         self.refresh_finished.emit(counts)
+
+
+def mixed_note(metrics: dict) -> str:
+    if "means_spreads" not in metrics:
+        return "Experimental. Recompute this list for relative scores and the new mix."
+    mode = settings.MIX_BALANCE.get(metrics.get("balance"), "Balanced")
+    return (
+        "Experimental. Picks use your usual rating and spread where known. "
+        "Music uses rank percentiles within Discover and Rediscover, "
+        f"with no rating holdout. {mode} mix."
+    )
 
 
 def model_note(kind: str, metrics: dict, accuracy: dict | None = None) -> str:
