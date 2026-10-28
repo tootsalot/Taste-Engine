@@ -146,9 +146,10 @@ def delete(profile_id: str, root: Path | None = None, store: Any = None) -> None
 
 
 # Everything the app keeps in its data folder: profiles (and their fallback key files),
-# the image cache, CLI reports, window state, and the Phase 1 database.
+# retained recaps, the image cache, CLI reports, window state, and the Phase 1 database.
 OWNED_ENTRIES = (
     "profiles",
+    "recaps",
     "cache",
     "reports",
     "ui_state.json",
@@ -199,13 +200,32 @@ def migrate_legacy(root: Path | None = None, legacy: Path | None = None) -> bool
     if not legacy.is_file() or target.exists():
         return False
     root.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(legacy), str(target))
-    conn = db.connect(target)
+    # Copy through SQLite, not the file system: committed rows can still be in taste.db-wal,
+    # and moving the main file alone loses them. The original stays until the copy is whole.
+    staging = root / f"{DEFAULT_PROFILE}.db.migrating"
+    staging.unlink(missing_ok=True)
+    source = sqlite3.connect(legacy)
+    try:
+        copy = sqlite3.connect(staging)
+        try:
+            source.backup(copy)
+        finally:
+            copy.close()
+    finally:
+        source.close()
+    conn = db.connect(staging)
     try:
         settings.set_value(conn, "lastfm_capture_scope", LEGACY_SCOPE)
         settings.set_value(conn, "lastfm_scope_note", LEGACY_NOTE)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         conn.close()
+    for suffix in ("-wal", "-shm"):
+        Path(f"{staging}{suffix}").unlink(missing_ok=True)
+    staging.replace(target)
+    for path in (legacy, *(Path(f"{legacy}{s}") for s in ("-journal", "-wal", "-shm"))):
+        with contextlib.suppress(OSError):  # in use; the copy is already in place
+            path.unlink(missing_ok=True)
     return True
 
 

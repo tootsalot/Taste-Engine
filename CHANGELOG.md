@@ -2,7 +2,7 @@
 
 Each release's notes on GitHub come from its section here.
 
-## [4.0.0] - Unreleased
+## [4.0.0]
 
 Cross-media picks from titles I liked, and rating models I can compare before choosing one for a list.
 
@@ -38,6 +38,35 @@ Speed and fixes
 - The Music report reads its list of years once instead of three times, and For You's reload reads only the dismissed titles' ids instead of every recorded id
 - A damaged key file or window-preferences file no longer crashes the app, and never stops a profile from being deleted
 - The profile switcher's tooltip shows a display name as plain text
+
+Data safety
+- A TMDB sign-in finished after switching profiles is saved to the profile that started it, never to the one on screen
+- Moving the original single database into the profiles folder now copies through SQLite, so changes still in its write-ahead log aren't lost, and keeps the original until the copy is whole
+- A sync no longer removes ratings, list entries, or books because of a malformed answer or a list longer than the page limit: TMDB and Hardcover pages must say what they hold, and removals wait for a read that reached the last page
+- A rating or book removed between two page requests no longer makes another one disappear: TMDB and Hardcover read the list again before removing, as MyAnimeList already did
+- A Last.fm page that doesn't say how many pages there are fails the sync instead of marking history complete, and each Last.fm username has its own history, so changing it reads the new account from the start
+- Two plays whose artist or track names hold a "|" no longer merge into one
+- Finishing a MyAnimeList rewatch counts its last episodes as the rewatch, not as the first watch
+- Hardcover details refresh a Want to Read book's title and average in reports too
+- Key file writes (on systems without a credential store) can no longer bring back a used Hardcover refresh token, and a token refresh is never sent twice or by two syncs at once
+- "Delete all data" removes retained recaps too
+- A backup with a deeply nested manifest is reported as damaged instead of crashing
+
+Suggestions
+- Titles gone from MyAnimeList, TMDB, or Hardcover are no longer suggested from their cached details
+- Unreleased anime and books, and planned titles I already rated, are no longer suggested
+- With adult anime hidden, a film or show recorded as the same title is no longer named as a reason
+- Rating dates and themes of a film or show recorded as the same title as an anime count for films and TV again
+
+Rev and the window
+- Rev can't save one month's cards under another month's name while new cards are drawing, and clicking through months quickly draws only the last one
+- Opening and collapsing the sidebar quickly no longer leaves it narrow
+- The welcome screen shows its whole sentence
+
+Speed
+- CSV exports run in the background and stream their rows, so a long history no longer freezes the window
+- Similar titles and Blend keep only the neighbors a fit can read (at most 100 per title instead of every pair), with the same predictions
+- Music hours count plays by track length instead of listing every play
 
 Lab and checks
 - A read-only `themes` command prints mapped title/tag counts and common unmapped taxonomy terms without printing titles

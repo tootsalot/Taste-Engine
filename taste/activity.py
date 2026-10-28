@@ -13,7 +13,6 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from statistics import median
 from zoneinfo import ZoneInfo
 
 from taste import settings
@@ -232,24 +231,41 @@ def music_hours(conn: sqlite3.Connection, start: str, end: str) -> Hours:
     Plays of tracks without a known length count as the median known length. With
     fewer than HOURS_MIN_COVERAGE of plays covered, it's None rather than a guess.
     """
-    rows = conn.execute(
-        "SELECT t.duration_ms FROM core_behavior_events e "
+    # (length, plays) rather than one row per play: a year of plays is a million rows.
+    counts = conn.execute(
+        "SELECT t.duration_ms, COUNT(*) FROM core_behavior_events e "
         "JOIN core_event_local_times l ON l.event_id = e.event_id "
         "LEFT JOIN core_item_external_ids x ON x.item_id = e.item_id AND x.source = 'lastfm' "
         "  AND x.id_type = 'lastfm_track_key' "
         "LEFT JOIN stg_lastfm_track_info t ON t.track_key = x.external_id "
         "WHERE e.source = 'lastfm' AND e.event_type = 'play' "
-        "AND l.local_date >= ? AND l.local_date < ?",
+        "AND l.local_date >= ? AND l.local_date < ? GROUP BY t.duration_ms",
         (start, end),
     ).fetchall()
-    if not rows:
+    plays = sum(n for _, n in counts)
+    if not plays:
         return Hours(0.0, 1.0)
-    known = [r[0] for r in rows if r[0]]
-    coverage = len(known) / len(rows)
+    known = [(ms, n) for ms, n in counts if ms]
+    known_plays = sum(n for _, n in known)
+    known_ms = sum(ms * n for ms, n in known)
+    coverage = known_plays / plays
     if coverage < HOURS_MIN_COVERAGE:
-        return Hours(None, coverage, sum(known) / 3_600_000)
-    total_ms = sum(known) + (len(rows) - len(known)) * median(known)
+        return Hours(None, coverage, known_ms / 3_600_000)
+    total_ms = known_ms + (plays - known_plays) * _counted_median(known)
     return Hours(total_ms / 3_600_000, coverage)
+
+
+def _counted_median(counts: list[tuple[int, int]]) -> float:
+    """statistics.median of each value repeated its count times, without the repeats."""
+    total = sum(n for _, n in counts)
+    middle = [total // 2] if total % 2 else [total // 2 - 1, total // 2]
+    found, seen = [], 0
+    for value, n in sorted(counts):
+        seen += n
+        while middle and middle[0] < seen:
+            found.append(value)
+            middle.pop(0)
+    return found[0] if len(found) == 1 else (found[0] + found[1]) / 2
 
 
 # ---------------------------------------------------------------------------

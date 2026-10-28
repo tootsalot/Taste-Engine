@@ -78,7 +78,15 @@ def book_recommendations(
             "SELECT book_id, status_id FROM stg_hardcover_user_books WHERE removed_at IS NULL"
         ).fetchall()
     )
-    wanted = {b for b, status in shelf.items() if status == 1}
+    rated = {
+        r[0]
+        for r in conn.execute(
+            "SELECT book_id FROM stg_hardcover_user_books WHERE removed_at IS NULL "
+            "AND rating IS NOT NULL"
+        )
+    }
+    wanted = {b for b, status in shelf.items() if status == 1 and b not in rated}
+    this_year = (now or datetime.now()).year
     sources: dict[int, list[tuple[float, str, float]]] = {}
     if mine is not None:
         for title, rating, similar in conn.execute(
@@ -96,7 +104,9 @@ def book_recommendations(
         if not f or not f.get("details_at") or str(book_id) in dismissed:
             continue  # no details yet (fetched on a later refresh), or dismissed
         if book_id in shelf and book_id not in wanted:
-            continue  # read, reading, paused, or given up
+            continue  # read, reading, paused, given up, or already rated
+        if f["unavailable_at"] or (f["release_year"] or 0) > this_year:
+            continue  # gone from Hardcover, or not out yet
         if f["rating"] is None or (f["ratings_count"] or 0) < BOOK_MIN_RATINGS:
             continue
         eligible[book_id] = f

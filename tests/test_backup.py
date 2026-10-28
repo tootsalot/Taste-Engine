@@ -209,3 +209,12 @@ def test_restore_inside_an_exception_handler_keeps_the_new_profile(tmp_path):
     except ValueError:
         restored = backup.restore(target, "handled")
     assert restored.path.is_file()
+
+
+def test_a_deeply_nested_manifest_is_a_damaged_backup(tmp_path):
+    path = tmp_path / "nested.tasteprofile"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", "[" * 10_000 + "]" * 10_000)
+        archive.writestr("profile.db", b"example")
+    with pytest.raises(backup.BackupError, match="damaged"):
+        backup.read_manifest(path)

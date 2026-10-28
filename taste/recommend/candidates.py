@@ -7,6 +7,7 @@ component tuning inside Blend. This module reads item metadata only from SQLite.
 
 from __future__ import annotations
 
+import heapq
 import json
 import math
 import sqlite3
@@ -295,6 +296,10 @@ SIMILAR_PRIORS = (1.0, 3.0, 10.0)
 SIMILAR_NEIGHBORS = 20
 
 
+def _strongest_first(pair: tuple[float, int]) -> tuple[float, int]:
+    return -pair[0], pair[1]
+
+
 def _similarity_graph(
     train_rows: Rows,
     facts: Facts,
@@ -371,7 +376,7 @@ def _similarity_graph(
         g, p = signatures.get(key, (0, 0))
         size = g.bit_count() + 0.5 * p.bit_count()
         row_links = links.get(key, {})
-        neighbors = []
+        neighbors: list[list[tuple[float, int]]] = [[] for _ in range(5)]
         for other, other_g, other_p, other_size in train_signatures:
             if key == other:
                 continue
@@ -380,9 +385,17 @@ def _similarity_graph(
             if not intersection and not link:
                 continue
             overlap = intersection / (size + other_size - intersection) if intersection else 0.0
-            neighbors.append((overlap + link - overlap * link, other))
-        neighbors.sort(key=lambda pair: (-pair[0], pair[1]))
-        graph[key] = tuple(neighbors)
+            neighbors[other % 5].append((overlap + link - overlap * link, other))
+        # Every split that reads these lists is whole source-id folds (id % 5), and a
+        # fit reads only its split's first SIMILAR_NEIGHBORS. Each fold's own first
+        # SIMILAR_NEIGHBORS cover any union of folds, so the rest would never be read:
+        # kept, they were millions of pairs on a large library.
+        kept = [
+            pair
+            for fold in neighbors
+            for pair in heapq.nsmallest(SIMILAR_NEIGHBORS, fold, key=_strongest_first)
+        ]
+        graph[key] = tuple(sorted(kept, key=_strongest_first))
         if shared is not None:
             shared[key] = graph[key]
     return graph

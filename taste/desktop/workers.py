@@ -235,8 +235,9 @@ class RecsWorker(QThread):
 
 
 class CallWorker(QThread):
-    """Run one network call off the UI thread (TMDB's and Hardcover's sign-in). It touches no
-    database: what it needs is read before it starts, and the result is saved after."""
+    """Run one call off the UI thread: TMDB's and Hardcover's sign-in, which touch no
+    database (what they need is read before, the result saved after), and CSV exports,
+    which open their own connection."""
 
     done = Signal(object, str)  # the call's result, or None and a message
 

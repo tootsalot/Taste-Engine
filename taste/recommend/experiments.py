@@ -23,20 +23,21 @@ DISMISSAL_STRENGTH = 0.3
 
 
 def _dates(conn: sqlite3.Connection, kind: str) -> dict[int, str]:
-    source, id_type, media = {
-        "anime": ("mal", "mal_anime_id", "anime"),
-        "film": ("tmdb", "tmdb_movie_id", "film"),
-        "tv": ("tmdb", "tmdb_tv_id", "tv_show"),
-        "book": ("hardcover", "hardcover_book_id", "book"),
+    # The source's own id says the medium. The item's media type doesn't: a TMDB film
+    # recorded as the same item as a MAL show has the show's.
+    source, id_type = {
+        "anime": ("mal", "mal_anime_id"),
+        "film": ("tmdb", "tmdb_movie_id"),
+        "tv": ("tmdb", "tmdb_tv_id"),
+        "book": ("hardcover", "hardcover_book_id"),
     }[kind]
     return {
         int(key): stamp
         for key, stamp in conn.execute(
             "SELECT x.external_id, r.source_updated_at FROM core_ratings r "
             "JOIN core_item_external_ids x ON x.item_id = r.item_id AND x.source = r.source "
-            "JOIN core_items i ON i.item_id = r.item_id "
-            "WHERE r.source = ? AND x.id_type = ? AND i.media_type = ?",
-            (source, id_type, media),
+            "WHERE r.source = ? AND x.id_type = ?",
+            (source, id_type),
         )
         if key.isdigit() and stamp
     }

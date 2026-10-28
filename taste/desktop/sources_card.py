@@ -459,7 +459,8 @@ class SourcesCard(Card):
         """Ask TMDB for a request token, have it approved in the browser, then swap it for
         the account's access token. `approve(url)` stands in for the browser and the
         approval question (tests); it returns whether to go on."""
-        read_token = self.ctx.store.get(self.profile_id, KEYS["tmdb"])
+        profile_id = self.profile_id
+        read_token = self.ctx.store.get(profile_id, KEYS["tmdb"]) if profile_id else None
         if not read_token:
             self.refresh_status()
             return None
@@ -467,6 +468,10 @@ class SourcesCard(Card):
 
         def requested(token, error: str) -> None:
             self.tmdb_worker.wait()
+            if self.profile_id != profile_id:
+                # The approval would be for a profile that is no longer on screen.
+                self.refresh_status()
+                return
             if token is None:
                 self._tmdb_problem(f"TMDB said no: {error}")
                 return
@@ -482,9 +487,14 @@ class SourcesCard(Card):
             if result is None:
                 self._tmdb_problem(f"Not connected: {error}")
                 return
+            # The token belongs to the profile whose read token asked for it, not to
+            # whichever profile is on screen now.
             user_token, account_id = result
-            self.ctx.store.set(self.profile_id, "TMDB_USER_TOKEN", user_token)
-            self.ctx.store.set(self.profile_id, "TMDB_ACCOUNT_ID", account_id)
+            self.ctx.store.set(profile_id, "TMDB_USER_TOKEN", user_token)
+            self.ctx.store.set(profile_id, "TMDB_ACCOUNT_ID", account_id)
+            if self.profile_id != profile_id:
+                self.refresh_status()
+                return
             self.say("TMDB connected. Sync everything now includes it.")
             self.refresh_status()
             self.changed.emit()

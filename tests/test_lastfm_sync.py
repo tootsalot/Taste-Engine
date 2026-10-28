@@ -320,3 +320,31 @@ def test_history_setting_limits_the_first_sync_and_a_longer_one_reads_older_play
     transport.calls.clear()
     run_sync(conn, client, now=NOW_2 + 1)
     assert all(c["params"]["from"] != 0 for c in transport.calls)
+
+
+def test_a_page_that_doesnt_say_how_many_pages_leaves_the_window_open(conn, make_client):
+    def no_attr(url, params):
+        body = load_fixture("lastfm_recent_page1.json")
+        del body["recenttracks"]["@attr"]
+        return FakeResponse(200, body)
+
+    client, _ = make_client(no_attr)
+    assert run_sync(conn, client).status == "failed"
+    statuses = [r[0] for r in conn.execute("SELECT status FROM sync_lastfm_windows")]
+    assert statuses == ["open"]
+
+
+def test_a_new_username_reads_its_own_history_from_the_start(conn, make_client):
+    client, _ = make_client(recorded_pages_handler)
+    run_sync(conn, client)
+    client, transport = make_client(recorded_pages_handler)
+    other = LastfmSettings(api_key=FAKE_LASTFM_KEY, username="Another_User")
+    lastfm.sync(conn, client, other, out=lambda msg: None, now=lambda: NOW_2)
+    assert transport.calls[0]["params"]["from"] == 0  # not the first account's cursor
+    owners = {r[0] for r in conn.execute("SELECT username FROM sync_lastfm_windows")}
+    assert owners == {"example_user", "another_user"}
+
+
+def test_names_with_a_pipe_never_share_a_play_key():
+    assert lastfm.event_key(1, "A|B", "C") != lastfm.event_key(1, "A", "B|C")
+    assert lastfm.event_key(1, "A", "B") == "1|A|B"  # unchanged for every other name

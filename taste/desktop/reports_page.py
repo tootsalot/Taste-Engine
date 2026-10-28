@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taste import charts, reports
+from taste import charts, db, profiles, reports
 from taste.desktop import motion, theme, ui_state
 from taste.desktop.anime_view import AnimeView
 from taste.desktop.books_view import BooksView
@@ -33,6 +34,7 @@ from taste.desktop.widgets import (
     heading,
     label,
 )
+from taste.desktop.workers import CallWorker
 
 PERIOD_NOTES = {"week": "Weeks start on Sunday, your time."}
 
@@ -108,6 +110,8 @@ def section_page(layout_parent: QWidget) -> tuple[QScrollArea, QGridLayout]:
 
 class ReportsPage(LazyPage, QWidget):
     """Reports, one page per medium. The sidebar's Reports group picks the page."""
+
+    exported = Signal(object)  # what a finished export wrote (a file or folder), or None
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -293,33 +297,59 @@ class ReportsPage(LazyPage, QWidget):
     def _ask_folder(self) -> str:
         return QFileDialog.getExistingDirectory(self, "Export all reports to")
 
-    def export_report(self, view: str, path: str | None = None) -> Path | None:
-        """One report view as CSV. `path` skips the file dialog (tests)."""
+    def export_report(self, view: str, path: str | None = None) -> CallWorker | None:
+        """One report view as CSV, written off the UI thread; `exported` says when.
+        `path` skips the file dialog (tests)."""
         if not self.profile_id:
             return None
         report = next(r for r in reports.REPORTS if r.view == view)
         target = path or self._ask_file(f"{self.profile_id}-{report.csv_name}")
         if not target:
             return None
-        conn = self.ctx.connect(self.profile_id)
-        try:
-            reports.write_csv(conn, report, Path(target))
-        finally:
-            conn.close()
-        self.status.setText(f"Saved {target}")
-        return Path(target)
+        return self._export(
+            lambda conn: reports.write_csv(conn, report, Path(target)),
+            Path(target),
+            lambda _rows: f"Saved {target}",
+        )
 
-    def export_all(self, folder: str | None = None) -> Path | None:
+    def export_all(self, folder: str | None = None) -> CallWorker | None:
         if not self.profile_id:
             return None
         target = folder or self._ask_folder()
         if not target:
             return None
         out = Path(target) / f"taste-engine-{self.profile_id}"
-        conn = self.ctx.connect(self.profile_id)
-        try:
-            written = reports.write_csvs(conn, out)
-        finally:
-            conn.close()
-        self.status.setText(f"Saved {len(written)} CSV files to {out}")
-        return out
+        return self._export(
+            lambda conn: reports.write_csvs(conn, out),
+            out,
+            lambda written: f"Saved {len(written)} CSV files to {out}",
+        )
+
+    def _export(self, write, target: Path, saved) -> CallWorker:
+        """Run `write(conn)` on a worker thread: a big history took seconds, the window
+        frozen meanwhile. One export at a time."""
+        path = profiles.db_path(self.profile_id)
+
+        def call():
+            conn = db.connect(path, setup=False)  # its own connection, on its own thread
+            try:
+                return write(conn)
+            finally:
+                conn.close()
+
+        def done(result, error: str) -> None:
+            self.export_button.setEnabled(True)
+            if error:
+                self.status.setText(f"Couldn't export ({error}).")
+                self.exported.emit(None)
+                return
+            self.status.setText(saved(result))
+            self.exported.emit(target)
+
+        worker = CallWorker(call)
+        worker.done.connect(done)
+        self.ctx.track(worker)
+        self.export_button.setEnabled(False)
+        self.status.setText("Exporting…")
+        worker.start()
+        return worker

@@ -126,9 +126,17 @@ def anime_recommendations(
         r[0]
         for r in conn.execute(
             "SELECT mal_anime_id FROM stg_mal_list_entries WHERE removed_at IS NULL "
-            "AND status = 'plan_to_watch'"
+            "AND status = 'plan_to_watch' AND score IS NULL"
         )
     }
+    # Gone from MAL (a 404 on its details): the cached details stay, but it can't be watched.
+    unavailable = {
+        r[0]
+        for r in conn.execute(
+            "SELECT mal_anime_id FROM stg_mal_anime_details WHERE unavailable_at IS NOT NULL"
+        )
+    }
+    today = (now or datetime.now()).date().isoformat()
 
     # Who recommends each candidate, for the reasons line. English titles when MAL has one.
     sources: dict[int, list[tuple[float, str, int]]] = {}
@@ -173,6 +181,10 @@ def anime_recommendations(
         f = facts.get(anime_id)
         if not f or f["community_mean"] is None or str(anime_id) in dismissed:
             continue  # no details yet (fetched on a later refresh), or dismissed
+        if anime_id in unavailable:
+            continue
+        if f["airing_status"] == "not_yet_aired" or (f["start_date"] or "") > today:
+            continue  # not out yet
         if f["media_type"] not in allowed_types:
             continue
         if (f["num_scoring_users"] or 0) < cfg["rec_min_raters"]:

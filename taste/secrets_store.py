@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,11 @@ ACCOUNT_NAMES = (
     "HARDCOVER_TOKEN_EXPIRES",
 )
 STORED_NAMES = KEY_NAMES + ACCOUNT_NAMES
+
+# Key file changes read the whole file, change one name, and write it back. Two at once
+# (a token refresh on a sync thread, a save on the UI thread) would each write back
+# the other's old value, so each change holds this lock from the read to the write.
+_FILE_LOCK = threading.RLock()
 
 
 class SecretStoreError(RuntimeError):
@@ -106,9 +112,10 @@ class SecretStore:
                     f"Couldn't save to the credential store ({type(exc).__name__})."
                 ) from None
         else:
-            data = self._read_file(profile_id)
-            data[name] = value
-            self._write_file(profile_id, data)
+            with _FILE_LOCK:
+                data = self._read_file(profile_id)
+                data[name] = value
+                self._write_file(profile_id, data)
 
     def delete(self, profile_id: str, name: str) -> None:
         self._check(profile_id, name)
@@ -116,10 +123,11 @@ class SecretStore:
             # Raises when nothing is stored, which is fine.
             with contextlib.suppress(Exception):
                 self.backend.delete_password(SERVICE, _entry(profile_id, name))
-        data = self._read_file(profile_id)
-        if name in data:
-            del data[name]
-            self._write_file(profile_id, data)
+        with _FILE_LOCK:
+            data = self._read_file(profile_id)
+            if name in data:
+                del data[name]
+                self._write_file(profile_id, data)
 
     def delete_all(self, profile_id: str) -> None:
         validate_id(profile_id)

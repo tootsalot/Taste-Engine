@@ -272,25 +272,28 @@ def sync(
     try:
         user_id, _ = me(client, access_token)
         try:
-            pages = _read_library(conn, client, access_token, run, user_id, since, out)
+            pages, complete = _read_library(conn, client, access_token, run, user_id, since, out)
         except ApiError as exc:
             if since is None or exc.retryable or "expired" in str(exc):
                 raise
             out(f"Hardcover: no changes-only read ({exc}); reading the whole library")
             since = None
             run.set_mode("full")
-            pages = _read_library(conn, client, access_token, run, user_id, None, out)
+            pages, complete = _read_library(conn, client, access_token, run, user_id, None, out)
+        if not since and complete and len(pages) > 1:
+            pages += _confirm_missing(conn, client, access_token, run, user_id, out, pages)
         with transaction(conn):
             for raw_id, rows in pages:
                 for row in rows:
-                    if not row.get("id") or not isinstance(row.get("book"), dict):
+                    if not _usable(row):
+                        complete = False  # a book that can't be read isn't a removed one
                         continue
                     run.rows_fetched += 1
                     change = _upsert_staging(conn, row, run.run_id, raw_id, stamp)
                     run.rows_inserted += change == "inserted"
                     run.rows_updated += change == "updated"
-            # Only a full read can tell what's gone from the library.
-            removed = 0 if since else _apply_removals(conn, run.run_id, stamp)
+            # Only a full read of every page can tell what's gone from the library.
+            removed = _apply_removals(conn, run.run_id, stamp) if not since and complete else 0
             for (user_book_id,) in conn.execute(
                 "SELECT user_book_id FROM stg_hardcover_user_books WHERE last_seen_run_id = ?",
                 (run.run_id,),
@@ -323,8 +326,9 @@ def _read_library(
     user_id: int,
     since: str | None,
     out: Callable[[str], None],
-) -> list[tuple[int, list[dict[str, Any]]]]:
-    """Every page of the library (or of the books changed since `since`), each stored raw."""
+) -> tuple[list[tuple[int, list[dict[str, Any]]]], bool]:
+    """Every page of the library (or of the books changed since `since`), each stored raw,
+    and whether the read reached the last page (False when MAX_PAGES stopped it)."""
     pages: list[tuple[int, list[dict[str, Any]]]] = []
     text = LIBRARY_SINCE if since else LIBRARY
     for page in range(MAX_PAGES):
@@ -332,7 +336,11 @@ def _read_library(
         if since:
             params["since"] = since
         status, data = query(client, access_token, text, {"uid": user_id, **params})
-        rows = [r for r in data["data"].get("user_books") or [] if isinstance(r, dict)]
+        found = data["data"].get("user_books")
+        if not isinstance(found, list):
+            # Read as an empty page, this would end the read and remove every book.
+            raise ApiError("Hardcover sent a library page without books", retryable=False)
+        rows = [r for r in found if isinstance(r, dict)]
         with transaction(conn):
             raw_id = store_page(
                 conn,
@@ -349,9 +357,42 @@ def _read_library(
         pages.append((raw_id, rows))
         changed = " changed" if since else ""
         out(f"Hardcover: {sum(len(r) for _, r in pages)}{changed} books so far")
-        if len(rows) < PAGE_SIZE:
-            break
-    return pages
+        if len(found) < PAGE_SIZE:
+            return pages, True
+    return pages, False
+
+
+def _usable(row: dict[str, Any]) -> bool:
+    return bool(row.get("id")) and isinstance(row.get("book"), dict)
+
+
+def _confirm_missing(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    access_token: str,
+    run: SyncRun,
+    user_id: int,
+    out: Callable[[str], None],
+    pages: list[tuple[int, list[dict[str, Any]]]],
+) -> list[tuple[int, list[dict[str, Any]]]]:
+    """The library pages by offset, like MAL (see mal._confirm_missing): a removal between
+    two page requests shifts it and can leave a book on neither page. When a read of
+    several pages misses books that were in the library, it's read again, and the missing
+    books that read does find are kept. Returns them as extra pages."""
+    seen = {row.get("id") for _, rows in pages for row in rows}
+    listed = {
+        r[0]
+        for r in conn.execute(
+            "SELECT user_book_id FROM stg_hardcover_user_books WHERE removed_at IS NULL"
+        )
+    }
+    missing = listed - seen
+    if not missing:
+        return []
+    out(f"Hardcover: {len(missing)} books weren't in that read; reading the library again")
+    again, _ = _read_library(conn, client, access_token, run, user_id, None, out)
+    found = [(raw_id, [r for r in rows if r.get("id") in missing]) for raw_id, rows in again]
+    return [(raw_id, rows) for raw_id, rows in found if rows]
 
 
 _USER_BOOK = [
@@ -476,7 +517,8 @@ def _upsert_staging(
         f"updated_at) VALUES (?, {', '.join('?' for _ in book)}, ?, ?) "
         f"ON CONFLICT (book_id) DO UPDATE SET "
         f"{', '.join(f'{c} = excluded.{c}' for c in book)}, "
-        "last_raw_page_id = excluded.last_raw_page_id, updated_at = excluded.updated_at",
+        "last_raw_page_id = excluded.last_raw_page_id, updated_at = excluded.updated_at, "
+        "unavailable_at = NULL",
         (values["book_id"], *book.values(), raw_id, now),
     )
 
@@ -741,6 +783,7 @@ def save_book(conn: sqlite3.Connection, book: dict[str, Any], raw_id: int, now: 
         "users_count": _int(book.get("users_count")),
         "users_read_count": _int(book.get("users_read_count")),
         "details_at": now,
+        "unavailable_at": None,
     }
     columns = {**values, **extra}
     conn.execute(
@@ -751,6 +794,14 @@ def save_book(conn: sqlite3.Connection, book: dict[str, Any], raw_id: int, now: 
         "last_raw_page_id = excluded.last_raw_page_id, updated_at = excluded.updated_at",
         (int(book["id"]), *columns.values(), raw_id, now),
     )
+    # A book in my library (Want to Read) is in core too: keep its title and average there
+    # the same as in staging.
+    for (user_book_id,) in conn.execute(
+        "SELECT user_book_id FROM stg_hardcover_user_books WHERE book_id = ? "
+        "AND removed_at IS NULL",
+        (int(book["id"]),),
+    ).fetchall():
+        _load_core(conn, user_book_id)
 
 
 def enrich_recommendations(
@@ -806,15 +857,17 @@ def enrich_recommendations(
                     if isinstance(book, dict) and book.get("id") is not None:
                         save_book(conn, book, raw_id, stamp)
                         found.add(int(book["id"]))
-                # Asked for but not sent back (removed, merged): don't ask again for a month.
-                # Most aren't in staging at all, so a placeholder row (no average, so never
-                # suggested) holds the note; a library sync fills it in if it ever shows up.
+                # Asked for but not sent back (removed, merged): don't ask again for a month,
+                # and don't suggest it from details cached before. Most aren't in staging at
+                # all, so a placeholder row holds the note; a library sync fills it in if it
+                # ever shows up.
                 for missing in set(ids) - found:
                     conn.execute(
-                        "INSERT INTO stg_hardcover_books (book_id, title, updated_at, details_at) "
-                        "VALUES (?, ?, ?, ?) ON CONFLICT (book_id) DO UPDATE SET "
-                        "details_at = excluded.details_at",
-                        (missing, f"Hardcover book {missing}", stamp, stamp),
+                        "INSERT INTO stg_hardcover_books (book_id, title, updated_at, details_at, "
+                        "unavailable_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (book_id) DO UPDATE "
+                        "SET details_at = excluded.details_at, "
+                        "unavailable_at = excluded.unavailable_at",
+                        (missing, f"Hardcover book {missing}", stamp, stamp, stamp),
                     )
                 run.pages_fetched += 1
                 run.rows_fetched += len(found)

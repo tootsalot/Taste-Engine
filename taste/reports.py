@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,17 +66,20 @@ def write_csv(conn: sqlite3.Connection, report: Report, path: Path) -> int:
     """Write one report view to `path`. Returns the row count."""
     cursor = conn.execute(f"SELECT * FROM {report.view} ORDER BY {report.order_by}")
     columns = [d[0] for d in cursor.description]
-    rows = cursor.fetchall()
+    rows: Iterable[sqlite3.Row] = cursor  # streamed: a long history is too big to hold
     if "item_id" in columns and report.view.startswith("rpt_mal_"):
         hidden = activity.hidden_items(conn)  # adult shows: counted, never named
         at = columns.index("item_id")
-        rows = [row for row in rows if row[at] not in hidden]
+        rows = (row for row in rows if row[at] not in hidden)
+    count = 0
     # utf-8-sig so Excel on Windows shows Japanese titles correctly.
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.writer(handle)
         writer.writerow(columns)
-        writer.writerows(tuple(safe_cell(value) for value in row) for row in rows)
-    return len(rows)
+        for row in rows:
+            writer.writerow(tuple(safe_cell(value) for value in row))
+            count += 1
+    return count
 
 
 FORMULA_START = ("=", "+", "-", "@", "\t", "\r")

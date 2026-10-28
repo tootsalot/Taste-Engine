@@ -65,6 +65,9 @@ ADDED_COLUMNS = [
     ("stg_hardcover_books", "users_read_count", "INTEGER"),
     ("stg_hardcover_books", "details_at", "TEXT"),
     ("recap_runs", "pictures_missing", "INTEGER NOT NULL DEFAULT 0"),
+    ("stg_mal_anime_details", "unavailable_at", "TEXT"),
+    ("stg_hardcover_books", "unavailable_at", "TEXT"),
+    ("sync_lastfm_windows", "username", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 

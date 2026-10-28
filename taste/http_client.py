@@ -181,11 +181,14 @@ class HttpClient:
         form: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         checker: ResponseChecker = default_checker,
+        max_retries: int | None = None,
     ) -> Response:
         """Any method with an optional JSON body (TMDB's sign-in uses POST and DELETE), or
-        a form-encoded one (`form`, for OAuth token endpoints)."""
+        a form-encoded one (`form`, for OAuth token endpoints). `max_retries` overrides the
+        client's, for a request that mustn't be sent twice."""
+        retries = self.max_retries if max_retries is None else max_retries
         last_error: ApiError | None = None
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(retries + 1):
             response, error, retry_after = self._attempt(
                 url, params, headers, checker, method, body, form
             )
@@ -195,15 +198,15 @@ class HttpClient:
             last_error = error
             if not error.retryable:
                 raise ApiError(self.redact(str(error)), retryable=False, status=error.status)
-            if attempt == self.max_retries:
+            if attempt == retries:
                 break
             delay = self.backoff_base * (2**attempt) + self.jitter()
             if retry_after is not None:
                 delay = max(delay, retry_after)
             self.sleep(delay)
         raise GaveUpError(
-            self.redact(f"gave up after {self.max_retries} retries, last error: {last_error}"),
-            attempts=self.max_retries + 1,
+            self.redact(f"gave up after {retries} retries, last error: {last_error}"),
+            attempts=retries + 1,
         )
 
 

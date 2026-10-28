@@ -45,6 +45,7 @@ _keep: set[QAbstractAnimation] = set()  # running animations, so they aren't col
 _revealing: dict = {}  # widget -> (its open/close animation, its own min and max height)
 _targets: dict = {}  # widget -> where its running open/close animation ends
 _veils: dict = {}  # container -> the veil fading its new page in
+_resizing: dict = {}  # widget -> its running width animation
 
 
 def windows_allows() -> bool:
@@ -208,7 +209,13 @@ def crossfade(container: QWidget, switch: Callable[[], None]) -> None:
 
 
 def resize_width(widget: QWidget, width: int) -> None:
-    """Animate a fixed width (the sidebar collapsing). Ends fixed at `width`."""
+    """Animate a fixed width (the sidebar collapsing). Ends fixed at `width`. A change
+    while one is running stops that one first: left running, it would end at its own
+    width after this one does (a collapsed sidebar that says it's open)."""
+    running = _resizing.pop(widget, None)
+    if running is not None:
+        running.stop()  # stop() doesn't send finished, so its last step never runs
+        _keep.discard(running)
     ms = duration()
     start = widget.width() if widget.isVisible() else width
     if not ms or start == width:
@@ -220,7 +227,14 @@ def resize_width(widget: QWidget, width: int) -> None:
     animation.setEndValue(width)
     animation.setEasingCurve(_curve())
     animation.valueChanged.connect(lambda value: widget.setFixedWidth(int(value)))
-    _run(animation, lambda: widget.setFixedWidth(width))
+    _resizing[widget] = animation
+
+    def finish() -> None:
+        if _resizing.get(widget) is animation:
+            del _resizing[widget]
+        widget.setFixedWidth(width)
+
+    _run(animation, finish)
 
 
 def reveal(widget: QWidget, shown: bool, done: Callable[[], None] | None = None) -> None:

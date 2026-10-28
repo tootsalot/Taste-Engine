@@ -155,8 +155,9 @@ def _pages(
     run: SyncRun,
     path: str,
     out: Callable[[str], None],
-) -> list[tuple[int, dict[str, Any]]]:
-    """Every page of one account list, each stored raw. [(raw page id, result)]."""
+) -> tuple[list[tuple[int, dict[str, Any]]], int]:
+    """Every page of one account list, each stored raw: ([(raw page id, result)], the
+    list's total_pages). Pages past MAX_PAGES aren't read."""
     found: list[tuple[int, dict[str, Any]]] = []
     page, total = 1, 1
     while page <= min(total, MAX_PAGES):
@@ -167,6 +168,12 @@ def _pages(
             headers=bearer(cfg.user_token),
             checker=check_response,
         )
+        data = response.data if isinstance(response.data, dict) else {}
+        results, total = data.get("results"), data.get("total_pages")
+        # A page without these can't say what is on the list, so it can't be used to
+        # decide what was removed from it.
+        if not isinstance(results, list) or type(total) is not int or total < 0:
+            raise ApiError(f"TMDB sent an incomplete page of {path}", retryable=False)
         with transaction(conn):
             raw_id = store_page(
                 conn,
@@ -180,12 +187,52 @@ def _pages(
             )
             run.pages_fetched += 1
             run.save()
-        results = response.data.get("results") or []
         found += [(raw_id, r) for r in results if isinstance(r, dict) and "id" in r]
-        total = int(response.data.get("total_pages") or 1)
         out(f"TMDB: {path.replace('/', ' ')}, page {page} of {max(total, 1)}")
         page += 1
-    return found
+    return found, total
+
+
+def _listed(conn: sqlite3.Connection, path: str) -> set[Any]:
+    """What staging has on one account list now ("movie/rated", "tv/watchlist")."""
+    kind, name = path.split("/")
+    if name == "rated":
+        rows = conn.execute(
+            "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE media_type = ? "
+            "AND removed_at IS NULL",
+            (kind,),
+        )
+    else:
+        rows = conn.execute(
+            "SELECT tmdb_id FROM stg_tmdb_account_lists WHERE media_type = ? "
+            "AND list_name = ? AND removed_at IS NULL",
+            (kind, name),
+        )
+    return {r[0] for r in rows}
+
+
+def _read_list(
+    conn: sqlite3.Connection,
+    client: HttpClient,
+    cfg: TmdbSettings,
+    run: SyncRun,
+    path: str,
+    out: Callable[[str], None],
+) -> tuple[list[tuple[int, dict[str, Any]]], bool]:
+    """One account list, and whether the read saw all of it, so its removals can apply.
+
+    TMDB pages by offset, like MAL (see mal._confirm_missing): a removal between two page
+    requests shifts the list and can leave an entry on neither page. When a read of
+    several pages misses entries that were on the list, the list is read again, and the
+    missing entries it does find are kept."""
+    found, total = _pages(conn, client, cfg, run, path, out)
+    if 1 < total <= MAX_PAGES:
+        missing = _listed(conn, path) - {item["id"] for _, item in found}
+        if missing:
+            out(f"TMDB: {len(missing)} entries weren't in that read; reading it again")
+            again, total = _pages(conn, client, cfg, run, path, out)
+            found += [(raw_id, item) for raw_id, item in again if item["id"] in missing]
+    return found, total <= MAX_PAGES
 
 
 def sync(
@@ -201,12 +248,14 @@ def sync(
     run = SyncRun(conn, SOURCE, "full")
     stamp = utc_now()
     try:
-        rated = {kind: _pages(conn, client, cfg, run, f"{kind}/rated", out) for kind in MEDIA}
-        lists = {
-            (kind, name): _pages(conn, client, cfg, run, f"{kind}/{name}", out)
-            for kind in MEDIA
-            for name in LISTS
+        reads = {
+            path: _read_list(conn, client, cfg, run, path, out)
+            for path in [f"{kind}/rated" for kind in MEDIA]
+            + [f"{kind}/{name}" for kind in MEDIA for name in LISTS]
         }
+        complete = {path for path, (_, whole) in reads.items() if whole}
+        rated = {kind: reads[f"{kind}/rated"][0] for kind in MEDIA}
+        lists = {(kind, name): reads[f"{kind}/{name}"][0] for kind in MEDIA for name in LISTS}
         with transaction(conn):
             for kind, rows in rated.items():
                 for raw_id, item in rows:
@@ -215,7 +264,7 @@ def sync(
             for (kind, name), rows in lists.items():
                 for _, item in rows:
                     _upsert_list(conn, kind, name, item, run.run_id)
-            removed = _apply_removals(conn, run.run_id, stamp)
+            removed = _apply_removals(conn, run.run_id, stamp, complete)
             for kind, rows in rated.items():
                 for _, item in rows:
                     _load_core(conn, kind, int(item["id"]))
@@ -324,41 +373,52 @@ def _seed_details(conn: sqlite3.Connection, kind: str, item: dict, raw_id: int |
         )
 
 
-def _apply_removals(conn: sqlite3.Connection, run_id: int, now: str) -> int:
-    """Ratings and list entries this complete read didn't see were removed on TMDB."""
-    gone = conn.execute(
-        "SELECT media_type, tmdb_id FROM stg_tmdb_account_ratings "
-        "WHERE removed_at IS NULL AND last_seen_run_id <> ?",
-        (run_id,),
-    ).fetchall()
-    conn.execute(
-        "UPDATE stg_tmdb_account_ratings SET removed_at = ? "
-        "WHERE removed_at IS NULL AND last_seen_run_id <> ?",
-        (now, run_id),
-    )
-    for kind, tmdb_id in gone:
-        item_id = core.find_item(conn, SOURCE, ID_TYPES[kind], str(tmdb_id))
-        if item_id is not None:
-            core.delete_rating(conn, item_id, SOURCE)
-            core.delete_event(conn, SOURCE, f"{kind}:{tmdb_id}:rated")
-    lists_gone = conn.execute(
-        "SELECT media_type, tmdb_id, list_name FROM stg_tmdb_account_lists "
-        "WHERE removed_at IS NULL AND last_seen_run_id <> ?",
-        (run_id,),
-    ).fetchall()
-    conn.execute(
-        "UPDATE stg_tmdb_account_lists SET removed_at = ? "
-        "WHERE removed_at IS NULL AND last_seen_run_id <> ?",
-        (now, run_id),
-    )
-    for kind, tmdb_id, name in lists_gone:
-        item_id = core.find_item(conn, SOURCE, ID_TYPES[kind], str(tmdb_id))
-        if item_id is not None:
+def _apply_removals(conn: sqlite3.Connection, run_id: int, now: str, complete: set[str]) -> int:
+    """Ratings and list entries this run didn't see were removed on TMDB. Only lists in
+    `complete` ("movie/rated", "tv/watchlist") were read whole, so only they lose entries."""
+    removed = 0
+    for kind in MEDIA:
+        if f"{kind}/rated" not in complete:
+            continue
+        gone = conn.execute(
+            "SELECT tmdb_id FROM stg_tmdb_account_ratings "
+            "WHERE media_type = ? AND removed_at IS NULL AND last_seen_run_id <> ?",
+            (kind, run_id),
+        ).fetchall()
+        conn.execute(
+            "UPDATE stg_tmdb_account_ratings SET removed_at = ? "
+            "WHERE media_type = ? AND removed_at IS NULL AND last_seen_run_id <> ?",
+            (now, kind, run_id),
+        )
+        for (tmdb_id,) in gone:
+            item_id = core.find_item(conn, SOURCE, ID_TYPES[kind], str(tmdb_id))
+            if item_id is not None:
+                core.delete_rating(conn, item_id, SOURCE)
+                core.delete_event(conn, SOURCE, f"{kind}:{tmdb_id}:rated")
+        removed += len(gone)
+    for kind in MEDIA:
+        for name in LISTS:
+            if f"{kind}/{name}" not in complete:
+                continue
+            lists_gone = conn.execute(
+                "SELECT tmdb_id FROM stg_tmdb_account_lists WHERE media_type = ? "
+                "AND list_name = ? AND removed_at IS NULL AND last_seen_run_id <> ?",
+                (kind, name, run_id),
+            ).fetchall()
             conn.execute(
-                "DELETE FROM core_curation WHERE item_id = ? AND source = ? AND curation_type = ?",
-                (item_id, SOURCE, LISTS[name]),
+                "UPDATE stg_tmdb_account_lists SET removed_at = ? WHERE media_type = ? "
+                "AND list_name = ? AND removed_at IS NULL AND last_seen_run_id <> ?",
+                (now, kind, name, run_id),
             )
-    return len(gone)
+            for (tmdb_id,) in lists_gone:
+                item_id = core.find_item(conn, SOURCE, ID_TYPES[kind], str(tmdb_id))
+                if item_id is not None:
+                    conn.execute(
+                        "DELETE FROM core_curation WHERE item_id = ? AND source = ? "
+                        "AND curation_type = ?",
+                        (item_id, SOURCE, LISTS[name]),
+                    )
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +506,11 @@ def fetch_details(
                 payload=response.data,
             )
             save_details(conn, kind, response.data, raw_id, now.strftime(TIMESTAMP_FORMAT))
+            # Back on TMDB after a 404: suggestions may name it again.
+            conn.execute(
+                "DELETE FROM stg_tmdb_fetches WHERE tmdb_id = ? AND method = ?",
+                (tmdb_id, f"gone_{kind}"),
+            )
             _load_core(conn, kind, tmdb_id)
             run.pages_fetched += 1
             run.save()

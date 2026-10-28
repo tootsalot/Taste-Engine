@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -274,6 +275,10 @@ def refresh_recommendations(
     return counts
 
 
+_HARDCOVER_LOCKS: dict[str, threading.Lock] = {}
+_HARDCOVER_LOCKS_GUARD = threading.Lock()
+
+
 def hardcover_tokens(
     profile_id: str,
     store: SecretStore,
@@ -282,10 +287,15 @@ def hardcover_tokens(
 ) -> hardcover_auth.Tokens:
     """The stored Hardcover tokens, refreshed first when the access token is close to
     running out. The new pair is saved before it's used: the old refresh token is dead."""
-    tokens = credentials.hardcover(profile_id, store)
     now = datetime.fromtimestamp(clock(), timezone.utc) if clock else datetime.now(timezone.utc)
-    if tokens.due(now):
-        client = client_factory([tokens.access, tokens.refresh])
-        tokens = hardcover_auth.refresh(client, tokens.refresh, now)
-        credentials.save_hardcover(profile_id, store, tokens)
+    # One refresh at a time per profile, reading the tokens inside the lock: a second
+    # caller then gets the pair the first one saved instead of using the dead token again.
+    with _HARDCOVER_LOCKS_GUARD:
+        lock = _HARDCOVER_LOCKS.setdefault(profile_id, threading.Lock())
+    with lock:
+        tokens = credentials.hardcover(profile_id, store)
+        if tokens.due(now):
+            client = client_factory([tokens.access, tokens.refresh])
+            tokens = hardcover_auth.refresh(client, tokens.refresh, now)
+            credentials.save_hardcover(profile_id, store, tokens)
     return tokens

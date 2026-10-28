@@ -217,11 +217,15 @@ class RecapPage(LazyPage, QWidget):
         super().__init__()
         self.ctx = ctx
         self.profile_id: str | None = None
-        self.period = Period("month", "2000-01")
+        self.period = Period("month", "2000-01")  # the one chosen
+        self.shown = self.period  # the one whose cards are on screen, which saves use
         self.data: recap.RecapData | None = None
         self.cards: list[tuple[str, QImage]] = []
         self.worker: RecapWorker | None = None
         self.workers: list[RecapWorker] = []  # kept alive until they finish
+        # Chosen while a drawing was still running: drawn once it ends. Clicking through
+        # months quickly then draws the last one, not one thread per click.
+        self.pending: Period | None = None
         self.saved_path: Path | None = None
         self.waiting = False  # the latest drawing hasn't arrived yet
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -394,6 +398,11 @@ class RecapPage(LazyPage, QWidget):
             else ""
         )
         self.status.setText("Drawing…")
+        if self.worker is not None and self.worker.isRunning():
+            self.pending = period
+            self.waiting = True
+            self._refresh_buttons()
+            return
         self._start(RecapWorker(self.profile_id, self.ctx.art.cache, self.ctx.now(), period))
 
     def lazy_refresh(self) -> None:  # LazyPage: after a sync, when shown
@@ -405,7 +414,9 @@ class RecapPage(LazyPage, QWidget):
 
     def _start(self, worker: RecapWorker) -> RecapWorker:
         self.worker = worker
+        self.pending = None
         self.waiting = True
+        self._refresh_buttons()
         # Bound methods, not lambdas: Qt drops them when the page is deleted, so a result
         # that arrives after that never reaches a widget that's gone.
         worker.ready.connect(self._worker_ready)
@@ -418,21 +429,25 @@ class RecapPage(LazyPage, QWidget):
 
     def _worker_ready(self, kind: str, key: str, data, cards: list) -> None:
         worker = self.sender()
-        if worker is not self.worker:
+        if worker is not self.worker or self.pending is not None:
             return  # only the latest request is shown; an older one finishing late is ignored
         self._on_ready(kind, key, data, cards)
         if getattr(worker, "rebuild", False):
             self.status.setText(rebuilt_line(self.period.label, worker.replaced, self.folder()))
 
     def _worker_failed(self, text: str) -> None:
-        if self.sender() is self.worker:
+        if self.sender() is self.worker and self.pending is None:
             self.waiting = False
+            self._refresh_buttons()
         self.status.setText(text)
 
     def _worker_finished(self) -> None:
         worker = self.sender()
         if worker in self.workers:
             self.workers.remove(worker)
+        if worker is self.worker and self.pending is not None and self.profile_id:
+            period = self.pending
+            self._start(RecapWorker(self.profile_id, self.ctx.art.cache, self.ctx.now(), period))
 
     def is_busy(self) -> bool:
         """Until the latest cards have arrived (a thread can finish before its result does)."""
@@ -440,6 +455,7 @@ class RecapPage(LazyPage, QWidget):
 
     def _on_ready(self, kind: str, key: str, data, cards: list) -> None:
         self.waiting = False
+        self.shown = Period(kind, key)
         self.data = data
         has = recap.has_data(data)
         same = self.cards and [n for n, _ in self.cards] == [n for n, _ in cards]
@@ -500,7 +516,9 @@ class RecapPage(LazyPage, QWidget):
         self.prev_card.setEnabled(index > 0)
         self.next_card.setEnabled(index < count - 1)
         for button in (self.save_button, self.save_all_button, self.rebuild_button):
-            button.setEnabled(count > 0)
+            # Not while another period's cards are on their way: these would be saved
+            # under the wrong name.
+            button.setEnabled(count > 0 and not self.waiting)
         self.save_all_button.setText(f"Save all {count} cards" if count else "Save all cards")
         self.position.setText(f"Card {index + 1} of {count}" if count else "")
         for i, thumb in enumerate(self.thumbs):
@@ -542,14 +560,14 @@ class RecapPage(LazyPage, QWidget):
             return None
         # Which deck this card came from, so a later Rebuild can match it by card.
         recap.remember_saved_names(
-            recap.folder(self.profile_id, self.period), [name for name, _ in self.cards]
+            recap.folder(self.profile_id, self.shown), [name for name, _ in self.cards]
         )
         return path
 
     def save_card(self, folder: str | None = None) -> Path | None:
         """Save the card on screen. The first time it asks where; after that it goes
         straight there. `folder` stands in for the first-time question (tests)."""
-        if not self.cards or self.data is None:
+        if not self.cards or self.data is None or self.waiting:
             return None
         target = self._target(folder)
         if target is None:
@@ -562,7 +580,7 @@ class RecapPage(LazyPage, QWidget):
 
     def save_all(self, folder: str | None = None) -> list[Path]:
         """Every card of this recap, to the same folder."""
-        if not self.cards or self.data is None:
+        if not self.cards or self.data is None or self.waiting:
             return []
         target = self._target(folder)
         if target is None:

@@ -8,7 +8,7 @@ import sqlite3
 from datetime import date
 from typing import Any
 
-from taste import settings, themes
+from taste import activity, settings, themes
 from taste.recommend import experiments, selection
 from taste.recommend.model import (
     FILM_PRIOR_VOTES,
@@ -173,9 +173,16 @@ def _screen_recommendations(
             (kind,),
         )
     }
-    sources: dict[int, list[tuple[float, str, float]]] = {}
-    for rec_id, title, rating, position in conn.execute(
-        f"SELECT r.recommended_id, m.{title_column}, a.rating, r.position "
+    # Answered 404 on its details (tmdb.fetch_details): cached facts stay, but it's gone.
+    unavailable = {
+        r[0]
+        for r in conn.execute(
+            "SELECT tmdb_id FROM stg_tmdb_fetches WHERE method = ?", (f"gone_{kind}",)
+        )
+    }
+    sources: dict[int, list[tuple[float, str, float, int]]] = {}
+    for rec_id, title, rating, position, seed_id in conn.execute(
+        f"SELECT r.recommended_id, m.{title_column}, a.rating, r.position, r.tmdb_id "
         f"FROM {rec_table} r "
         "JOIN stg_tmdb_account_ratings a ON a.tmdb_id = r.tmdb_id AND a.media_type = ? "
         f"JOIN {table} m ON m.tmdb_id = r.tmdb_id "
@@ -183,9 +190,25 @@ def _screen_recommendations(
         (kind, mine if mine is not None else 11),
     ):
         weight = (rating - (mine or 0)) / (1 + position / 10)
-        sources.setdefault(rec_id, []).append((weight, title, rating))
+        sources.setdefault(rec_id, []).append((weight, title, rating, seed_id))
+    hidden = activity.hidden_items(conn)
+    if hidden:
+        # A title recorded as the same item as an adult MAL show still steers the picks
+        # (its rating stays in support), but is never named on a card.
+        marks = ", ".join("?" for _ in hidden)
+        unnamed = {
+            int(r[0])
+            for r in conn.execute(
+                "SELECT external_id FROM core_item_external_ids WHERE source = ? "
+                f"AND id_type = ? AND item_id IN ({marks})",
+                (tmdb.SOURCE, tmdb.ID_TYPES[kind], *hidden),
+            )
+        }
+        sources = {
+            rec_id: [s for s in found if s[3] not in unnamed] for rec_id, found in sources.items()
+        }
     eligible = {}
-    for tmdb_id in (set(support) | watchlist) - rated:
+    for tmdb_id in (set(support) | watchlist) - rated - unavailable:
         f = facts.get(tmdb_id)
         if not f or f["vote_average"] is None or str(tmdb_id) in dismissed:
             continue
@@ -253,7 +276,7 @@ def _screen_recommendations(
         if tmdb_id in watchlist:
             rec.badge = "On your watchlist"
         best = sorted(sources.get(tmdb_id, []), reverse=True)[:MAX_REASON_SEEDS]
-        seeds = [(title, rating) for _, title, rating in best]
+        seeds = [(title, rating) for _, title, rating, _ in best]
         liked, harsh = _genre_leans(model, f["genres"])
         rec.reasons.extend(
             _because(seeds, liked, harsh, noun="films" if kind == "movie" else "shows")

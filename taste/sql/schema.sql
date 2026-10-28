@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS sync_lastfm_windows (
     to_unix          INTEGER NOT NULL,
     cursor_unix      INTEGER,
     status           TEXT NOT NULL,
-    completed_at     TEXT
+    completed_at     TEXT,
+    username         TEXT NOT NULL DEFAULT ''
 );
 
 -- ---------------------------------------------------------------------------
@@ -244,7 +245,8 @@ CREATE TABLE IF NOT EXISTS stg_hardcover_books (
     description      TEXT,
     users_count      INTEGER,
     users_read_count INTEGER,
-    details_at       TEXT
+    details_at       TEXT,
+    unavailable_at   TEXT
 );
 
 -- ---------------------------------------------------------------------------
@@ -516,7 +518,8 @@ CREATE TABLE IF NOT EXISTS stg_mal_anime_details (
     mal_anime_id   INTEGER NOT NULL PRIMARY KEY,
     fetched_at     TEXT NOT NULL,
     raw_page_id    INTEGER REFERENCES raw_api_pages (raw_page_id),
-    fields_version INTEGER NOT NULL DEFAULT 0
+    fields_version INTEGER NOT NULL DEFAULT 0,
+    unavailable_at TEXT
 );
 
 -- Saving, deduplicating, and pruning raw pages look them up by request and check

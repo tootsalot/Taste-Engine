@@ -122,16 +122,31 @@ def sync(
         lookback_seconds = profile_settings.get(conn, "lastfm_lookback_days") * DAY_SECONDS
     history = profile_settings.get(conn, "lastfm_history")
     floor = 0 if history == "all" else max(0, now() - int(history) * YEAR_SECONDS)
+    account = settings.username.lower()  # Last.fm usernames ignore case
     try:
         # Catch up on anything a crashed run left in staging but not in core.
         with transaction(conn):
             events_loaded += load_core(conn, scope)
+            # Windows say what one account's history covers. Those from before windows
+            # kept a username were this account's; another account's open windows stop.
+            conn.execute(
+                "UPDATE sync_lastfm_windows SET username = ? WHERE username = ''", (account,)
+            )
+            conn.execute(
+                "UPDATE sync_lastfm_windows SET status = 'superseded' "
+                "WHERE status = 'open' AND username <> ?",
+                (account,),
+            )
 
         open_windows = conn.execute(
-            "SELECT * FROM sync_lastfm_windows WHERE status = 'open' ORDER BY window_id"
+            "SELECT * FROM sync_lastfm_windows WHERE status = 'open' AND username = ? "
+            "ORDER BY window_id",
+            (account,),
         ).fetchall()
         high_water = conn.execute(
-            "SELECT MAX(to_unix) FROM sync_lastfm_windows WHERE status = 'complete'"
+            "SELECT MAX(to_unix) FROM sync_lastfm_windows WHERE status = 'complete' "
+            "AND username = ?",
+            (account,),
         ).fetchone()[0]
         if open_windows:
             run.set_mode("resume")
@@ -143,21 +158,23 @@ def sync(
             _fetch_window(conn, client, settings, run, window, out, page_limit)
 
         high_water = conn.execute(
-            "SELECT MAX(to_unix) FROM sync_lastfm_windows WHERE status = 'complete'"
+            "SELECT MAX(to_unix) FROM sync_lastfm_windows WHERE status = 'complete' "
+            "AND username = ?",
+            (account,),
         ).fetchone()[0]
         from_unix = floor if high_water is None else max(0, high_water - lookback_seconds)
-        _fetch_window(
-            conn, client, settings, run, _open_window(conn, run, from_unix, now()), out, page_limit
-        )
+        window = _open_window(conn, run, account, from_unix, now())
+        _fetch_window(conn, client, settings, run, window, out, page_limit)
         oldest = conn.execute(
-            "SELECT MIN(from_unix) FROM sync_lastfm_windows WHERE status = 'complete'"
+            "SELECT MIN(from_unix) FROM sync_lastfm_windows WHERE status = 'complete' "
+            "AND username = ?",
+            (account,),
         ).fetchone()[0]
         if oldest is not None and oldest > floor:
             # A longer history was chosen after the first sync: read the older plays once.
             out("Last.fm: reading older plays for the longer history setting")
-            _fetch_window(
-                conn, client, settings, run, _open_window(conn, run, floor, oldest), out, page_limit
-            )
+            window = _open_window(conn, run, account, floor, oldest)
+            _fetch_window(conn, client, settings, run, window, out, page_limit)
 
         with transaction(conn):
             events_loaded += load_core(conn, scope)
@@ -193,11 +210,13 @@ def sync(
 # ---------------------------------------------------------------------------
 
 
-def _open_window(conn: sqlite3.Connection, run: SyncRun, from_unix: int, to_unix: int):
+def _open_window(
+    conn: sqlite3.Connection, run: SyncRun, account: str, from_unix: int, to_unix: int
+):
     window_id = conn.execute(
-        "INSERT INTO sync_lastfm_windows (opened_by_run_id, from_unix, to_unix, status) "
-        "VALUES (?, ?, ?, 'open')",
-        (run.run_id, from_unix, to_unix),
+        "INSERT INTO sync_lastfm_windows (opened_by_run_id, from_unix, to_unix, status, "
+        "username) VALUES (?, ?, ?, 'open', ?)",
+        (run.run_id, from_unix, to_unix, account),
     ).lastrowid
     return conn.execute(
         "SELECT * FROM sync_lastfm_windows WHERE window_id = ?", (window_id,)
@@ -233,8 +252,17 @@ def _fetch_window(
         }
         response = client.get_json(API_URL, params=params, checker=check_response)
         recent = response.data["recenttracks"]
-        total_pages = int((recent.get("@attr") or {}).get("totalPages") or 0)
-        scrobbles = parse_tracks(recent.get("track"))
+        # A page that doesn't say how many pages there are, or has none of its tracks,
+        # can't close the window: read as complete, the history would skip those plays.
+        attr = recent.get("@attr") if isinstance(recent, dict) else None
+        try:
+            total_pages = int(attr["totalPages"])
+        except (KeyError, TypeError, ValueError):
+            total_pages = -1
+        tracks = recent.get("track") if isinstance(recent, dict) else None
+        if total_pages < 0 or (page <= total_pages and not tracks):
+            raise ApiError("Last.fm sent an incomplete page of plays", retryable=False)
+        scrobbles = parse_tracks(tracks)
 
         with transaction(conn):
             raw_id = store_page(
@@ -340,8 +368,25 @@ def _insert_scrobbles(conn: sqlite3.Connection, scrobbles: list[dict[str, Any]],
 # ---------------------------------------------------------------------------
 
 
-def event_key(played_at_unix: int, artist_name: str, track_name: str) -> str:
+def _pipe_key(played_at_unix: int, artist_name: str, track_name: str) -> str:
     return f"{played_at_unix}|{artist_name}|{track_name}"
+
+
+def event_key(played_at_unix: int, artist_name: str, track_name: str) -> str:
+    """'unix|artist|track'. A name with '|' in it would make two plays share that key
+    ('A|B' + 'C' and 'A' + 'B|C'), so those use KEY_SEPARATOR instead. Every other key
+    keeps the form it always had."""
+    if "|" in artist_name or "|" in track_name:
+        return KEY_SEPARATOR.join((str(played_at_unix), artist_name, track_name))
+    return _pipe_key(played_at_unix, artist_name, track_name)
+
+
+# event_key in SQL, for the staging rows not yet in core.
+_EVENT_KEY_SQL = (
+    "CASE WHEN instr(s.artist_name, '|') > 0 OR instr(s.track_name, '|') > 0 "
+    "THEN CAST(s.played_at_unix AS TEXT) || char(31) || s.artist_name || char(31) || s.track_name "
+    "ELSE CAST(s.played_at_unix AS TEXT) || '|' || s.artist_name || '|' || s.track_name END"
+)
 
 
 def load_core(conn: sqlite3.Connection, capture_scope: str) -> int:
@@ -352,7 +397,7 @@ def load_core(conn: sqlite3.Connection, capture_scope: str) -> int:
     rows = conn.execute(
         "SELECT s.* FROM stg_lastfm_scrobbles s WHERE NOT EXISTS ("
         "  SELECT 1 FROM core_behavior_events e WHERE e.source = ? AND e.source_event_key = "
-        "  CAST(s.played_at_unix AS TEXT) || '|' || s.artist_name || '|' || s.track_name"
+        f"  {_EVENT_KEY_SQL}"
         ") ORDER BY s.played_at_unix",
         (SOURCE,),
     ).fetchall()
@@ -425,6 +470,12 @@ def load_core(conn: sqlite3.Connection, capture_scope: str) -> int:
             if row["image_url"]:
                 core.set_item_image(conn, album_id, SOURCE, "cover", row["image_url"])
 
+        key = event_key(row["played_at_unix"], row["artist_name"], row["track_name"])
+        legacy = _pipe_key(row["played_at_unix"], row["artist_name"], row["track_name"])
+        if key != legacy:
+            # Loaded before under the shared '|' key: replace that event. Only names with
+            # '|' make a key with more than two, so it can't be another play's own key.
+            core.delete_event(conn, SOURCE, legacy)
         added += core.upsert_event(
             conn,
             item_id=track_id,
@@ -435,9 +486,7 @@ def load_core(conn: sqlite3.Connection, capture_scope: str) -> int:
             time_precision="second",
             time_basis="source_timestamp",
             capture_scope=capture_scope,
-            source_event_key=event_key(
-                row["played_at_unix"], row["artist_name"], row["track_name"]
-            ),
+            source_event_key=key,
         )
     return added
 

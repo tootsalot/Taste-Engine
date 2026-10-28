@@ -175,3 +175,24 @@ def test_test_connection_reports_under_the_card(window, qtbot):
     qtbot.waitUntil(lambda: "connected as example_user" in card.message.text())
     assert card.message.text() == "MyAnimeList: connected as example_user."
     assert MAL_KEY not in card.message.text()
+
+
+def test_a_tmdb_sign_in_saves_to_the_profile_that_started_it(window, qtbot):
+    window.new_profile(("alpha", "Alpha"))
+    shown(window, qtbot)
+    card = window.settings.sources
+    card.key_inputs["TMDB_READ_TOKEN"].setText(READ_TOKEN)
+    card.save_source("tmdb")
+    window.new_profile(("beta", "Beta"))
+
+    def approve(url):
+        card.set_profile("beta")  # switched before the approval came back
+        return True
+
+    card.set_profile("alpha")
+    card.connect_tmdb(approve=approve)
+    qtbot.waitUntil(lambda: card.tmdb_worker is not None and not card.tmdb_worker.isRunning())
+    qtbot.wait(50)
+    store = window.ctx.store
+    assert not credentials.tmdb_connected("beta", store)
+    assert store.get("beta", "TMDB_USER_TOKEN") is None

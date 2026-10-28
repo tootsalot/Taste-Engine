@@ -450,13 +450,15 @@ def test_export_one_and_all(window, qtbot, tmp_path):
     with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
         window.dashboard.start_sync("all")
     page = window.reports
-    path = page.export_report("rpt_lastfm_by_hour", str(tmp_path / "hour.csv"))
-    with open(path, encoding="utf-8-sig", newline="") as handle:
+    with qtbot.waitSignal(page.exported, timeout=15000) as exported:
+        page.export_report("rpt_lastfm_by_hour", str(tmp_path / "hour.csv"))
+    with open(exported.args[0], encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.reader(handle))
     assert rows[0][:3] == ["local_hour", "plays", "pct_of_plays"]
     assert len(rows) == 25
-    folder = page.export_all(str(tmp_path))
-    assert len(list(folder.glob("*.csv"))) == 14
+    with qtbot.waitSignal(page.exported, timeout=15000) as exported:
+        page.export_all(str(tmp_path))
+    assert len(list(exported.args[0].glob("*.csv"))) == 14
 
 
 def test_delete_profile_needs_confirmation(window, qtbot):

@@ -234,3 +234,66 @@ def test_the_approval_link_keeps_the_token_one_value_on_tmdb():
         "request_token": ["abc&next=https://example.com/#x"]
     }
     assert parts.fragment == ""
+
+
+def test_a_page_without_results_fails_the_sync_and_keeps_every_rating(conn, make_client):
+    fake = FakeTmdb()
+    client, _ = client_for(make_client, fake)
+    tmdb.sync(conn, client, CFG, out=lambda m: None)
+
+    def broken(url, params):
+        response = fake(url, params)
+        if "/rated" in url:
+            response._body.pop("results")
+        return response
+
+    broken_client, _ = client_for(make_client, broken)
+    result = tmdb.sync(conn, broken_client, CFG, out=lambda m: None)
+    assert result.status == "failed"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM stg_tmdb_account_ratings WHERE removed_at IS NULL"
+    ).fetchone()[0] == len(fake.ratings)
+
+
+def test_a_list_past_the_page_limit_removes_nothing(conn, make_client, monkeypatch):
+    fake = FakeTmdb(page_size=1)
+    client, _ = client_for(make_client, fake)
+    tmdb.sync(conn, client, CFG, out=lambda m: None)
+    monkeypatch.setattr(tmdb, "MAX_PAGES", 1)  # the films' rated list has 4 pages now
+    result = tmdb.sync(conn, client, CFG, out=lambda m: None)
+    assert result.status == "success" and result.removed == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM stg_tmdb_account_ratings WHERE removed_at IS NULL"
+    ).fetchone()[0] == len(fake.ratings)
+
+
+def test_a_removal_between_pages_doesnt_drop_the_entry_that_moved_up(conn, make_client):
+    fake = FakeTmdb(page_size=2)
+    client, _ = client_for(make_client, fake)
+    tmdb.sync(conn, client, CFG, out=lambda m: None)
+    reads = {"n": 0}
+
+    def shifting(url, params):
+        # Film 11 is removed on TMDB after page 1 of the first read, so film 13 moves
+        # from page 2 to page 1 and the first read sees it on neither page.
+        if url.endswith("/movie/rated"):
+            reads["n"] += 1
+            if reads["n"] == 2:
+                fake.ratings = [r for r in fake.ratings if r[1] != 11]
+        return fake(url, params)
+
+    shifting_client, _ = client_for(make_client, shifting)
+    result = tmdb.sync(conn, shifting_client, CFG, out=lambda m: None)
+    assert result.removed == 0  # 11 was read before it went; 13 was found again
+
+    def removed():
+        return {
+            r[0]
+            for r in conn.execute(
+                "SELECT tmdb_id FROM stg_tmdb_account_ratings WHERE removed_at IS NOT NULL"
+            )
+        }
+
+    assert removed() == set()
+    assert tmdb.sync(conn, client, CFG, out=lambda m: None).removed == 1
+    assert removed() == {11}

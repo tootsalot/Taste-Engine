@@ -207,7 +207,11 @@ class MainWindow(QMainWindow):
             role="muted",
             wrap=True,
         )
-        text.setMaximumWidth(460)
+        # A wrapped label placed with an alignment gets its size hint, whose height is for
+        # some other width: the last lines were cut off. Fix the width, then the height.
+        text.setFixedWidth(460)
+        text.ensurePolished()  # the muted role's font, before measuring with it
+        text.setMinimumHeight(text.heightForWidth(460))
         text.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(text, 0, Qt.AlignmentFlag.AlignHCenter)
         button = QPushButton("Create a profile")

@@ -359,9 +359,9 @@ def _upsert_stg_list_entry(
     run_id: int,
     raw_id: int,
     now: str,
-) -> tuple[str, int | None]:
+) -> tuple[str, sqlite3.Row | None]:
     """Upsert one list entry. Returns ('inserted', 'updated', or 'unchanged') and the
-    episodes watched before this sync (None for an entry seen for the first time)."""
+    entry as it was before this sync (None for an entry seen for the first time)."""
     values = {
         "status": ls["status"],
         "score": ls.get("score") or None,  # MAL uses 0 for "not scored"
@@ -400,7 +400,7 @@ def _upsert_stg_list_entry(
         "last_raw_page_id = ?, removed_at = NULL WHERE mal_anime_id = ?",
         (*values.values(), run_id, raw_id, anime_id),
     )
-    before = None if existing["removed_at"] is not None else existing["num_episodes_watched"]
+    before = None if existing["removed_at"] is not None else existing
     return ("updated" if changed else "unchanged"), before
 
 
@@ -481,8 +481,9 @@ def load_anime_core(conn: sqlite3.Connection, anime_id: int) -> int:
     return item_id
 
 
-def _load_core(conn: sqlite3.Connection, anime_id: int, episodes_before: int | None = None) -> None:
-    """Load one anime and my list entry for it from staging into core."""
+def _load_core(conn: sqlite3.Connection, anime_id: int, before: sqlite3.Row | None = None) -> None:
+    """Load one anime and my list entry for it from staging into core. `before` is the
+    list entry as it was before this sync."""
     item_id = load_anime_core(conn, anime_id)
     anime = conn.execute(
         "SELECT num_episodes FROM stg_mal_anime WHERE mal_anime_id = ?", (anime_id,)
@@ -518,7 +519,24 @@ def _load_core(conn: sqlite3.Connection, anime_id: int, episodes_before: int | N
     )
 
     _load_events(conn, item_id, anime_id, entry)
-    _load_episode_events(conn, item_id, anime_id, entry, episodes_before)
+    _load_episode_events(conn, item_id, anime_id, entry, before)
+
+
+def _watch_cycle(entry: sqlite3.Row, before: sqlite3.Row) -> str:
+    """Which watch new episodes belong to: 'w' for the first, 'r1', 'r2'... for rewatches.
+
+    Finishing a rewatch turns is_rewatching off and counts it in num_times_rewatched in
+    the same edit, so the episodes that finished it still belong to that rewatch, not to
+    the first watch."""
+    times_before = before["num_times_rewatched"] or 0
+    times = entry["num_times_rewatched"] or 0
+    if before["is_rewatching"]:
+        return f"r{times_before + 1}"
+    if entry["is_rewatching"]:
+        return f"r{times + 1}"
+    if times > times_before:
+        return f"r{times}"
+    return "w"
 
 
 def _load_episode_events(
@@ -526,7 +544,7 @@ def _load_episode_events(
     item_id: int,
     anime_id: int,
     entry: sqlite3.Row,
-    before: int | None,
+    before: sqlite3.Row | None,
 ) -> None:
     """One episode_watched event per episode my progress went up by since the last sync.
 
@@ -536,11 +554,11 @@ def _load_episode_events(
     list were watched. Rewatches get their own keys, so watching again counts again.
     """
     after = entry["num_episodes_watched"] or 0
-    if before is None or after <= before:
+    if before is None or after <= (before["num_episodes_watched"] or 0):
         return
-    watch = f"r{(entry['num_times_rewatched'] or 0) + 1}" if entry["is_rewatching"] else "w"
+    watch = _watch_cycle(entry, before)
     occurred_at = entry["mal_updated_at"]
-    for episode in range(before + 1, after + 1):
+    for episode in range(before["num_episodes_watched"] + 1, after + 1):
         core.upsert_event(
             conn,
             item_id=item_id,

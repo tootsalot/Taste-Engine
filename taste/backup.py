@@ -129,7 +129,10 @@ def _version(text: object) -> tuple[int, ...] | None:
 
 
 def _manifest(archive: zipfile.ZipFile) -> dict:
-    manifest = json.loads(archive.read("manifest.json"))
+    try:
+        manifest = json.loads(archive.read("manifest.json"))
+    except (ValueError, RecursionError):  # deeply nested JSON exhausts the parser's stack
+        raise BackupError("This file isn't a profile backup, or it's damaged.") from None
     if (
         not isinstance(manifest, dict)
         or type(manifest.get("format")) is not int

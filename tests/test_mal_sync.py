@@ -283,3 +283,32 @@ def test_an_entry_skipped_by_paging_is_not_removed(conn, make_client):
     fake.entries = shows[:4]
     fake.shift_once, fake.reads = False, 0
     assert mal.sync(conn, client, cfg, out=lambda m: None).rows_removed == 1
+
+
+def test_finishing_a_rewatch_keeps_the_first_watch_episodes(conn, make_client):
+    node = load_fixture("mal_animelist_page1.json")["data"][0]["node"]
+    states = [
+        ("watching", 0, False, 0, "2026-01-01T10:00:00+00:00"),
+        ("completed", 4, False, 0, "2026-01-02T10:00:00+00:00"),
+        ("completed", 0, True, 0, "2026-02-01T10:00:00+00:00"),  # a rewatch starts over
+        ("completed", 3, True, 0, "2026-02-02T10:00:00+00:00"),
+        ("completed", 4, False, 1, "2026-02-03T10:00:00+00:00"),  # and finishes
+    ]
+    for status, episodes, rewatching, times, updated in states:
+        list_status = {
+            "status": status,
+            "score": 8,
+            "num_episodes_watched": episodes,
+            "is_rewatching": rewatching,
+            "num_times_rewatched": times,
+            "updated_at": updated,
+        }
+        page = {"data": [{"node": node, "list_status": list_status}], "paging": {}}
+        run_sync(conn, make_client, lambda url, params, page=page: FakeResponse(200, page))
+    events = {k: v for k, v in events_by_anime(conn).items() if ":ep:" in k}
+    prefix = f"{node['id']}:ep:"
+    assert sorted(k.removeprefix(prefix) for k in events) == [
+        "r1:1", "r1:2", "r1:3", "r1:4", "w:1", "w:2", "w:3", "w:4",
+    ]  # fmt: skip
+    assert events[f"{prefix}w:4"]["occurred_at_utc"] == "2026-01-02 10:00:00"
+    assert events[f"{prefix}r1:4"]["occurred_at_utc"] == "2026-02-03 10:00:00"

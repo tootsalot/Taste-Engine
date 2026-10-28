@@ -134,3 +134,34 @@ def test_a_profile_whose_file_is_locked_keeps_its_keys(monkeypatch):
         profiles.delete("locked", store=store)
     assert profiles.exists("locked")
     assert store.get("locked", "MAL_CLIENT_ID") == "example-client-id"
+
+
+def test_migration_keeps_rows_still_in_the_write_ahead_log(tmp_path):
+    import shutil
+
+    from taste import db
+
+    # A legacy database whose last commit is only in taste.db-wal, as after a crash.
+    source = tmp_path / "live.db"
+    live = db.connect(source)
+    live.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    live.execute("PRAGMA wal_autocheckpoint = 0")
+    settings.set_value(live, "display_name", "Example Legacy")
+    legacy = profiles.legacy_db()
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(source, legacy)
+    shutil.copy(f"{source}-wal", f"{legacy}-wal")
+    live.close()
+
+    assert profiles.migrate_legacy() is True
+    assert profiles.display_name(profiles.DEFAULT_PROFILE) == "Example Legacy"
+    assert not legacy.exists() and not profiles.Path(f"{legacy}-wal").exists()
+
+
+def test_uninstall_cleanup_deletes_retained_recaps():
+    profiles.create("me")
+    recaps = config.data_dir() / "recaps" / "me" / "2026-09"
+    recaps.mkdir(parents=True)
+    (recaps / "recap.json").write_text("{}", encoding="utf-8")
+    assert profiles.delete_all_data(SecretStore(backend=FakeKeyring())) is not None
+    assert not (config.data_dir() / "recaps").exists()

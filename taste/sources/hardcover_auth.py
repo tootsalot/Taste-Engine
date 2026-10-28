@@ -209,6 +209,9 @@ def exchange(client: HttpClient, sign_in: SignIn, code: str, now: datetime | Non
 def refresh(client: HttpClient, refresh_token: str, now: datetime | None = None) -> Tokens:
     """New tokens from the refresh token. The old refresh token stops working."""
     try:
+        # Never sent twice: after a reply that didn't arrive (a timeout, a 502) Hardcover
+        # may already have used the token, and a second use can end the whole sign-in.
+        # The next sync asks again.
         response = client.request_json(
             "POST",
             TOKEN_URL,
@@ -219,6 +222,7 @@ def refresh(client: HttpClient, refresh_token: str, now: datetime | None = None)
             },
             headers={"User-Agent": USER_AGENT},
             checker=check_token_response,
+            max_retries=0,
         )
     except ApiError as exc:
         if exc.status in (400, 401):  # run out (about six months) or signed out on Hardcover

@@ -56,8 +56,9 @@ The Last.fm resume ledger. Each sync fetches a fixed time window `[from_unix, to
 | from_unix | INTEGER | Inclusive lower bound (Unix seconds). 0 means the start of history. Incremental windows start 14 days before the previous window's end, to catch late scrobbles. |
 | to_unix | INTEGER | Exclusive upper bound, fixed when the window opens, so new scrobbles can't shift the pages mid-run. |
 | cursor_unix | INTEGER | Oldest scrobble committed so far in this window. A resumed run requests `to = cursor_unix + 1`. |
-| status | TEXT | `open` (unfinished, the next run resumes it) or `complete`. |
+| status | TEXT | `open` (unfinished, the next run resumes it), `complete`, or `superseded` (left open by another Last.fm account, never resumed). |
 | completed_at | TEXT | When the last page was committed. |
+| username | TEXT | The Last.fm account the window read, in lowercase. Each account has its own windows, so a new username reads its own history from the start. |
 
 ---
 
@@ -198,6 +199,7 @@ Which anime have had their MAL details fetched (`/anime/{id}`), and when. The de
 | fetched_at | TEXT | When the details were last fetched (UTC). |
 | raw_page_id | INTEGER FK raw_api_pages | The raw response. |
 | fields_version | INTEGER | Which set of detail fields the fetch asked for (2 added the synopsis and popularity). A suggested show fetched with an older set is fetched once more. |
+| unavailable_at | TEXT | When MAL last answered 404 for the show (UTC), or NULL. A show that is gone from MAL is not suggested. A later successful fetch clears it. |
 
 ### `stg_mal_anime_recommendations`
 MAL's "users who liked this also recommend" list for a show.
@@ -341,6 +343,7 @@ The book itself, refreshed on every sync.
 | description | TEXT | From a details lookup (`graphql:Books`, mode `enrich`): the book's description as plain text. |
 | users_count, users_read_count | INTEGER | How many Hardcover readers have it, and have read it. |
 | details_at | TEXT | When the details lookup last ran (UTC); refreshed after 30 days. Suggestions also include books only known from these lookups, not in my library. |
+| unavailable_at | TEXT | When a details lookup last asked for the book and Hardcover did not send it back (UTC), or NULL. Such a book is not suggested. A later lookup that finds it clears it. |
 
 ## Staging: TMDB
 

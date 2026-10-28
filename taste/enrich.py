@@ -190,7 +190,7 @@ def save_details(
         "INSERT INTO stg_mal_anime_details (mal_anime_id, fetched_at, raw_page_id, "
         "fields_version) VALUES (?, ?, ?, ?) ON CONFLICT (mal_anime_id) DO UPDATE SET "
         "fetched_at = excluded.fetched_at, raw_page_id = excluded.raw_page_id, "
-        "fields_version = excluded.fields_version",
+        "fields_version = excluded.fields_version, unavailable_at = NULL",
         (anime_id, fetched_at, raw_id, DETAIL_FIELDS_VERSION),
     )
 
@@ -235,11 +235,13 @@ def _fetch_details(
             )
         except ApiError as exc:
             if exc.status == 404:
-                # Removed from MAL. Note it so we don't ask again every run.
+                # Removed from MAL. Note it so we don't ask again every run, and so it isn't
+                # suggested from the details cached before.
                 conn.execute(
-                    "INSERT INTO stg_mal_anime_details (mal_anime_id, fetched_at) VALUES (?, ?) "
-                    "ON CONFLICT (mal_anime_id) DO UPDATE SET fetched_at = excluded.fetched_at",
-                    (anime_id, _stamp(now)),
+                    "INSERT INTO stg_mal_anime_details (mal_anime_id, fetched_at, unavailable_at) "
+                    "VALUES (?, ?, ?) ON CONFLICT (mal_anime_id) DO UPDATE SET "
+                    "fetched_at = excluded.fetched_at, unavailable_at = excluded.unavailable_at",
+                    (anime_id, _stamp(now), _stamp(now)),
                 )
                 continue
             raise

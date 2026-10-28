@@ -470,3 +470,61 @@ def test_book_suggestions_from_similar_books(conn, make_client):
     shown, _, _ = recommend.latest(conn, "book")
     assert shown and {r.kind for r in shown} == {"book"}
     assert "Example Salt Atlas" not in [r.title for r in shown]
+
+
+def _shelved(conn):
+    return {
+        r[0]
+        for r in conn.execute(
+            "SELECT user_book_id FROM stg_hardcover_user_books WHERE removed_at IS NULL"
+        )
+    }
+
+
+def test_a_library_page_without_books_fails_and_removes_nothing(conn, make_client):
+    synced(conn, make_client)
+    before = _shelved(conn)
+    fake = FakeHardcover()
+
+    def broken(url, params):
+        response = fake(url, params)
+        if fake.calls and fake.calls[-1].startswith("library"):
+            response._body["data"].pop("user_books")
+        return response
+
+    client, _ = make_client(broken)
+    result = hardcover.sync(conn, client, fake.access, lambda m: None, full=True)
+    assert result.status == "failed" and result.removed == 0
+    assert _shelved(conn) == before
+
+
+def test_a_library_past_the_page_limit_removes_nothing(conn, make_client, monkeypatch):
+    synced(conn, make_client)
+    before = _shelved(conn)
+    monkeypatch.setattr(hardcover, "PAGE_SIZE", 2)
+    monkeypatch.setattr(hardcover, "MAX_PAGES", 1)
+    result, _, _ = synced(conn, make_client, FakeHardcover(page_size=2), full=True)
+    assert result.status == "success" and result.removed == 0
+    assert _shelved(conn) == before
+
+
+def test_a_removal_between_pages_doesnt_drop_the_book_that_moved_up(conn, make_client, monkeypatch):
+    synced(conn, make_client)
+    monkeypatch.setattr(hardcover, "PAGE_SIZE", 2)
+    fake = FakeHardcover(page_size=2)
+    first = fake.library[0]["id"]
+
+    def shifting(url, params):
+        # The first book goes on Hardcover after page 1 of the first read, so every book
+        # moves up one and the first read sees the third book on neither page.
+        response = fake(url, params)
+        if fake.calls[-1] == "library:0" and fake.calls.count("library:0") == 1:
+            fake.library = fake.library[1:]
+        return response
+
+    client, _ = make_client(shifting)
+    result = hardcover.sync(conn, client, fake.access, lambda m: None, full=True)
+    assert result.status == "success" and result.removed == 0
+    assert _shelved(conn) == {e["id"] for e in fake_hardcover.LIBRARY}
+    result, _, _ = synced(conn, make_client, fake, full=True)
+    assert result.removed == 1 and first not in _shelved(conn)

@@ -422,15 +422,9 @@ def profile(
     data = data or load(conn)
     item_tags = data["item_tags"]
     samples, all_scores = defaultdict(list), defaultdict(list)
-    rows = (
-        rated_rows(data)
-        if mixed
-        else (
-            (item, source, MEDIA.get(media), mine, crowd)
-            for item, source, media, mine, crowd in data["ratings"]
-        )
-    )
-    for item, source, kind, mine, crowd in rows:
+    # By each rating's own source identity: a TMDB film recorded as the same item as a
+    # MAL show is still film evidence, though the item's own media type says anime.
+    for item, source, kind, mine, crowd in rated_rows(data):
         if item in exclude or not kind or source != SOURCES[kind] or crowd is None:
             continue
         diff = (mine - crowd) / (5 if kind == "book" else 10)
