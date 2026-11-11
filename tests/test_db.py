@@ -155,7 +155,7 @@ PLAYS = 400  # enough rows for the counts to mean something, few enough to inser
 
 def test_the_planner_gets_row_counts_for_plays_on_any_sqlite(conn):
     """With no counts SQLite read every play ever synced to answer for one month. The
-    counts must be made on every SQLite: 4.0.1's first release failed on Linux, where
+    counts must be made on every SQLite: 4.0.1's release failed on Linux, where
     3.45's PRAGMA optimize made none for a connection that had only written. Which
     index a query then starts from is SQLite's choice, so that isn't asserted here."""
     conn.execute(
