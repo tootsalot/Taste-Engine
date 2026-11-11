@@ -394,6 +394,6 @@ def test_a_scaled_display_gets_a_picture_with_enough_pixels(qtbot, tmp_path, mon
     assert tile.size() == QSize(100, 150)  # the tile itself is no bigger
     # Moved to a display at 200%: the next paint asks again, for that many pixels.
     monkeypatch.setattr(ArtTile, "devicePixelRatioF", lambda self: 2.0)
-    tile.show()
+    tile.grab()  # a paint, the same on every platform
     qtbot.waitUntil(lambda: tile._pixmap.width() == 200, timeout=5000)
     loader.shutdown()

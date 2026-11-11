@@ -150,17 +150,21 @@ def test_a_transaction_sqlite_already_rolled_back_keeps_the_real_error(conn):
     assert not conn.in_transaction
 
 
-def test_the_planner_gets_row_counts_so_a_month_of_plays_starts_from_its_dates(conn):
-    """With no counts SQLite read every play ever synced to answer for one month."""
-    from taste import activity
+PLAYS = 400  # enough rows for the counts to mean something, few enough to insert at once
 
+
+def test_the_planner_gets_row_counts_for_plays_on_any_sqlite(conn):
+    """With no counts SQLite read every play ever synced to answer for one month. The
+    counts must be made on every SQLite: 4.0.1's first release failed on Linux, where
+    3.45's PRAGMA optimize made none for a connection that had only written. Which
+    index a query then starts from is SQLite's choice, so that isn't asserted here."""
     conn.execute(
         "INSERT INTO core_items (item_id, source, media_type, title, created_at, updated_at) "
         "VALUES (1, 'lastfm', 'track', 'Example Track', '2026-01-01 00:00:00', "
         "'2026-01-01 00:00:00')"
     )
     with db.transaction(conn):
-        for event in range(1, 401):
+        for event in range(1, PLAYS + 1):
             day = f"2026-{1 + event % 12:02d}-{1 + event % 28:02d}"
             conn.execute(
                 "INSERT INTO core_behavior_events (event_id, item_id, source, event_type, "
@@ -176,12 +180,12 @@ def test_the_planner_gets_row_counts_so_a_month_of_plays_starts_from_its_dates(c
                 (event, event, f"{day} 12:00:00", day, day[:7]),
             )
     db.optimize(conn)
-    assert conn.execute("SELECT COUNT(*) FROM sqlite_stat1").fetchone()[0] > 0
-    plan = " ".join(
-        row[3]
-        for row in conn.execute(
-            f"EXPLAIN QUERY PLAN SELECT COUNT(*) {activity.PLAYS_SQL}", ("2026-09-01", "2026-10-01")
-        )
-    )
-    assert "ix_core_event_local_times_date" in plan
-    db.optimize(conn)  # again with nothing changed: harmless
+    counts = "SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx"
+    counted = [tuple(row) for row in conn.execute(counts)]
+    stats = {idx: stat for _, idx, stat in counted}
+    # The first number is the rows in the index: every play, so a span of dates is
+    # known to be a small part of them.
+    assert stats["ix_core_event_local_times_date"].split()[0] == str(PLAYS)
+    assert "core_behavior_events" in {tbl for tbl, _, _ in counted}
+    db.optimize(conn)  # again with nothing changed: the same counts
+    assert [tuple(row) for row in conn.execute(counts)] == counted

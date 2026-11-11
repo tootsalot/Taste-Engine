@@ -12,9 +12,9 @@ from pathlib import Path
 SQL_DIR = Path(__file__).resolve().parent / "sql"
 
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
-# How SQLite refreshes the row counts it plans queries from (see optimize).
-ANALYSIS_LIMIT = 1000  # index rows sampled per table: the top of SQLite's advised range
-OPTIMIZE_ALL_TABLES = 0x10002  # analyze what needs it, in every table, not only those just read
+# Index rows read per index when counting rows for the query planner (see optimize):
+# the top of the range SQLite advises, so a long history costs no more than a short one.
+ANALYSIS_LIMIT = 1000
 
 
 def connect(path: str | Path, *, setup: bool = True) -> sqlite3.Connection:
@@ -180,11 +180,15 @@ def optimize(conn: sqlite3.Connection) -> None:
     25 ms and a month's recap 116 ms; with the counts, 2 ms and 49 ms (2026-11-10).
     Runs each time the schema is set up (a profile's first open, the start of a sync or
     refresh) and again once a sync has finished. It reads a sample of each index, so it
-    stays quick on a long history, and it skips tables that haven't changed.
+    stays quick on a long history: about 10 ms on a 96 MB library.
+
+    A plain ANALYZE, not PRAGMA optimize. Before SQLite 3.46 that only looked at tables
+    the connection had already queried, and one just opened has queried none, so on
+    Linux (Ubuntu 24.04 has 3.45) no counts were ever made. ANALYZE is the same on all.
     """
     with contextlib.suppress(sqlite3.Error):  # locked or read-only: the old counts stay
         conn.execute(f"PRAGMA analysis_limit = {ANALYSIS_LIMIT}")
-        conn.execute(f"PRAGMA optimize = {OPTIMIZE_ALL_TABLES:#x}")
+        conn.execute("ANALYZE")
 
 
 @contextmanager
