@@ -144,7 +144,9 @@ class MusicView(QWidget):
         self.span = span
         conn = self.ctx.connect(self.profile_id)
         try:
-            stats = musicstats.load(conn, span)
+            # The years on the switch came from the last refresh: listing them again
+            # read every play, on each change of year.
+            stats = musicstats.load(conn, span, self.stats.years if self.stats else None)
         finally:
             conn.close()
         if self.isVisible():

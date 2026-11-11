@@ -454,11 +454,6 @@ class RecList(QWidget):
         # The width the tiles really get, which also shrinks when a scroll bar appears.
         self.scroll.viewport_resized.connect(self._fit)
 
-    @property
-    def cards(self) -> list[RecCard]:
-        """The detail card, as a list (older callers looked at a list of cards)."""
-        return [self.detail] if self.detail is not None else []
-
     def set_recs(self, recs: list[Rec], has_run: bool) -> None:
         self.recs = recs
         self.has_run = has_run
@@ -468,17 +463,28 @@ class RecList(QWidget):
         self._ctx, self._on_open, self._on_dismiss = ctx, on_open, on_dismiss
         # Only cards that weren't on screen fade in: in 2.0 every refresh, hidden pick,
         # and suggestions update faded the whole grid out and back, sometimes twice.
-        shown = {t.rec.item_key for t in self.tiles}
+        # A tile whose suggestion is the same stays as it is: building a list's tiles
+        # again took 135 ms for 60, after every hidden pick and every list a refresh saved.
+        old = {t.rec.item_key: t for t in self.tiles}
+        shown = set(old)
         for tile in self.tiles:
             self.grid.removeWidget(tile)
-            tile.deleteLater()
         self.tiles = []
         for i, rec in enumerate(self.recs):
-            tile = PosterTile(ctx, self.list_kind, rec, i)
-            tile.clicked.connect(self.select)
-            if self.tile_width:
-                tile.set_width(self.tile_width)
+            tile = old.get(rec.item_key)
+            if tile is not None and tile.rec == rec:
+                del old[rec.item_key]
+                tile.index = i
+                if tile.property("selected"):
+                    tile.set_selected(False)  # select() below lights the one at its place
+            else:
+                tile = PosterTile(ctx, self.list_kind, rec, i)
+                tile.clicked.connect(self.select)
+                if self.tile_width:
+                    tile.set_width(self.tile_width)
             self.tiles.append(tile)
+        for tile in old.values():  # gone from the list, or changed and built again
+            tile.deleteLater()
         self._place()
         texts = EMPTY_AFTER_RUN if self.has_run else EMPTY
         self.empty.setText("" if self.recs else texts[self.list_kind])
@@ -500,6 +506,8 @@ class RecList(QWidget):
         for i in (previous, index):
             if 0 <= i < len(self.tiles):
                 self.tiles[i].set_selected(i == index)
+        if self.detail is not None and self.detail.rec == self.recs[index]:
+            return  # already in the panel (the list was drawn again, or the same tile clicked)
         self._clear_detail()
         card = RecCard(self._ctx, self.list_kind, self.recs[index])
         card.opened.connect(self._on_open)

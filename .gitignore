@@ -1,5 +1,7 @@
 # Secrets
 .env
+# The removed web app's session key. Nothing reads it now; it must never be committed.
+data/.secret_key
 
 # Local database and anything derived from personal data
 data/*.db

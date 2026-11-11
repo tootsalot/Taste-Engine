@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 from taste.config import data_dir
@@ -33,15 +34,26 @@ def set_mix_filter(profile_id: str | None, choice: str) -> None:
     save(for_you_mix_filter=values)
 
 
+# The file as last read or written, and where it was. Every animation asks for the
+# motion level, so reading the file each time cost two disk reads per picture that
+# arrived and one per tile that faded in. Only this app writes the file.
+_cached: tuple[Path, dict[str, Any]] | None = None
+
+
 def load() -> dict[str, Any]:
-    try:
-        value = json.loads((data_dir() / FILE_NAME).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return value if isinstance(value, dict) else {}
+    global _cached
+    path = data_dir() / FILE_NAME
+    if _cached is None or _cached[0] != path:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            value = {}
+        _cached = (path, value if isinstance(value, dict) else {})
+    return dict(_cached[1])
 
 
 def save(**changes: Any) -> None:
+    global _cached
     state = load()
     state.update(changes)
     path = data_dir() / FILE_NAME
@@ -53,4 +65,5 @@ def save(**changes: Any) -> None:
         partial.write_text(json.dumps(state, indent=2), encoding="utf-8")
         os.replace(partial, path)
     except OSError:
-        pass  # a preference that can't be saved isn't worth an error dialog
+        return  # a preference that can't be saved isn't worth an error dialog
+    _cached = (path, state)

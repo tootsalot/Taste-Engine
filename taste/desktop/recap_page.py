@@ -362,7 +362,22 @@ class RecapPage(LazyPage, QWidget):
             conn.close()
         for note, text in zip(self.notes, NOTES, strict=True):
             note.setText(text.format(scope=scope))
-        self.show_period(latest)
+        self._forget_cards()
+        # Drawn when the page is in front. Every launch used to draw last month's cards
+        # (about 8 MB each, 60 MB a deck) and keep them, whether or not Rev was opened.
+        self.show_period(latest, draw=self.isVisibleTo(self.window()))
+
+    def _forget_cards(self) -> None:
+        """Another profile's cards never stay on screen, and their memory goes at once.
+        A drawing still running is that profile's too: its result is ignored."""
+        self.worker = None
+        self.pending = None
+        self.waiting = False
+        self.data = None
+        self.cards = []
+        self.deck.set_cards([])
+        self.empty.setVisible(False)
+        self._fill_thumbs()
 
     def set_kind(self, kind: str) -> None:
         if kind == self.period.kind:
@@ -381,8 +396,9 @@ class RecapPage(LazyPage, QWidget):
         finally:
             conn.close()
 
-    def show_period(self, period: Period) -> None:
-        """Draw a period's recap. Periods after the current one aren't offered."""
+    def show_period(self, period: Period, draw: bool = True) -> None:
+        """Draw a period's recap. Periods after the current one aren't offered. Without
+        `draw` the period is only chosen, and its cards are drawn when the page is shown."""
         if not self.profile_id:
             return
         current = self._current(period.kind)
@@ -397,6 +413,9 @@ class RecapPage(LazyPage, QWidget):
             if period == current
             else ""
         )
+        self.stale = not draw  # LazyPage: showing the page draws a stale one
+        if not draw:
+            return
         self.status.setText("Drawing…")
         if self.worker is not None and self.worker.isRunning():
             self.pending = period

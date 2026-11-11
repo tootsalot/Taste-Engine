@@ -28,7 +28,11 @@ jobs:
         run: python -m pip install -r requirements-build.txt
       - name: Check the tag matches the version
         if: startsWith(github.ref, 'refs/tags/')
-        run: python scripts/build_release.py --check-tag "${{ github.ref_name }}"
+        # Through the environment, never pasted into the command: a tag name is text
+        # someone chose, and pasted in it would run as part of the script.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python scripts/build_release.py --check-tag "$env:TAG"
       - name: Make sure Inno Setup is installed
         # The windows-latest image has it; this covers an image that drops it.
         run: |

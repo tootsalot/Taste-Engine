@@ -129,8 +129,7 @@ def main() -> None:
                 timings["Across media recompute"] = time.perf_counter() - start
                 conn.execute("UPDATE raw_api_pages SET fetched_at = '2020-01-01 00:00:00'")
                 start = time.perf_counter()
-                if hasattr(raw, "compress_old_pages"):
-                    raw.compress_old_pages(conn, now=NOW_DT)
+                raw.compress_old_pages(conn, now=NOW_DT)
                 timings["Raw compression"] = time.perf_counter() - start
                 if args.models:
                     for medium in lab.MEDIA:

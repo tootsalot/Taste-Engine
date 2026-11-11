@@ -820,3 +820,47 @@ def test_clicking_the_profile_switcher_leaves_no_ring(window, qtbot):
     picker.menu_.hide()
     assert not picker.hasFocus()
     assert picker.focusPolicy() == Qt.FocusPolicy.TabFocus  # still reachable with Tab
+
+
+def test_window_preferences_are_read_from_disk_once(monkeypatch):
+    """Every animation asks for the motion level: the file was read and parsed twice for
+    each picture that arrived and once for each tile that faded in."""
+    from pathlib import Path
+
+    from taste.desktop import motion, ui_state
+
+    ui_state.save(motion="reduced")
+    reads = []
+    real_read = Path.read_text
+
+    def counted(self, *args, **kwargs):
+        reads.append(self.name)
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted)
+    assert [motion.chosen() for _ in range(50)] == ["reduced"] * 50
+    assert reads.count(ui_state.FILE_NAME) == 0
+    # What a caller does to its copy never reaches the next one.
+    ui_state.load()["motion"] = "off"
+    assert motion.chosen() == "reduced"
+    ui_state.save(nav_collapsed=True)
+    assert ui_state.load() == {"motion": "reduced", "nav_collapsed": True}
+
+
+def test_changing_the_music_year_does_not_list_the_years_again(window, qtbot, monkeypatch):
+    """Listing the years reads every play; each change of year on the Music report did it."""
+    from taste import musicstats
+
+    set_up_profile(window)
+    with qtbot.waitSignal(window.dashboard.sync_finished, timeout=15000):
+        window.dashboard.start_sync("all")
+    window.sidebar.setCurrentRow(PAGES.index("Music"))
+    view = window.reports.music
+    years = view.stats.years
+    assert years
+    calls = []
+    real_years = musicstats.years
+    monkeypatch.setattr(musicstats, "years", lambda conn: calls.append(1) or real_years(conn))
+    view.set_span(years[0])
+    assert view.stats.span == years[0] and view.stats.years == years
+    assert calls == []

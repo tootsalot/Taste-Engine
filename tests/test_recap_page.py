@@ -306,3 +306,22 @@ def test_past_recaps_left_halfway_go_on_at_the_next_launch(window, qtbot):
         assert recap.past_state(conn) == "done"
     finally:
         conn.close()
+
+
+def test_cards_are_drawn_when_rev_is_shown_not_at_launch(window, qtbot):
+    """Each launch and profile switch drew last month's cards (about 8 MB each) and kept
+    them, whether or not Rev was ever opened."""
+    synced(window, qtbot)
+    qtbot.waitUntil(lambda: not window.auto_recap.isRunning(), timeout=15000)
+    page = window.recap
+    window.reload_profiles(select="me")  # as at launch: Rev is not the page in front
+    assert page.period == Period("month", "2026-09")  # chosen, and named in the heading
+    assert page.period_label.text() == "September 2026"
+    assert not page.is_busy() and page.cards == [] and page.deck.cards == []
+    assert not page.save_button.isEnabled()
+    window.sidebar.setCurrentRow(PAGES.index("Rev"))
+    wait_for_cards(qtbot, page)
+    assert page.cards and page.status.text() == ""
+    # Another profile's cards never stay on screen while Rev is in front either.
+    window.new_profile(("other", "Other"))
+    assert page.cards == [] and page.deck.cards == []

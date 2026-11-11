@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 from taste import activity, credentials, enrich, raw, recommend, settings
 from taste.config import ConfigError
-from taste.db import transaction
+from taste.db import optimize, transaction
 from taste.http_client import ApiError, HttpClient
 from taste.secrets_store import SecretStore, SecretStoreError
 from taste.sources import hardcover, hardcover_auth, lastfm, mal, tmdb
@@ -100,6 +100,7 @@ def sync_sources(
     raw.compress_old_pages(conn)
     if raw.compact(conn):
         out("Compacted the database file.")
+    optimize(conn)  # a first sync takes tables from empty to full: plan for what's there now
     return results
 
 

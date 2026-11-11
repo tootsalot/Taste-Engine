@@ -528,3 +528,13 @@ def test_a_removal_between_pages_doesnt_drop_the_book_that_moved_up(conn, make_c
     assert _shelved(conn) == {e["id"] for e in fake_hardcover.LIBRARY}
     result, _, _ = synced(conn, make_client, fake, full=True)
     assert result.removed == 1 and first not in _shelved(conn)
+
+
+def test_the_callback_port_cannot_be_shared():
+    """With address reuse (the default) another program on Windows can bind the same
+    port and receive the redirect instead of the app."""
+    sign_in = hardcover_auth.SignIn()
+    try:
+        assert sign_in.server.allow_reuse_address is False
+    finally:
+        sign_in.server.server_close()

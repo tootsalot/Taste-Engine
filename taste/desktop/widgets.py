@@ -203,7 +203,6 @@ class Segmented(QFrame):
         self.setProperty("role", "segmented")
         self.pill = _Pill(self, accent)
         self.pill.hide()
-        self._slide = None
         row = QHBoxLayout(self)
         row.setContentsMargins(2, 2, 2, 2)
         row.setSpacing(0)
@@ -274,7 +273,7 @@ class Segmented(QFrame):
                 target.height(),
             )
 
-        self._slide = motion.tween(0.0, 1.0, step, motion.duration(220), owner=self)
+        motion.tween(0.0, 1.0, step, motion.duration(220), owner=self)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         super().resizeEvent(event)

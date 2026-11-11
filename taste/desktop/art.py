@@ -3,7 +3,7 @@
 ArtLoader downloads (through taste.images.ImageCache) and decodes each image at
 the size it's shown, on a small thread pool. The UI thread only turns the
 finished QImage into a QPixmap. Decoded pixmaps are kept in QPixmapCache,
-capped at 20 MB.
+capped at 20 MB (more on a scaled display, where each picture has more pixels).
 
 ArtTile is the widget: a rounded box that shows a placeholder (the title's
 first letter) until its picture arrives, and keeps it if the picture can't be had.
@@ -19,6 +19,7 @@ import weakref
 from PySide6.QtCore import QObject, QRectF, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
+    QGuiApplication,
     QImage,
     QImageReader,
     QPainter,
@@ -91,7 +92,10 @@ class ArtLoader(QObject):
         self.watchers: dict[str, weakref.WeakSet] = {}
         self.failed: dict[str, float] = {}  # cache key -> when it failed
         self.clock = time.monotonic
-        QPixmapCache.setCacheLimit(MEMORY_CACHE_KB)
+        # Room for the same number of pictures whatever the display's scale.
+        screen = QGuiApplication.primaryScreen()
+        ratio = screen.devicePixelRatio() if screen is not None else 1.0
+        QPixmapCache.setCacheLimit(round(MEMORY_CACHE_KB * ratio * ratio))
         self._finished.connect(self._on_finished)
 
     def pixmap(
@@ -168,7 +172,7 @@ class ArtTile(QWidget):
         self.letter = ""
         self._pixmap: QPixmap | None = None
         self._opacity = 1.0  # below 1 while a picture that just arrived fades in
-        self._fade = None
+        self._ratio = 0.0  # the display scale the current picture was asked for at
         # A sidebar sliding open resizes every tile on every frame. The sharp picture is
         # asked for once the size settles; until then the current one is drawn scaled.
         self._settle = QTimer(self)
@@ -185,7 +189,7 @@ class ArtTile(QWidget):
         self._opacity = 1.0
         self.letter = (title.strip()[:1] or "?").upper()
         self.setToolTip(plain_tip(title))
-        self._pixmap = self.loader.pixmap(url, self.art_size, self)
+        self._pixmap = self.loader.pixmap(url, self._pixels(), self)
         if self._pixmap is None and not self._waiting():
             self._use_fallback()
         self.update()
@@ -204,9 +208,19 @@ class ArtTile(QWidget):
             self._settle.start()
         self.update()
 
+    def _pixels(self) -> QSize:
+        """The picture's size in screen pixels. A display scaled to 150% has 1.5 times as
+        many each way: a picture decoded at the tile's own size was stretched to cover
+        them, and every poster looked soft."""
+        self._ratio = self.devicePixelRatioF()
+        return QSize(
+            max(round(self.art_size.width() * self._ratio), 1),
+            max(round(self.art_size.height() * self._ratio), 1),
+        )
+
     def _load_at_size(self) -> None:
         if self.url:
-            found = self.loader.pixmap(self.url, self.art_size, self)
+            found = self.loader.pixmap(self.url, self._pixels(), self)
             if found is not None:
                 self._pixmap = found
                 self.update()
@@ -216,23 +230,21 @@ class ArtTile(QWidget):
 
     def _waiting(self) -> bool:
         """True while the current picture is still downloading."""
-        return bool(self.url) and cache_key(self.url, self.art_size) in self.loader.pending
+        return bool(self.url) and cache_key(self.url, self._pixels()) in self.loader.pending
 
     def _use_fallback(self) -> None:
         if self.fallback and self.fallback != self.url:
             self.url, self.fallback = self.fallback, None
-            self._pixmap = self.loader.pixmap(self.url, self.art_size, self)
+            self._pixmap = self.loader.pixmap(self.url, self._pixels(), self)
 
     def _on_loaded(self, key: str) -> None:
-        if self.url and key == cache_key(self.url, self.art_size):
+        if self.url and key == cache_key(self.url, self._pixels()):
             first = self._pixmap is None
-            self._pixmap = self.loader.pixmap(self.url, self.art_size)
+            self._pixmap = self.loader.pixmap(self.url, self._pixels())
             if first and self.isVisible():
                 # Arrived after the placeholder was on screen: fade it in over it.
                 self._opacity = 0.0
-                self._fade = motion.tween(
-                    0.0, 1.0, self._set_opacity, motion.duration(260), owner=self
-                )
+                motion.tween(0.0, 1.0, self._set_opacity, motion.duration(260), owner=self)
             self.update()
 
     def _set_opacity(self, value: float) -> None:
@@ -240,11 +252,15 @@ class ArtTile(QWidget):
         self.update()
 
     def _on_failed(self, key: str) -> None:
-        if self.url and key == cache_key(self.url, self.art_size):
+        if self.url and key == cache_key(self.url, self._pixels()):
             self._use_fallback()
             self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        if self.url and self._ratio != self.devicePixelRatioF():
+            # Moved to a display with another scale: ask for the picture at that one.
+            # Until it arrives the current one is drawn scaled, as for a new size.
+            self._settle.start()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)

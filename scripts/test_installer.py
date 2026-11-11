@@ -20,14 +20,18 @@ from pathlib import Path
 
 import build_release  # scripts/build_release.py: the version and the smoke test
 
+APP_NAME = "Taste Engine"
 APP_GUID = "3C5D937C-337E-45F7-AB56-E60E3A811924"
 UNINSTALL_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{{{APP_GUID}}}_is1"
 LOCAL = Path(os.environ["LOCALAPPDATA"])
-INSTALL_DIR = LOCAL / "Programs" / "Taste Engine"
+INSTALL_DIR = LOCAL / "Programs" / APP_NAME
 EXE = INSTALL_DIR / "taste-engine.exe"
 DATA_DIR = LOCAL / "taste-engine"
 START_MENU = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-SHORTCUT = START_MENU / "Taste Engine.lnk"
+SHORTCUT = START_MENU / f"{APP_NAME}.lnk"
+# Qt files the bundle leaves out because the app never loads them (UNUSED_BINARIES and
+# qt_translation in packaging/taste-engine.spec), by where they would sit in PySide6/.
+LEFT_OUT = ("opengl32sw.dll", "translations")
 SILENT = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
 APP_MUTEX = "TasteEngineRunning-3C5D937C-337E-45F7-AB56-E60E3A811924"  # taste/desktop
 SYNCHRONIZE = 0x00100000
@@ -67,16 +71,38 @@ def wait_until(check, what: str, seconds: int = 180) -> None:
         time.sleep(1)
 
 
+def exe_details(path: Path) -> tuple[str, str]:
+    """(product name, product version) of an exe, as its Properties > Details shows them."""
+    command = (
+        "$v = (Get-Item -LiteralPath $env:TASTE_EXE).VersionInfo; "
+        "$v.ProductName + '|' + $v.ProductVersion"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+        env={**os.environ, "TASTE_EXE": str(path)},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    name, _, version = result.stdout.strip().partition("|")
+    return name, version
+
+
 def check_installed(version: str) -> None:
     files = ("_internal", "LICENSE.txt", "THIRD_PARTY_NOTICES.txt")
     for path in (EXE, SHORTCUT, *(INSTALL_DIR / name for name in files)):
         if not path.exists():
             fail(f"{path} is missing")
+    if exe_details(EXE) != (APP_NAME, version):
+        fail(f"{EXE.name} says it is {exe_details(EXE)}, expected {(APP_NAME, version)}")
+    for unused in LEFT_OUT:
+        if (INSTALL_DIR / "_internal" / "PySide6" / unused).exists():
+            fail(f"the bundle still carries PySide6/{unused}")
     entry = uninstall_entry()
     expected = {
-        "DisplayName": "Taste Engine",
+        "DisplayName": APP_NAME,
         "DisplayVersion": version,
-        "Publisher": "Taste Engine",
+        "Publisher": APP_NAME,
     }
     for name, value in expected.items():
         if entry.get(name) != value:

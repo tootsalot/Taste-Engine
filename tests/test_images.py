@@ -377,3 +377,23 @@ def test_the_same_picture_stored_twice_keeps_the_first(cache, session, monkeypat
     monkeypatch.setattr("taste.images.os.replace", refuse)
     assert cache._store(COVER, b"x") is None  # no picture, no traceback
     assert not list(first.parent.glob("*.part"))
+
+
+def test_a_scaled_display_gets_a_picture_with_enough_pixels(qtbot, tmp_path, monkeypatch):
+    """A tile asked for its picture at its own size in every case. On a display scaled
+    to 150% those pixels were stretched over 1.5 times as many, and posters looked soft."""
+    session = FakeImageSession()
+    session.add(POSTER, image_bytes(600, 900, fmt="JPEG"), "image/jpeg")
+    loader = ArtLoader(images.ImageCache(tmp_path / "images", session=session))
+    monkeypatch.setattr(ArtTile, "devicePixelRatioF", lambda self: 1.5)
+    tile = ArtTile(loader, QSize(100, 150))
+    qtbot.addWidget(tile)
+    tile.set_art(POSTER, "Example Drama A")
+    qtbot.waitUntil(tile.has_picture, timeout=5000)
+    assert (tile._pixmap.width(), tile._pixmap.height()) == (150, 225)
+    assert tile.size() == QSize(100, 150)  # the tile itself is no bigger
+    # Moved to a display at 200%: the next paint asks again, for that many pixels.
+    monkeypatch.setattr(ArtTile, "devicePixelRatioF", lambda self: 2.0)
+    tile.show()
+    qtbot.waitUntil(lambda: tile._pixmap.width() == 200, timeout=5000)
+    loader.shutdown()

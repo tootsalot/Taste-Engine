@@ -662,3 +662,47 @@ def test_the_lists_switch_with_a_pill_in_each_mediums_color(window):
     assert page.switch.pill.color == QColor(theme.TEAL)
     page.tabs.setCurrentIndex(0)
     assert page.switch.value() == "anime" and page.switch.pill.color == QColor(theme.LILAC)
+
+
+def test_drawing_a_list_again_keeps_the_tiles_that_did_not_change(window, qtbot):
+    """Every tile (and the panel) was built again after each hidden pick and each list a
+    refresh saved: 135 ms for a list of 60, with every picture set up again."""
+    synced(window, qtbot)
+    refreshed(window, qtbot)
+    page = window.for_you
+    tab = page.lists["anime"]
+    tab.select(1)
+    before = {t.rec.item_key: t for t in tiles(window, "anime")}
+    panel = detail(window, "anime")
+    page.reload()  # as a refresh does for each list it saves
+    after = tiles(window, "anime")
+    assert all(before[t.rec.item_key] is t for t in after)
+    assert detail(window, "anime") is panel
+    assert [t.index for t in after] == list(range(len(after)))
+    # Hiding one removes its tile alone; the rest stay, in order, and one is outlined.
+    qtbot.mouseClick(panel.dismiss_button, Qt.MouseButton.LeftButton)
+    after = tiles(window, "anime")
+    assert "203" not in [t.rec.item_key for t in after]
+    assert all(before[t.rec.item_key] is t for t in after)
+    assert [t.index for t in after] == list(range(len(after)))
+    assert [t.property("selected") for t in after] == [False, True, False]
+    after[2].clicked.emit(after[2].index)  # a kept tile still opens its own pick
+    assert detail(window, "anime").rec.item_key == after[2].rec.item_key
+
+
+def test_a_changed_pick_gets_a_new_tile(qtbot):
+    from taste.desktop.for_you import RecList
+
+    ctx = AppContext(image_session=FakeImageSession())
+    tab = RecList("anime")
+    qtbot.addWidget(tab)
+    first = [Rec("anime", "1", "Example Show", score=8.0), Rec("anime", "2", "Example Film")]
+    tab.set_recs(first, True)
+    tab.render(ctx, lambda url: None, lambda kind, key: None)
+    one, two = tab.tiles
+    tab.set_recs([Rec("anime", "1", "Example Show", score=9.0), first[1]], True)
+    tab.render(ctx, lambda url: None, lambda kind, key: None)
+    assert tab.tiles[0] is not one and tab.tiles[0].score.text() == "9"
+    assert tab.tiles[1] is two
+    assert tab.detail.rec.score == 9.0  # the panel follows the new numbers too
+    ctx.shutdown()

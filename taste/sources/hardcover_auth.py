@@ -108,6 +108,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 
 class _CallbackServer(http.server.HTTPServer):
+    # The port is a fresh one each time, so nothing needs to bind it again. On Windows
+    # the default (address reuse) lets another program bind the same port and take the
+    # redirect. PKCE keeps the code useless to it, but the sign-in would never finish.
+    allow_reuse_address = False
     query: dict[str, str] | None = None
     state = ""  # what a genuine callback carries back
 

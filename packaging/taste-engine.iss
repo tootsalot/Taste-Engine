@@ -26,6 +26,8 @@
 #define AppGuid "3C5D937C-337E-45F7-AB56-E60E3A811924"
 #define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\{" + AppGuid + "}_is1"
 #define DataFolder "{localappdata}\taste-engine"
+; The oldest Windows that Qt 6 runs on: Windows 10 version 1809.
+#define MinWindows "10.0.17763"
 ; The app holds this mutex while it's open (APP_MUTEX in taste/desktop/__init__.py).
 #define AppMutex "TasteEngineRunning-3C5D937C-337E-45F7-AB56-E60E3A811924"
 
@@ -38,7 +40,18 @@ AppPublisher=Taste Engine
 AppPublisherURL=https://github.com/tootsalot/Taste-Engine
 AppSupportURL=https://github.com/tootsalot/Taste-Engine/issues
 AppUpdatesURL=https://github.com/tootsalot/Taste-Engine/releases
+; What Windows shows for the setup file itself (Properties > Details, and the name in
+; a "Do you want to run this file?" prompt), instead of blanks.
 VersionInfoVersion={#AppVersion}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoProductName={#AppName}
+VersionInfoDescription={#AppName} Setup
+VersionInfoCompany={#AppName}
+; Older Windows gets told so here, not an app that installs and then won't open.
+MinVersion={#MinWindows}
+; A second setup started while one is running (a double double-click) waits for the
+; first instead of the two writing the same files.
+SetupMutex=TasteEngineSetup-{#AppGuid}
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#AppName}
 DisableDirPage=yes

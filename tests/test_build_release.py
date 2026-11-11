@@ -120,3 +120,101 @@ def test_the_smoke_test_expects_the_pages_the_window_really_has(qtbot):
     window = MainWindow()
     qtbot.addWidget(window)
     assert window.stack.count() == build_release.SMOKE_PAGES
+
+
+def test_the_installer_names_itself_and_refuses_a_windows_too_old_for_qt():
+    script = build_release.ISS.read_text(encoding="utf-8")
+    for line in (
+        "VersionInfoProductVersion={#AppVersion}",
+        "VersionInfoProductName={#AppName}",
+        "VersionInfoDescription={#AppName} Setup",
+        '#define MinWindows "10.0.17763"',  # Windows 10 version 1809, the oldest Qt 6 runs on
+        "MinVersion={#MinWindows}",
+        "SetupMutex=TasteEngineSetup-{#AppGuid}",  # one setup at a time
+    ):
+        assert re.search(rf"^{re.escape(line)}$", script, re.MULTILINE), line
+
+
+def run_spec(monkeypatch, tmp_path, binaries, datas) -> dict:
+    """Run packaging/taste-engine.spec with stand-ins for PyInstaller (a development
+    install doesn't have it). Returns what it handed to EXE and COLLECT."""
+    import types
+
+    hooks = types.ModuleType("PyInstaller.utils.hooks")
+    hooks.collect_data_files = hooks.collect_submodules = hooks.copy_metadata = lambda name: []
+    for name, module in (
+        ("PyInstaller", types.ModuleType("PyInstaller")),
+        ("PyInstaller.utils", types.ModuleType("PyInstaller.utils")),
+        ("PyInstaller.utils.hooks", hooks),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+    made = {}
+
+    class Analysis:
+        def __init__(self, scripts, **kwargs):
+            self.scripts, self.pure = scripts, []
+            self.binaries, self.datas = list(binaries), list(datas)
+
+    def exe(*args, **kwargs):
+        made["exe"] = kwargs
+
+    def collect(_exe, *tocs, **kwargs):
+        made["binaries"], made["datas"] = (list(toc) for toc in tocs)
+
+    spec = ROOT / "packaging" / "taste-engine.spec"
+    scope = {
+        "SPECPATH": str(spec.parent),
+        "workpath": str(tmp_path / "work"),
+        "Analysis": Analysis,
+        "PYZ": lambda pure: None,
+        "EXE": exe,
+        "COLLECT": collect,
+    }
+    exec(compile(spec.read_text(encoding="utf-8"), str(spec), "exec"), scope)
+    return made
+
+
+def test_the_bundle_leaves_out_what_the_app_never_loads(monkeypatch, tmp_path):
+    kept_binaries = [
+        ("PySide6/Qt6Core.dll", "x", "BINARY"),
+        ("PySide6/plugins/imageformats/qwebp.dll", "x", "BINARY"),
+    ]
+    kept_datas = [
+        ("tzdata/zoneinfo/Europe/Paris", "x", "DATA"),
+        ("taste/desktop/assets/logo.svg", "x", "DATA"),
+    ]
+    dropped_binaries = [
+        ("PySide6/opengl32sw.dll", "x", "BINARY"),  # 20 MB of software OpenGL
+        ("PySide6/Qt6Pdf.dll", "x", "BINARY"),
+        ("PySide6/plugins/imageformats/qpdf.dll", "x", "BINARY"),
+    ]
+    dropped_datas = [("PySide6/translations/qtbase_de.qm", "x", "DATA")]
+    made = run_spec(
+        monkeypatch, tmp_path, kept_binaries + dropped_binaries, kept_datas + dropped_datas
+    )
+    assert made["binaries"] == kept_binaries
+    assert made["datas"] == kept_datas
+
+
+def test_the_exe_carries_its_name_and_version(monkeypatch, tmp_path):
+    """Without them Windows shows "taste-engine.exe" with no product or version in
+    Properties, Task Manager, and firewall prompts."""
+    made = run_spec(monkeypatch, tmp_path, [], [])
+    text = Path(made["exe"]["version"]).read_text(encoding="utf-8")
+    found = {}
+
+    def record(kind):
+        return lambda *args, **kwargs: found.setdefault(kind, []).append((args, kwargs)) or kind
+
+    names = ("VSVersionInfo", "FixedFileInfo", "StringFileInfo", "StringTable", "VarFileInfo")
+    scope = {name: record(name) for name in (*names, "StringStruct", "VarStruct")}
+    eval(text, scope)  # the form PyInstaller reads: one VSVersionInfo(...) expression
+    version = build_release.version()
+    numbers = tuple(int(part) for part in version.split("."))
+    fixed = found["FixedFileInfo"][0][1]
+    assert fixed["filevers"][: len(numbers)] == numbers and len(fixed["filevers"]) == 4
+    assert fixed["prodvers"] == fixed["filevers"]
+    strings = dict(args for args, _ in found["StringStruct"])
+    assert strings["ProductName"] == strings["FileDescription"] == "Taste Engine"
+    assert strings["ProductVersion"] == strings["FileVersion"] == version
+    assert strings["OriginalFilename"] == "taste-engine.exe"

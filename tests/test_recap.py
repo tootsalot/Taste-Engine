@@ -453,13 +453,13 @@ def test_past_periods_are_every_finished_month_and_year_with_data(world):
 
 def test_the_offer_is_made_once(world):
     conn = world["conn"]
-    offer = recap.past_offer(conn, OCT_14)
-    assert len(offer) == 4
+    offer = recap.past_periods(conn, OCT_14)
+    assert len(offer) == 4 and recap.past_state(conn) == ""  # nothing said yet: offer them
     assert recap.offer_text(offer) == (
         "Make recaps for your past months? 3 months and 1 year, under a minute."
     )
     recap.set_past_state(conn, "declined")
-    assert recap.past_offer(conn, OCT_14) == []  # not asked again
+    assert recap.past_state(conn) == "declined"  # answered: the window doesn't ask again
     years = ("2022", "2023", "2024", "2025")
     many = [Period("month", f"{y}-{m:02d}") for y in years for m in range(1, 13)]
     assert recap.offer_text(many + [Period("year", y) for y in years]) == (
@@ -486,7 +486,7 @@ def test_past_recaps_are_drawn_in_one_go_and_can_stop_and_go_on(world, qapp, tmp
         worker.run()  # here, not in a thread
         return worker, steps
 
-    periods = recap.past_offer(conn, OCT_14)
+    periods = recap.past_periods(conn, OCT_14)
     recap.set_past_state(conn, "making")
     _, steps = batch(periods, cancel=True)  # the app closed first: nothing made yet
     assert steps == [] and recap.past_state(conn) == "making"

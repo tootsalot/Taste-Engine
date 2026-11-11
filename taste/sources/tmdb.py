@@ -845,11 +845,6 @@ def my_rating_mean(conn: sqlite3.Connection, kind: str = "movie") -> float | Non
     ).fetchone()[0]
 
 
-def film_seeds(conn: sqlite3.Connection) -> list[int]:
-    """Films I rated above my own film average, best first."""
-    return recommendation_seeds(conn, "movie")
-
-
 def recommendation_seeds(conn: sqlite3.Connection, kind: str = "movie") -> list[int]:
     """Films or shows rated above my own average for that medium, best first."""
     mean = my_rating_mean(conn, kind)

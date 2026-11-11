@@ -2,6 +2,32 @@
 
 Each release's notes on GitHub come from its section here.
 
+## [4.0.1]
+
+A faster, lighter app and a tidier installer, from an audit of 4.0.0.
+
+Speed and memory
+- Reports about a span of dates start from those dates instead of reading every play: SQLite now keeps the row counts it plans queries from. On the test library the Dashboard's month card went from 25 ms to 2 ms and a month's recap from 116 ms to 49 ms
+- For You keeps the tiles and the panel whose pick hasn't changed. Hiding a pick, or a list saved during a refresh, used to build every tile again (135 ms for 60)
+- Rev draws its cards when the page is shown. Every launch and profile switch used to draw last month's deck and keep it, about 60 MB, whether or not Rev was opened
+- Window preferences are read from disk once, not twice for each picture that arrives and once for each tile that fades in
+- Changing the year on the Music report no longer lists the years again, which read every play
+
+Fixes
+- Posters and covers are sharp on a display scaled above 100%: they were decoded for an unscaled display and stretched
+- Switching profiles on Rev clears the other profile's cards at once
+
+Security
+- The session key file of the web app removed in an earlier version is no longer tracked. Nothing has read it since that web app went, so it protects nothing
+- The Hardcover sign-in listener no longer lets another program share its port
+- The release workflow passes the tag name through the environment instead of pasting it into a command
+
+Installer
+- Setup refuses Windows older than 10 version 1809 (the oldest Qt 6 runs on) with a clear message, instead of installing an app that won't open
+- The setup file and taste-engine.exe carry their name and version, shown in Properties, Task Manager, and firewall prompts
+- A second setup started while one is running waits for it
+- The download is smaller: Qt's unused translations and its 20 MB software OpenGL fallback are left out
+
 ## [4.0.0]
 
 Cross-media picks from titles I liked, and rating models I can compare before choosing one for a list.

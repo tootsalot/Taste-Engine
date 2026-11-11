@@ -720,14 +720,6 @@ def past_periods(conn: sqlite3.Connection, now: datetime | None = None) -> list[
     return sorted(found, key=lambda p: (p.end, p.kind == "year"))
 
 
-def past_offer(conn: sqlite3.Connection, now: datetime | None = None) -> list[Period]:
-    """What to offer to make, or [] when it was offered already (or there's nothing).
-    Offered once per profile, to profiles that have recaps already too (only the rest)."""
-    if past_state(conn):
-        return []
-    return past_periods(conn, now)
-
-
 def offer_text(periods: list[Period]) -> str:
     """ "Make recaps for your past months? 31 months and 3 years, about a minute." """
     months = sum(1 for p in periods if p.kind == "month")

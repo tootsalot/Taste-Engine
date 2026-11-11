@@ -148,3 +148,40 @@ def test_a_transaction_sqlite_already_rolled_back_keeps_the_real_error(conn):
         conn.execute("ROLLBACK")  # what SQLite does by itself on those errors
         raise DiskFull
     assert not conn.in_transaction
+
+
+def test_the_planner_gets_row_counts_so_a_month_of_plays_starts_from_its_dates(conn):
+    """With no counts SQLite read every play ever synced to answer for one month."""
+    from taste import activity
+
+    conn.execute(
+        "INSERT INTO core_items (item_id, source, media_type, title, created_at, updated_at) "
+        "VALUES (1, 'lastfm', 'track', 'Example Track', '2026-01-01 00:00:00', "
+        "'2026-01-01 00:00:00')"
+    )
+    with db.transaction(conn):
+        for event in range(1, 401):
+            day = f"2026-{1 + event % 12:02d}-{1 + event % 28:02d}"
+            conn.execute(
+                "INSERT INTO core_behavior_events (event_id, item_id, source, event_type, "
+                "occurred_at_utc, occurred_at_unix, time_precision, time_basis, capture_scope, "
+                "source_event_key) VALUES (?, 1, 'lastfm', 'play', ?, ?, 'second', 'source', "
+                "'all', ?)",
+                (event, f"{day} 12:00:00", event, str(event)),
+            )
+            conn.execute(
+                "INSERT INTO core_event_local_times (event_id, occurred_at_unix, tz_name, "
+                "local_ts, local_date, local_year, local_month, local_hour, local_weekday_num) "
+                "VALUES (?, ?, 'UTC', ?, ?, 2026, ?, 12, 1)",
+                (event, event, f"{day} 12:00:00", day, day[:7]),
+            )
+    db.optimize(conn)
+    assert conn.execute("SELECT COUNT(*) FROM sqlite_stat1").fetchone()[0] > 0
+    plan = " ".join(
+        row[3]
+        for row in conn.execute(
+            f"EXPLAIN QUERY PLAN SELECT COUNT(*) {activity.PLAYS_SQL}", ("2026-09-01", "2026-10-01")
+        )
+    )
+    assert "ix_core_event_local_times_date" in plan
+    db.optimize(conn)  # again with nothing changed: harmless

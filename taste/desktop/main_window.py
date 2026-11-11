@@ -435,12 +435,13 @@ class MainWindow(QMainWindow):
             # A year's recap outranks its December's: both come in January.
             self.banner_period = next((p for p in waiting if p.kind == "year"), waiting[0])
             self.dashboard.banner.show_text(recap.banner_text(self.banner_period))
-            self.recap.refresh()
+            self.recap.refresh_later()  # drawn now only if Rev is the page in front
 
     def _open_banner_recap(self) -> None:
         if self.banner_period is not None:
-            self.show_page("Rev")
+            # The period first, so showing the page doesn't draw another one before it.
             self.recap.show_period(self.banner_period)
+            self.show_page("Rev")
 
     def show_page(self, name: str) -> None:
         name = "Anime" if name == "Reports" else name

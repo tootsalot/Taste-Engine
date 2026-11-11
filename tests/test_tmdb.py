@@ -114,7 +114,7 @@ def test_film_suggestions_start_from_the_films_i_liked(conn, make_client):
     client, _ = client_for(make_client, fake)
     tmdb.sync(conn, client, CFG, out=lambda m: None)
     # My average is 7.125, so Night Train (9) and Glass Sky (8) are the seeds.
-    assert tmdb.film_seeds(conn) == [11, 13]
+    assert tmdb.recommendation_seeds(conn, "movie") == [11, 13]
     assert tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None) == 2
     assert tmdb.enrich_recommendations(conn, client, CFG, out=lambda m: None) == 0  # cached
     recs, metrics = recommend.film_recommendations(conn)

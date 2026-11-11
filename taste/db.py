@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -11,6 +12,9 @@ from pathlib import Path
 SQL_DIR = Path(__file__).resolve().parent / "sql"
 
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+# How SQLite refreshes the row counts it plans queries from (see optimize).
+ANALYSIS_LIMIT = 1000  # index rows sampled per table: the top of SQLite's advised range
+OPTIMIZE_ALL_TABLES = 0x10002  # analyze what needs it, in every table, not only those just read
 
 
 def connect(path: str | Path, *, setup: bool = True) -> sqlite3.Connection:
@@ -164,6 +168,23 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     views = (SQL_DIR / "views.sql").read_text(encoding="utf-8")
     conn.executescript("BEGIN;\n" + views + "\nCOMMIT;")
     local_time.refresh(conn)
+    optimize(conn)
+
+
+def optimize(conn: sqlite3.Connection) -> None:
+    """Bring the row counts SQLite plans its queries from (sqlite_stat1) up to date.
+
+    Without them it guessed wrong for every question about a span of dates: "plays in
+    October" read every play ever synced and then kept October's, instead of starting
+    from October's dates. On a library of 20,000 plays the Dashboard's month card took
+    25 ms and a month's recap 116 ms; with the counts, 2 ms and 49 ms (2026-11-10).
+    Runs each time the schema is set up (a profile's first open, the start of a sync or
+    refresh) and again once a sync has finished. It reads a sample of each index, so it
+    stays quick on a long history, and it skips tables that haven't changed.
+    """
+    with contextlib.suppress(sqlite3.Error):  # locked or read-only: the old counts stay
+        conn.execute(f"PRAGMA analysis_limit = {ANALYSIS_LIMIT}")
+        conn.execute(f"PRAGMA optimize = {OPTIMIZE_ALL_TABLES:#x}")
 
 
 @contextmanager
