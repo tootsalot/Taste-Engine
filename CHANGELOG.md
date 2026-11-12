@@ -4,10 +4,10 @@ Each release's notes on GitHub come from its section here.
 
 ## [4.0.2]
 
-A faster, lighter app and a tidier installer, from an audit of 4.0.0. 4.0.1 was tagged with these changes but never released: its checks failed on Linux, which this fixes.
+A faster, lighter app and a tidier installer, from an audit of 4.0.0. 4.0.1 was tagged with these changes but never released: one of its tests failed on Linux, where an older SQLite plans a query differently.
 
 Speed and memory
-- Reports about a span of dates start from those dates instead of reading every play: SQLite now keeps the row counts it plans queries from. On the test library the Dashboard's month card went from 25 ms to 2 ms and a month's recap from 116 ms to 49 ms
+- Reports about a span of dates start from those dates instead of reading every play: SQLite now keeps the row counts it plans queries from. On the test library, on Windows, the Dashboard's month card went from 25 ms to 2 ms and a month's recap from 116 ms to 49 ms. An older SQLite, as on Ubuntu 24.04, may still plan these the old way
 - For You keeps the tiles and the panel whose pick hasn't changed. Hiding a pick, or a list saved during a refresh, used to build every tile again (135 ms for 60)
 - Rev draws its cards when the page is shown. Every launch and profile switch used to draw last month's deck and keep it, about 60 MB, whether or not Rev was opened
 - Window preferences are read from disk once, not twice for each picture that arrives and once for each tile that fades in
@@ -16,7 +16,6 @@ Speed and memory
 Fixes
 - Posters and covers are sharp on a display scaled above 100%: they were decoded for an unscaled display and stretched
 - Switching profiles on Rev clears the other profile's cards at once
-- The row counts for faster date reports are made on Linux too, where an older SQLite made none
 
 Security
 - The session key file of the web app removed in an earlier version is no longer tracked. Nothing has read it since that web app went, so it protects nothing

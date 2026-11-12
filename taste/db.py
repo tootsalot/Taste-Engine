@@ -182,9 +182,10 @@ def optimize(conn: sqlite3.Connection) -> None:
     refresh) and again once a sync has finished. It reads a sample of each index, so it
     stays quick on a long history: about 10 ms on a 96 MB library.
 
-    A plain ANALYZE, not PRAGMA optimize. Before SQLite 3.46 that only looked at tables
-    the connection had already queried, and one just opened has queried none, so on
-    Linux (Ubuntu 24.04 has 3.45) no counts were ever made. ANALYZE is the same on all.
+    A plain ANALYZE, not PRAGMA optimize, whose choice of tables depends on the SQLite
+    version (its "every table" option needs 3.46, and Ubuntu 24.04 has 3.45). What a
+    query then starts from is still SQLite's call: the numbers above were measured on
+    Windows with SQLite 3.49, and 3.45 read every play first in a test of 400 plays.
     """
     with contextlib.suppress(sqlite3.Error):  # locked or read-only: the old counts stay
         conn.execute(f"PRAGMA analysis_limit = {ANALYSIS_LIMIT}")
